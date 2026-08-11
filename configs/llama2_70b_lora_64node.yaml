@@ -52,6 +52,7 @@ data:
   num_workers: 128
   tokenized_path: "/home/nsmapplication/dlapp/vaibhav/Bhaskera/data1/govreport_8k_train"
   val_tokenized_path: "/home/nsmapplication/dlapp/vaibhav/Bhaskera/data1/govreport_8k_val"
+  pack_sequences: true   # cache has no attention_mask column — packed to 8192, no padding, safe to synthesize all-ones
   prefetch_batches: 2
   local_shuffle_buffer_multiplier: 10
 

@@ -233,6 +233,14 @@ def persist_tokenized(
 # Load pre-tokenized cache (called from driver before TorchTrainer)
 # ---------------------------------------------------------------------------
 
+def _add_all_ones_attention_mask(batch: dict) -> dict:
+    batch["attention_mask"] = np.array(
+        [np.ones(len(row), dtype=np.int64) for row in batch["input_ids"]],
+        dtype=object,
+    )
+    return batch
+
+
 def load_tokenized(tokenized_path: str, cfg, world_size: int) -> ray.data.Dataset:
     if not os.path.isdir(tokenized_path):
         raise FileNotFoundError(
@@ -252,6 +260,30 @@ def load_tokenized(tokenized_path: str, cfg, world_size: int) -> ray.data.Datase
     )
 
     ds = ray.data.read_parquet(tokenized_path)
+
+    column_map = getattr(cfg.data, "column_map", None) or {}
+    if column_map:
+        present = {k: v for k, v in column_map.items() if k in ds.schema().names}
+        if present:
+            ds = ds.rename_columns(present)
+            logger.info(f"tokenized_path columns renamed via data.column_map: {present}")
+
+    if "attention_mask" not in ds.schema().names:
+        if not cfg.data.pack_sequences:
+            raise ValueError(
+                f"tokenized_path='{tokenized_path}' has no 'attention_mask' column. "
+                "This cache wasn't produced by bhaskera-tokenize. If it's packed/"
+                "truncated to a fixed length with no padding, set data.pack_sequences: "
+                "true to synthesize an all-ones mask (use data.column_map first if the "
+                "source columns are named differently). Otherwise re-tokenize via "
+                "bhaskera-tokenize so the cache carries a real mask."
+            )
+        logger.warning(
+            f"tokenized_path='{tokenized_path}' has no 'attention_mask' column — "
+            "data.pack_sequences=true, synthesizing all-ones masks."
+        )
+        ds = ds.map_batches(_add_all_ones_attention_mask, batch_format="numpy")
+
     num_partitions = _compute_num_partitions(cfg, world_size)
     ds = ds.repartition(num_partitions)
     logger.info(
