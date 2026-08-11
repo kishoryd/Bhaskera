@@ -1,0 +1,146 @@
+# =============================================================================
+# Bhaskera — Llama-2-70B (fused-QKV) | LoRA SFT on SCROLLS GovReport-8k
+#
+# Port of the MLPerf Training v4.0 llama2_70b_lora reference benchmark
+# (JuniperNetworks/benchmarks/llama2_70b_lora) onto the Bhaskera/Ray
+# framework. Recipe values below are taken directly from that benchmark's
+# run/run.sub + scripts/train.py defaults, not re-tuned.
+#
+# 32 GPUs total, 2 GPUs per node (16 nodes x 2 GPUs/node)
+#
+# grad_accum=4 here (vs 1 at 64-node) so the global batch stays
+# 32 GPUs x 1 x 4 = 128 — same effective batch as the 64-node config,
+# for an MFU/throughput comparison at smaller scale.
+#
+# Model:
+#   regisss/llama2-70b-fused-qkv-mlperf — Llama-2-70B base, custom modeling
+#   code that fuses Q/K/V into a single qkv_proj Linear per layer.
+#   80 layers, hidden=8192, 64 heads / 8 KV heads (GQA), max_ctx=8192.
+#   Checkpoint + modeling_llama.py already staged locally.
+#
+# Dataset:
+#   SCROLLS GovReport, pre-tokenized/packed to 8192 tokens upstream by
+#   MLCommons (scrolls_gov_report_8k). Ships as input_ids/labels only
+#   (no attention_mask — Bhaskera synthesizes all-ones for these, since
+#   the sequences are fully packed with no padding). 3901 train / 173 val
+#   rows. No prompt-template/tokenization step needed — already done.
+#
+# Convergence target (MLPerf-style early stop):
+#   Every eval_steps optimizer steps, the trainer runs a no-grad pass over
+#   data1/govreport_8k_val/ (173 rows) and averages eval_loss across all
+#   ranks. Training stops as soon as eval_loss <= target_eval_loss, exactly
+#   like the reference's --target_eval_loss 0.925.
+#
+# SLURM:
+#   sbatch scripts/submit_llama2_70b_16.sh
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/data/Llama/model"   # local checkpoint dir (config.json + modeling_llama.py + *.safetensors)
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  trust_remote_code: true            # REQUIRED — CustomLlamaForCausalLM lives in modeling_llama.py next to the checkpoint
+  use_liger_kernel: false            # custom "custom_llama" model_type — Liger has no patch for it, skip the no-op attempt
+
+# -----------------------------------------------------------------------------
+# Data — SCROLLS GovReport, already tokenized/packed to 8192 tokens
+# -----------------------------------------------------------------------------
+data:
+  name: "local"
+  seq_len: 8192
+  num_workers: 32
+  tokenized_path: "/home/nsmapplication/dlapp/vaibhav/Bhaskera/data1/govreport_8k_train"
+  val_tokenized_path: "/home/nsmapplication/dlapp/vaibhav/Bhaskera/data1/govreport_8k_val"
+  pack_sequences: true   # cache has no attention_mask column — packed to 8192, no padding, safe to synthesize all-ones
+  prefetch_batches: 2
+  local_shuffle_buffer_multiplier: 10
+
+# -----------------------------------------------------------------------------
+# LoRA — fixed values from the MLPerf closed-division submission
+# -----------------------------------------------------------------------------
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.1
+  target_modules: ["qkv_proj", "o_proj"]   # fused QKV + output proj, every one of the 80 layers
+  include_experts: false
+  modules_to_save: []
+
+# -----------------------------------------------------------------------------
+# Training — mirrors the reference's 16-node/32-GPU run.sub attempt
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1                 # per-GPU micro-batch (--per_device_train_batch_size 1)
+  grad_accum: 4                 # effective batch = 32 GPUs x 1 x 4 = 128 sequences/step
+  lr: 3.0e-4
+  weight_decay: 0.0001
+  adam_beta1: 0.9
+  adam_beta2: 0.999              # HF Trainer defaults — DeepSpeed configs leave these as "auto" in the reference
+  adam_eps: 1.0e-8
+  max_steps: 1024
+  num_epochs: 40                 # generous upper bound so max_steps (not epoch exhaustion) governs stopping
+  warmup_steps: 10               # warmup_ratio 0.01 * max_steps 1024
+  max_grad_norm: 0.3
+  eval_steps: 100                 # every worker evals the full 173-row val set; keep eval infrequent
+                                   # relative to training so it doesn't dominate runtime
+  target_eval_loss: 0.925         # --target_eval_loss 0.925 — stop once eval_loss drops to/below this
+  grad_clip: 0.3                 # --max_grad_norm 0.3 in the reference
+  seed: 42
+  deterministic: false
+
+  distributed:
+    strategy: "fsdp"
+
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      transformer_layer_cls: []            # empty -> auto-detect via introspect.py
+      param_dtype: "bfloat16"
+      reduce_dtype: "bfloat16"
+      buffer_dtype: "bfloat16"
+      activation_checkpointing: true       # REQUIRED — seq_len=8192 x hidden=8192 activations are huge without it
+      cpu_offload: false
+      shard_experts_individually: false    # dense model, no experts
+      root_reshard_after_forward: false    # root params needed again at start of backward — resharding is wasted comm
+      forward_prefetch: true               # overlap next layer's all-gather with current layer's forward compute
+      backward_prefetch: true              # overlap previous layer's all-gather with current layer's backward compute
+
+# -----------------------------------------------------------------------------
+# Checkpoint
+# -----------------------------------------------------------------------------
+checkpoint:
+  enabled: true
+  save_dir: "./checkpoints/llama2-70b-lora-govreport-16node"
+  save_interval: 1
+  keep_last_n: 2
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  tracker: "mlflow"
+  project: "bhaskera"
+  run_name: "llama2-70b-lora-govreport-16node"
+  mlflow_tracking_uri: ""
+  log_gpu_every_n_steps: 10
+
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
+monitoring:
+  dashboard: true
+  dashboard_host: "0.0.0.0"
+  dashboard_port: 8265
+  metrics_export_port: 8080
+
+  metrics:
+    enabled: true
+    system_every_n_steps: 1
+    cuda_every_n_steps: 2
+    gpu: true
+    cpu: true
+    cuda_memory: true
+    throughput: true
+    peak_tflops_per_gpu: 312.0     # A100 bf16 peak
+    throughput_window: 5
+    throughput_warmup: 5

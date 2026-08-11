@@ -60,24 +60,31 @@ def wrap_fsdp2(
         )
 
     # Step 2 — per-decoder-layer sharding.
+    layers: list[nn.Module] = []
     if decoder_cls is not None:
-        layer_count = 0
         for module in model.modules():
             if isinstance(module, decoder_cls):
                 fully_shard(module, mp_policy=mp_policy)
-                layer_count += 1
+                layers.append(module)
         logger.info(
-            f"FSDP2: per-layer sharding applied to {layer_count} "
+            f"FSDP2: per-layer sharding applied to {len(layers)} "
             f"{decoder_cls.__name__} layers"
         )
+        _apply_prefetch_hints(layers, fsdp_cfg)
     else:
         logger.warning(
             "No decoder layer class found — applying fully_shard to root only. "
             "Memory use will be suboptimal."
         )
 
-    # Step 3 — root.
-    fully_shard(model, mp_policy=mp_policy)
+    # Step 3 — root. reshard_after_forward defaults False: root params are
+    # needed again immediately at the start of backward, so resharding them
+    # after forward just to re-gather microseconds later in backward is
+    # pure wasted communication.
+    fully_shard(
+        model, mp_policy=mp_policy,
+        reshard_after_forward=fsdp_cfg.root_reshard_after_forward,
+    )
 
     # Activation checkpointing.
     if fsdp_cfg.activation_checkpointing:
@@ -94,6 +101,30 @@ def wrap_fsdp2(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _apply_prefetch_hints(layers: list[nn.Module], fsdp_cfg) -> None:
+    """
+    Explicit forward/backward prefetch scheduling for a per-layer-wrapped
+    transformer stack.
+
+    Without this, FSDP2 falls back to implicit prefetch heuristics that
+    often fail to overlap the next layer's all-gather with the current
+    layer's compute in a plain per-layer wrap — every layer ends up
+    blocking on its own gather instead. Each layer here is an FSDPModule
+    (fully_shard() return value), which exposes set_modules_to_forward
+    /backward_prefetch() directly.
+    """
+    if len(layers) < 2:
+        return
+    if fsdp_cfg.forward_prefetch:
+        for i, layer in enumerate(layers[:-1]):
+            layer.set_modules_to_forward_prefetch([layers[i + 1]])
+    if fsdp_cfg.backward_prefetch:
+        # Backward runs in reverse layer order, so each layer prefetches
+        # the PREVIOUS layer's params.
+        for i, layer in enumerate(layers[1:], start=1):
+            layer.set_modules_to_backward_prefetch([layers[i - 1]])
+
 
 def _build_mp_policy(fsdp_cfg, profile: ModelProfile, MixedPrecisionPolicy):
     if fsdp_cfg.param_dtype == "auto":

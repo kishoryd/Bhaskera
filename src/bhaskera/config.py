@@ -114,6 +114,15 @@ class DataConfig:
     # sense — see launcher/train.py.)
     val_tokenized_path: Optional[str] = None
 
+    # ── External / custom pre-tokenized caches ──────────────────────────────
+    # For tokenized_path datasets that didn't come from bhaskera-tokenize (e.g.
+    # a teammate's own packing script). column_map renames source columns to
+    # bhaskera's expected names before use; pack_sequences (see above) tells
+    # load_tokenized() it's safe to synthesize an all-ones attention_mask when
+    # the cache doesn't have one (only true for fixed-length/packed data with
+    # no padding).
+    column_map: dict = field(default_factory=dict)
+
 
 
 @dataclass
@@ -126,6 +135,19 @@ class FSDPConfig:
     activation_checkpointing: bool = True
     cpu_offload: bool = False
     shard_experts_individually: bool = True
+
+    # ── Forward/backward overlap scheduling ─────────────────────────────────
+    # Root params are needed again at the very start of backward, so
+    # resharding them right after forward just to re-gather microseconds
+    # later is wasted communication — default False.
+    root_reshard_after_forward: bool = False
+    # Explicit next/previous-layer prefetch hints for a per-layer-wrapped
+    # transformer stack (see _apply_prefetch_hints in distributed/fsdp.py).
+    # Without these FSDP2 falls back to implicit prefetch heuristics that
+    # often fail to overlap a layer's all-gather with the previous layer's
+    # compute, leaving every layer blocked on its own gather.
+    forward_prefetch: bool = False
+    backward_prefetch: bool = False
 
 
 @dataclass
@@ -316,6 +338,7 @@ def _dict_to_config(raw: dict) -> Config:
             train_path=data_raw.get("train_path"),
             val_path=data_raw.get("val_path"),
             val_tokenized_path=data_raw.get("val_tokenized_path"),
+            column_map=dict(data_raw.get("column_map", {}) or {}),
         ),
         lora=LoraConfig(
             enabled=bool(lora_raw.get("enabled", False)),
@@ -360,6 +383,11 @@ def _dict_to_config(raw: dict) -> Config:
                     shard_experts_individually=bool(
                         fsdp_raw.get("shard_experts_individually", True)
                     ),
+                    root_reshard_after_forward=bool(
+                        fsdp_raw.get("root_reshard_after_forward", False)
+                    ),
+                    forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
+                    backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
                 ),
                 ddp=DDPConfig(
                     find_unused_parameters=bool(ddp_raw.get("find_unused_parameters", False)),
