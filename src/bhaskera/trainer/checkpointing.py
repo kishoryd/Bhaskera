@@ -50,6 +50,7 @@ def save_and_prune(
         step=step,
         path=ckpt_path,
         extra={"avg_loss": float(avg_loss)},
+        rank=rank,
     )
 
     # Only rank 0 manages the "best" list on disk.

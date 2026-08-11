@@ -18,6 +18,7 @@ import torch
 
 from bhaskera.config import Config
 from bhaskera.distributed import wrap_model
+from bhaskera.distributed.wrap import _verify_all_ranks_live, _wait_for_dist
 from bhaskera.models import build_model
 from bhaskera.trainer import train
 from bhaskera.utils import build_logger
@@ -36,6 +37,9 @@ def worker_fn(cfg_dict: dict) -> None:
 
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
+
+    _wait_for_dist()
+    _verify_all_ranks_live(rank, world_size, device)
 
     _seed_everything(cfg.training.seed, rank, cfg.training.deterministic)
 
