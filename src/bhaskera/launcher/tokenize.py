@@ -160,13 +160,40 @@ def main() -> None:
     _prefetch_tokenizer(cfg)
 
     # ── Init Ray ────────────────────────────────────────────────────────
+    # Object-store overflow spills to disk, and Ray's default spill
+    # location is the node's local /tmp — far smaller than scratch on this
+    # cluster's compute nodes. A real seq_len=16384 tokenize pass produces
+    # intermediate blocks large enough to fill it ("OSError: [Errno 28]
+    # No space left on device", hit tokenizing Nemotron chat at 2.3M rows).
+    #
+    # Fixed via object_spilling_config rather than `_temp_dir=`: `_temp_dir`
+    # also relocates Ray's own Unix-domain sockets (plasma_store, raylet),
+    # and nests a long auto-generated `session_<timestamp>_<pid>/sockets/...`
+    # path underneath whatever base you give it — a scratch-rooted path here
+    # is long enough on its own to blow AF_UNIX's 107-byte path limit
+    # (confirmed: `validate_socket_filename failed: AF_UNIX path length
+    # cannot exceed 107 bytes`). Sockets are tiny and fine on local /tmp;
+    # only the potentially-large spilled *data* needs to move to scratch,
+    # so only object_spilling_config's directory_path is redirected.
+    import json
     import ray
+    _spill_dir = os.environ.get(
+        "RAY_TMPDIR",
+        os.path.join(os.path.dirname(cfg.data.cache_dir.rstrip("/")) or ".", ".ray_spill"),
+    )
+    os.makedirs(_spill_dir, exist_ok=True)
     ray.init(
         num_cpus=os.cpu_count(),
         include_dashboard=False,
         ignore_reinit_error=True,
+        _system_config={
+            "object_spilling_config": json.dumps({
+                "type": "filesystem",
+                "params": {"directory_path": _spill_dir},
+            }),
+        },
     )
-    logger.info("Ray initialized for tokenization.")
+    logger.info(f"Ray initialized for tokenization (spill dir: {_spill_dir}).")
 
     # Side-effect: populate REGISTRY / RAW_REGISTRY with all builders,
     # including local_chat which registers the "local" dataset.
@@ -204,15 +231,23 @@ def _resolve_splits(arg_split: str, cfg) -> List[str | None]:
     """
     Decide which splits to tokenize.
 
-    For non-local datasets (or when split is None) we run a single pass with
-    split=None — the existing builder ignores the kwarg.
+    Any registered raw builder that declares a `split` parameter (checked the
+    same way call_raw_builder does) can be tokenized per-split; builders that
+    don't declare it get a single pass with split=None, regardless of dataset
+    name — no dataset names are hardcoded here.
     """
-    if arg_split == "none" or cfg.data.name not in {"local"}:
-        # Existing HF datasets: one pass, no split kwarg.
+    from bhaskera.data.registry import RAW_REGISTRY
+    import inspect
+
+    fn = RAW_REGISTRY.get(cfg.data.name)
+    supports_split = fn is not None and "split" in inspect.signature(fn).parameters
+
+    if arg_split == "none" or not supports_split:
         if arg_split in ("val", "both"):
             logger.warning(
-                f"--split {arg_split!r} requested for non-local dataset "
-                f"'{cfg.data.name}' — running a single pass instead."
+                f"--split {arg_split!r} requested but builder for "
+                f"'{cfg.data.name}' doesn't accept a split argument — "
+                "running a single pass instead."
             )
         return [None]
 
@@ -223,7 +258,7 @@ def _resolve_splits(arg_split: str, cfg) -> List[str | None]:
     if arg_split == "both":
         return ["train", "val"]
 
-    # Default for "local" if --split not given: tokenize train only.
+    # Default if --split not given: tokenize train only.
     return ["train"]
 
 

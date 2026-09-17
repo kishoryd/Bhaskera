@@ -7,7 +7,7 @@
 #SBATCH --exclusive
 #SBATCH --cpus-per-task=48
 ##SBATCH --nodelist=cbgpu[0065,0069-0071,0073-0080,0086,0098,0100,0103-0105,0108-0112,0130,0132,0134,0136-0137,0139-0144,0147,0151-0152,0158-0161,0164-0169,0171,0173,0176,0186-0200,0204-0210,0212-0214,0216,0225,0228-0230,0232-0236,0238-0239,0241,0243,0245-0248,0251-0258,0260,0262-0264,0274-0276,0278-0280,0284-0288,0298-0301,0304,0306-0310]
-#SBATCH --exclude=cbgpu0003,cbgpu0009,cbgpu0017,cbgpu0024,cbgpu0026,cbgpu0037,cbgpu0059,cbgpu0071,cbgpu0074,cbgpu0081,cbgpu0085,cbgpu0091,cbgpu0100,cbgpu0101,cbgpu0109,cbgpu0110,cbgpu0111,cbgpu0129,cbgpu0133,cbgpu0135,cbgpu0138,cbgpu0146,cbgpu0147,cbgpu0149,cbgpu0157,cbgpu0168,cbgpu0214,cbgpu0294,cbgpu0295,cbgpu0299,cbgpu0317
+#SBATCH --exclude=cbgpu0003,cbgpu0009,cbgpu0017,cbgpu0024,cbgpu0026,cbgpu0037,cbgpu0059,cbgpu0071,cbgpu0074,cbgpu0081,cbgpu0085,cbgpu0091,cbgpu0100,cbgpu0101,cbgpu0109,cbgpu0110,cbgpu0111,cbgpu0129,cbgpu0133,cbgpu0135,cbgpu0138,cbgpu0146,cbgpu0147,cbgpu0149,cbgpu0157,cbgpu0168,cbgpu0192,cbgpu0214,cbgpu0294,cbgpu0295,cbgpu0299,cbgpu0317
 #SBATCH --partition=gpu
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/bhaskera-llama70b-64_%j_%N.out

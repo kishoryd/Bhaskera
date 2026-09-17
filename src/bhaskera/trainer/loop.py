@@ -103,6 +103,7 @@ def train(
     local_rank: int,
     tracker=None,
     world_size: int = 1,
+    val_dataset=None,
 ) -> None:
     """
     Run the training loop.
@@ -116,6 +117,9 @@ def train(
         local_rank:  Local GPU index on this host.
         tracker:     Optional logger (MultiLogger from build_logger).
         world_size:  Total number of training ranks.
+        val_dataset: Optional Ray Dataset shard for periodic eval /
+                     MLPerf-style convergence early-stop (cfg.training.eval_steps,
+                     target_eval_loss). None if data.val_tokenized_path isn't set.
     """
     device    = torch.device(f"cuda:{local_rank}")
     train_cfg = cfg.training
@@ -155,15 +159,16 @@ def train(
         }, step=0)
 
     for epoch in range(train_cfg.num_epochs):
-        step, best_ckpts = _run_epoch(
-            model=model, dataset=dataset, optimizer=optimizer,
+        step, best_ckpts, stop_early = _run_epoch(
+            model=model, dataset=dataset, val_dataset=val_dataset,
+            optimizer=optimizer,
             scheduler=scheduler, cfg=cfg, profile=profile,
             rank=rank, local_rank=local_rank, device=device,
             epoch=epoch, step=step, tracker=tracker,
             best_ckpts=best_ckpts, throughput=throughput,
             world_size=world_size,
         )
-        if step >= train_cfg.max_steps:
+        if step >= train_cfg.max_steps or stop_early:
             break
 
     if tracker:
@@ -173,11 +178,83 @@ def train(
 
 
 # ---------------------------------------------------------------------------
+# Validation (periodic eval + MLPerf-style convergence early-stop)
+# ---------------------------------------------------------------------------
+
+def _run_eval(
+    *, model, val_dataset, cfg, device, autocast_dtype, use_autocast,
+) -> Optional[float]:
+    """
+    One full pass over this rank's local validation shard, no backward.
+
+    Returns the cross-rank sample-weighted mean loss (identical value on
+    every rank, via all_reduce) so every rank compares against
+    target_eval_loss with the same number and either all stop or all
+    continue — a per-rank-only decision would desync the collectives on
+    the next training step. Returns None if no rank saw any eval batches
+    (e.g. an empty val shard), rather than lying with a 0.0 loss that
+    would trivially — and falsely — satisfy any early-stop target.
+    """
+    train_cfg = cfg.training
+    eval_bs   = train_cfg.eval_batch_size or train_cfg.batch_size
+
+    was_training = model.training
+    model.eval()
+
+    val_loader = val_dataset.iter_torch_batches(
+        batch_size=eval_bs,
+        drop_last=False,
+        dtypes={
+            "input_ids":      torch.long,
+            "attention_mask": torch.long,
+            "labels":         torch.long,
+        },
+        device=device,
+    )
+
+    total_loss = 0.0
+    n_batches  = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            autocast_ctx = (
+                torch.autocast("cuda", dtype=autocast_dtype)
+                if use_autocast
+                else contextlib.nullcontext()
+            )
+            with autocast_ctx:
+                out = model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    labels=batch["labels"],
+                    use_cache=False,
+                )
+            total_loss += out.loss.item()
+            n_batches  += 1
+
+    if was_training:
+        model.train()
+
+    if dist.is_available() and dist.is_initialized():
+        sum_and_count = torch.tensor(
+            [total_loss, float(n_batches)], device=device, dtype=torch.float32,
+        )
+        dist.all_reduce(sum_and_count, op=dist.ReduceOp.SUM)
+        total_loss_all, n_batches_all = sum_and_count.tolist()
+    else:
+        total_loss_all, n_batches_all = total_loss, float(n_batches)
+
+    if n_batches_all == 0:
+        return None
+
+    return total_loss_all / n_batches_all
+
+
+# ---------------------------------------------------------------------------
 # Single epoch
 # ---------------------------------------------------------------------------
 
 def _run_epoch(
-    *, model, dataset, optimizer, scheduler, cfg, profile,
+    *, model, dataset, val_dataset, optimizer, scheduler, cfg, profile,
     rank, local_rank, device, epoch, step, tracker, best_ckpts,
     throughput: Optional[ThroughputTracker], world_size: int,
 ):
@@ -250,8 +327,9 @@ def _run_epoch(
     #   _set_grad_sync() above, which dispatches by wrapper type and
     #   safely falls back when neither applies (single-GPU, static_graph DDP).
     loader_iter = iter(loader)
+    stop_early  = False
 
-    while step < train_cfg.max_steps:
+    while step < train_cfg.max_steps and not stop_early:
         micro_losses:     list[torch.Tensor] = []
         micro_aux_losses: list[torch.Tensor] = []
         window_tokens  = 0
@@ -422,8 +500,36 @@ def _run_epoch(
             if sysm:
                 tracker.log(sysm, step=step)
 
+        # ── Periodic eval / MLPerf-style convergence early-stop ──────
+        eval_steps = train_cfg.eval_steps
+        if val_dataset is not None and eval_steps > 0 and step % eval_steps == 0:
+            eval_loss = _run_eval(
+                model=model, val_dataset=val_dataset, cfg=cfg,
+                device=device, autocast_dtype=autocast_dtype,
+                use_autocast=use_autocast,
+            )
+            if eval_loss is None:
+                if rank == 0:
+                    logger.warning(
+                        f"[epoch {epoch}][step {step}] eval skipped: "
+                        "no rank saw any validation batches"
+                    )
+            else:
+                if rank == 0:
+                    logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f}")
+                    if tracker:
+                        tracker.log({"eval/loss": eval_loss}, step=step)
+                target = train_cfg.target_eval_loss
+                if target is not None and eval_loss <= target:
+                    stop_early = True
+                    if rank == 0:
+                        logger.info(
+                            f"eval_loss {eval_loss:.4f} <= target_eval_loss {target} "
+                            "— stopping early (convergence target reached)"
+                        )
+
     if epoch_steps == 0:
-        return step, best_ckpts
+        return step, best_ckpts, stop_early
 
     avg_loss = epoch_loss / epoch_steps
     if rank == 0:
@@ -447,4 +553,4 @@ def _run_epoch(
             rank=rank, best_ckpts=best_ckpts,
         )
 
-    return step, best_ckpts
+    return step, best_ckpts, stop_early

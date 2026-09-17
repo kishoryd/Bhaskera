@@ -86,8 +86,18 @@ def _read_files(files: List[str]) -> ray.data.Dataset:
     if parquet:
         return ray.data.read_parquet(parquet)
     if json_:
-        # ray.data.read_json handles both .json and .jsonl (line-delimited)
-        return ray.data.read_json(json_)
+        # ray.data.read_json handles both .json and .jsonl (line-delimited).
+        #
+        # override_num_blocks targets one block per input file. Note this is
+        # a hint, not a guarantee: Ray Data's streaming executor budgets
+        # resources across operators and will backpressure reads
+        # ("[backpressured:tasks(ResourceBudget)]") regardless, so read
+        # concurrency does not scale indefinitely with file count. At ~200
+        # files / 54GB it serialises badly; at a few dozen files it is fine.
+        # Keep the *input* sized to what training actually consumes rather
+        # than relying on read parallelism to absorb an oversized corpus.
+        num_blocks = len(json_) if len(json_) > 1 else None
+        return ray.data.read_json(json_, override_num_blocks=num_blocks)
 
     raise ValueError(
         f"No supported files found. Expected one of {_JSON_EXTS + _PARQUET_EXTS}."
@@ -169,22 +179,3 @@ def build(cfg, world_size: int = 1) -> ray.data.Dataset:
 
     # ── Live tokenisation path: needs raw inputs. ────────────────────────
     return tokenize_dataset(_build_raw(cfg), cfg, "text", world_size=world_size)
-
-
-
-
-def build_val_ray_dataset(cfg, world_size: int = 1) -> Optional[ray.data.Dataset]:
-    """
-    Return the tokenized validation dataset, or None if no val cache is
-    configured. Mirrors build() but reads cfg.data.val_tokenized_path.
-    """
-    val_path = getattr(cfg.data, "val_tokenized_path", None)
-    if not val_path:
-        logger.info("No data.val_tokenized_path configured — skipping val dataset.")
-        return None
-
-    logger.info(
-        f"local dataset (val): loading pre-tokenized cache "
-        f"{val_path!r} (world_size={world_size})"
-    )
-    return load_tokenized(val_path, cfg, world_size)

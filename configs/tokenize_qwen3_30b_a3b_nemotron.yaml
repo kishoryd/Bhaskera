@@ -1,0 +1,35 @@
+# =============================================================================
+# Tokenize nvidia/Nemotron-Cascade-2-SFT-Data ("chat" subset, part 1 of 4 —
+# ~2.3M rows / 53.7GB, Apache-2.0) for Qwen3-14B.
+#
+# Verified against OpenThoughts3 before choosing this dataset: OpenThoughts3
+# is 70.8% truncated mid-generation (a fixed ~16,792-token cap baked into the
+# source data), so training on it converges the model toward "stop mid-
+# sentence." Nemotron chat showed no such cap signature across a multi-shard
+# sample (mass within 1.5% of max = 0.3%) and every inspected sample ends on
+# a genuine completion.
+#
+# val_path is the first 3,000 lines of the same file (~0.13% of rows) — a
+# deliberate simplification rather than a disjoint held-out file, acceptable
+# for a scaling/throughput comparison though not for a paper.
+#
+# Run once on the login node (CPU-only):
+#   bhaskera-tokenize --config configs/tokenize_qwen3_14b_nemotron.yaml --split both
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/models/Qwen3-30B-A3B-Instruct-2507"
+  trust_remote_code: false
+
+data:
+  name: "local"
+  format: "chatml"
+  train_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/nemotron_train_30"
+  val_path:   "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/nemotron_val/val_sample.jsonl"
+  seq_len: 4096
+  cache_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1"
+
+  num_workers: 46
+  tokenize_batch_size: 64
+  tokenize_compression: "snappy"
+  prefetch_batches: 2

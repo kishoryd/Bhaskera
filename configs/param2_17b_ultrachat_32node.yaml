@@ -1,0 +1,141 @@
+# =============================================================================
+# Bhaskera — Param2-17B-A2.4B-Thinking (DeepSeek-style MoE) | LoRA SFT on
+# HuggingFaceH4/ultrachat_200k (train_sft, "prompt" column)
+#
+# 64 GPUs total, 2 GPUs per node (32 nodes x 2 GPUs/node)
+#
+# Model:
+#   bharatgenai/Param2-17B-A2.4B-Thinking — 17B total / ~2.4B active params.
+#   64 routed experts (top-6) + 2 shared experts, sigmoid-gated router,
+#   first_k_dense_replace=1 (layer 0 dense). Custom modeling code
+#   (Param2MoEForCausalLM, model_type=param2moe) — trust_remote_code required.
+#   Already staged locally, no download needed.
+#
+# Dataset:
+#   Pre-tokenized via: bhaskera-tokenize --config configs/tokenize_param2_ultrachat.yaml
+#   -> data1/ultrachat_f22ad309ca1d8a3a (207,864 rows, seq_len=4096).
+#   No val split — the registered "ultrachat" builder only pulls train_sft.
+#
+# LoRA / MoE:
+#   include_experts=false, freeze_router=true — LoRA on attention only, router
+#   and routed experts stay frozen (destabilises MoE routing otherwise).
+#   shard_experts_individually=false, per this model's existing reference
+#   config (configs/finetune_param_local_data.yaml).
+#
+# SLURM:
+#   sbatch scripts/submit_param2_17b_ultrachat_32.sh
+# =============================================================================
+
+model:
+  name: "/home/nsmapplication/dlapp/vaibhav/Bhaskera/Param2-17B-A2.4B-Thinking"
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  trust_remote_code: true
+  use_liger_kernel: true   # falls back gracefully to HF kernels if unsupported for param2moe
+
+# -----------------------------------------------------------------------------
+# Data — UltraChat 200k, pre-tokenized/padded to 4096 tokens
+# -----------------------------------------------------------------------------
+data:
+  name: "local"
+  seq_len: 4096
+  num_workers: 32
+  tokenized_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/ultrachat_f22ad309ca1d8a3a"
+  prefetch_batches: 2
+  local_shuffle_buffer_multiplier: 10
+
+# -----------------------------------------------------------------------------
+# LoRA — MoE-aware (attention only, router + experts frozen)
+# -----------------------------------------------------------------------------
+lora:
+  enabled: true
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: ["auto"]
+  include_experts: false
+  freeze_router: true
+  modules_to_save: []
+
+# -----------------------------------------------------------------------------
+# MoE auxiliary losses (routing health, even with LoRA)
+# -----------------------------------------------------------------------------
+moe:
+  aux_loss_weight: 0.01
+  router_z_loss_weight: 0.001
+  freeze_router: true
+  log_expert_utilization: true
+  log_every_n_steps: 25
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1                 # per-GPU micro-batch
+  grad_accum: 1                 # effective batch = 64 GPUs x 1 x 1 = 64 sequences/step
+  lr: 1.0e-4
+  weight_decay: 0.0
+  max_steps: 1000                # scaling/throughput test — not a full-convergence run
+  num_epochs: 1
+  warmup_steps: 50
+  max_grad_norm: 1.0
+  grad_clip: 1.0
+  max_grad_skip_steps: 100
+  seed: 42
+  deterministic: false
+
+  distributed:
+    strategy: "fsdp"
+
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      transformer_layer_cls: []            # empty -> auto-detect via introspect.py
+      param_dtype: "bfloat16"
+      reduce_dtype: "bfloat16"
+      buffer_dtype: "bfloat16"
+      activation_checkpointing: true       # essential at 17B
+      cpu_offload: false
+      shard_experts_individually: false    # per this model's existing reference config
+      root_reshard_after_forward: false
+      forward_prefetch: true
+      backward_prefetch: true
+
+# -----------------------------------------------------------------------------
+# Checkpoint
+# -----------------------------------------------------------------------------
+checkpoint:
+  enabled: true
+  save_dir: "./checkpoints/param2-17b-ultrachat-32node"
+  save_interval: 1
+  keep_last_n: 2
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  tracker: "mlflow"
+  project: "bhaskera"
+  run_name: "param2-17b-ultrachat-32node"
+  mlflow_tracking_uri: ""
+  log_gpu_every_n_steps: 10
+
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
+monitoring:
+  dashboard: true
+  dashboard_host: "0.0.0.0"
+  dashboard_port: 8265
+  metrics_export_port: 8080
+
+  metrics:
+    enabled: true
+    system_every_n_steps: 1
+    cuda_every_n_steps: 2
+    gpu: true
+    cpu: true
+    cuda_memory: true
+    throughput: true
+    peak_tflops_per_gpu: 312.0     # A100 bf16 peak
+    throughput_window: 5
+    throughput_warmup: 5

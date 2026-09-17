@@ -81,7 +81,41 @@ All runs are driven by a single YAML file passed via `--config`. The schema is d
 - `monitoring` — Ray Dashboard host/port, metrics export port, per-step metric toggles
 - `inference` — generation params, KV cache mode, TurboQuant and speculative decoding sub-configs
 
-See `configs/` for working examples covering Param2-17B-MoE on 4 GPUs (2 nodes × 2), Qwen2.5-14B dense with FSDP / DDP / hybrid-shard variants, and local ChatML SFT.
+See `configs/` for working examples covering Param2-17B-MoE on 4 GPUs (2 nodes × 2), Qwen2.5-14B dense with FSDP / DDP / hybrid-shard variants, local ChatML SFT, and the six-model dense-vs-MoE benchmark matrix described below.
+
+### Config fields that are not free to change
+
+Two fields are coupled to on-disk state or to cluster behaviour, and changing them in isolation fails in non-obvious ways:
+
+- **`data.seq_len` is part of the tokeniser cache key** (`sha256(model | seq_len | dataset | format | format_options)`). Changing it in a training config points `tokenized_path` at a cache that does not exist. Re-tokenise and update both `tokenized_path` and `val_tokenized_path`.
+- **`seq_len` should match the data, not the model's maximum.** The tokeniser pads to `max_length`, so an oversized `seq_len` is pure waste: on Nemotron chat (median ~2.1k tokens), `seq_len: 16384` padded ~80% of every sequence, produced ~194GB of mostly-padding Parquet, stalled tokenisation on object-store backpressure, and would have spent ~80% of training FLOPs on padding. `seq_len: 4096` covers ~72% of rows whole at ~44% padding.
+- **`fsdp.shard_experts_individually` should stay `false` for large-expert-count MoE.** With 128 experts × ~90 layers it creates thousands of tiny FSDP units; all three MoE models then hung in `_ALLGATHER_BASE` / `_REDUCE_SCATTER_BASE` until the 30-minute NCCL watchdog fired, while the dense models on the same data ran normally. It is not needed for memory — Qwen3-235B-A22B is ~29GB/GPU at 16 GPUs under `FULL_SHARD`.
+
+## Benchmark matrix — dense vs MoE
+
+`configs/*_8node_nemotron.yaml` define a six-model comparison on `nvidia/Nemotron-Cascade-2-SFT-Data` (chat subset), holding dataset, `seq_len`, LoRA rank (r16/alpha32) and node count (8 nodes × 2 GPUs) constant so differences are attributable to architecture and scale.
+
+| Config | Model | Params | Arch | Strategy |
+|---|---|---|---|---|
+| `qwen3_14b_ddp_8node_nemotron.yaml` | Qwen3-14B | 14.8B | dense | DDP |
+| `llama33_70b_fsdp_8node_nemotron.yaml` | Llama-3.3-70B-Instruct | 70B | dense | FSDP |
+| `mistral_large_fsdp_8node_nemotron.yaml` | Mistral-Large-Instruct-2411 | 123B | dense | FSDP |
+| `qwen3_30b_a3b_fsdp_8node_nemotron.yaml` | Qwen3-30B-A3B-Instruct-2507 | 30B / 3B active | MoE | FSDP |
+| `gpt_oss_120b_fsdp_8node_nemotron.yaml` | gpt-oss-120b | 120B / 5.1B active | MoE | FSDP |
+| `qwen3_235b_a22b_fsdp_8node_nemotron.yaml` | Qwen3-235B-A22B-Instruct-2507 | 235B / 22B active | MoE | FSDP |
+
+Qwen3-14B (dense), Qwen3-30B-A3B (MoE) and Qwen3-235B-A22B (MoE) share a tokeniser and model family, so that trio is the controlled dense-vs-MoE comparison; the others add scale and vendor diversity.
+
+Each model has a matching `configs/tokenize_<model>_nemotron.yaml` and `scripts/submit_<model>_<strategy>_8_nemotron.sh`. Run order per model:
+
+```bash
+bhaskera-tokenize --config configs/tokenize_qwen3_14b_nemotron.yaml --split both
+sbatch scripts/submit_qwen3_14b_ddp_8_nemotron.sh
+```
+
+`scripts/submit_nemotron_pipeline.sh` chains all six: it tokenises each model in turn and submits that model's training job as soon as its cache is ready. Tokenisation must run as a batch job rather than on the login node — login-node processes (including `tmux` servers) are killed on session exit, and the login node is shared.
+
+Training data is `data1/nemotron_train_30/` (30 shards, ~528k rows), sized against what the runs actually consume: `max_steps: 3000` × 128 sequences/step = 384k sequences maximum.
 
 ## Typical workflow
 

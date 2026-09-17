@@ -8,9 +8,12 @@ registry stays cheap to import.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, List
 
 from . import register_format
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -68,11 +71,33 @@ def _apply_chat_template_safe(tokenizer: Any, messages: List[dict]) -> str:
     )
     if not has_template:
         return _manual_chatml(messages)
-    return tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=False,
-    )
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+    except Exception as exc:
+        # A model's own chat template can *reject* otherwise-valid message
+        # structures — the strict ones (Mistral, gpt-oss) call the Jinja
+        # raise_exception() helper for things like non-alternating roles or
+        # an unexpected role. Hit for real on Nemotron chat: two of six
+        # models aborted a 528k-row tokenize run partway through, while the
+        # other four tokenized the identical data fine.
+        #
+        # One malformed row should not kill the whole corpus, and silently
+        # dropping rows would give each model a different training set and
+        # break the cross-model comparison this pipeline exists for. Falling
+        # back to manual ChatML keeps every model on the same rows; the
+        # fallback differs in special tokens for that row only.
+        logger.warning(
+            "chat_template rejected a row (%s: %s) — falling back to manual "
+            "ChatML for it. Roles: %s",
+            type(exc).__name__,
+            str(exc)[:120],
+            [m.get("role") for m in messages][:12],
+        )
+        return _manual_chatml(messages)
 
 
 # ---------------------------------------------------------------------------
