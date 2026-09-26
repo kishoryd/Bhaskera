@@ -1,216 +1,73 @@
-# Bhaskera
+# Branch: `qlora`
 
-Ray-native distributed LLM training and inference framework.
+## Summary
 
-Bhaskera wraps PyTorch's FSDP2 / DDP, HuggingFace `transformers`, PEFT-based LoRA / QLoRA, and a persistent Ray Data tokenisation pipeline behind a YAML-driven CLI. It targets supervised fine-tuning and continual pre-training of dense and Mixture-of-Experts (MoE) causal language models on single-node and multi-node SLURM clusters, with built-in MLflow and Ray Dashboard observability.
+Adds:
+- QLoRA fine-tuning
+- continual pre-training (CPT) with sequence packing
+- an evaluation subsystem with validation metrics and LM benchmarks
+- a pluggable optimizer system (any `torch.optim` class, Lion, GaLore)
+- a revised FLOPs/MFU calculation
 
-Version: `2.2.0` (Python `>=3.11`).
+## Changes
 
-## What it does
+### QLoRA (`models/quantization.py`)
 
-- **Distributed training** with FSDP2 (`torch.distributed._composable.fsdp.fully_shard`) or DDP, selected per-run from YAML.
-- **MoE-aware sharding** — per-expert FSDP units, per-expert activation checkpointing, frozen routers, and Switch-Transformer-style auxiliary load-balancing loss computed from `router_logits`.
-- **LoRA fine-tuning** via PEFT, with strategy-gated dtype handling (cast to base dtype under FSDP2 to satisfy uniform-shard-init; fp32 master weights under DDP).
-- **QLoRA fine-tuning** — BitsAndBytes NF4 4-bit quantization of the base model with full-precision LoRA adapters. DDP-only (`model.quantization: qlora`). Fails fast with a clear error if FSDP is accidentally configured.
-- **Continual Pre-Training (CPT)** — `data.is_cpt: true` activates the continuous sequence-packing loader (`local_cpt`), which reads raw JSONL corpora and packs tokens into fixed-length chunks with no padding waste.
-- **Persistent tokenisation cache** — `bhaskera-tokenize` writes Parquet shards keyed by `(model_name, seq_len, dataset_name, format, format_options)`; training reads the cache directly.
-- **Pluggable chat formats** — built-in renderers for `chatml`, `alpaca`, `sharegpt`; custom formats register via `@register_format`.
-- **DCP-based sharded checkpointing** with atomic `.complete` sentinel, version-aware between PyTorch < 2.5 and ≥ 2.5.
-- **Architecture-agnostic introspection** (`bhaskera.introspect`) — walks the loaded model once to discover decoder layer class, expert containers, routers, LoRA targets, and aux-loss support. No hardcoded class names.
-- **Liger Kernel integration** — Triton-fused RMSNorm / RoPE / SwiGLU / CrossEntropy, applied via `_apply_liger_kernel_to_instance` before LoRA and FSDP wrap.
-- **Pluggable evaluation subsystem** — in-training validation (loss, perplexity, token accuracy) and LM benchmarks (HellaSwag, ARC-Easy, ARC-Challenge), all distributed-safe and extensible via `@register_metric` / `@register_benchmark`. Optimizer state is offloaded to CPU before eval and restored after to reclaim GPU memory.
-- **Pluggable optimizer system** — use any built-in PyTorch optimizer by class name (`backend: torch, class_name: Adadelta`), or register custom optimizers via `@register_optimizer` plugins (built-in: Lion).
-- **Observability** — MLflow push-based experiment tracking (file-backed store under `$HOME/mlflow-runs`), W&B (optional), and Ray Dashboard with Prometheus-formatted metrics.
-- **Inference CLI** — `bhaskera-infer` with config-driven generation, optional TurboQuant KV cache and speculative decoding hooks declared in the config schema.
+- `model.quantization: qlora` loads the base model in 4-bit NF4 with BitsAndBytes (double quantization, bf16 compute) and trains LoRA adapters in full precision.
+- It is supported with DDP only. BitsAndBytes 4-bit weights cannot be sharded by FSDP2, so FSDP raises an error at load time.
+- Each GPU holds the whole 4-bit model, about 0.5 bytes per parameter (roughly 35 GB for a 70B model).
+- Install `bitsandbytes` separately; it is not in `pyproject.toml`.
 
-## Repository layout
+### Continual pre-training (`data/tokenize.py`, `data/datasets/local_cpt.py`)
 
-```
-Bhaskera-qlora/
-├── configs/                      # YAML run configs (one per scenario)
-├── scripts/
-│   └── submit.sh                 # SLURM submission script
-├── src/bhaskera/
-│   ├── config.py                 # dataclass schema + YAML loader
-│   ├── introspect.py             # ModelProfile auto-detection
-│   ├── data/                     # Ray Data datasets, formats, tokenisation
-│   ├── distributed/              # FSDP2 / DDP wrap + DCP checkpoints
-│   ├── launcher/                 # CLI entry points
-│   ├── models/                   # HF loader + LoRA + QLoRA quantization
-│   ├── trainer/                  # training loop, MoE, optim, eval lifecycle
-│   ├── evaluation/               # Evaluator, distributed validation, benchmarks
-│   ├── plugins/                  # built-in metrics, benchmarks, optimizers
-│   └── utils/                    # telemetry + experiment trackers
-├── bhaskera-activate.sh          # generated by setup.sh — sources venv + CUDA
-├── pyproject.toml
-├── requirements.txt
-└── setup.sh                      # one-shot installer
-```
+- `data.is_cpt: true`, or its alias `data.pack_sequences`, reads raw JSONL corpora and packs tokens into fixed-length chunks with no padding.
+- The flag is part of the tokenization cache key, so packed and unpacked caches never collide.
 
-## Installation
+### Evaluation (`evaluation/`, `plugins/`, `trainer/eval_lifecycle.py`)
 
-`setup.sh` detects CUDA via a layered probe (env vars → `CUDA_HOME` → `nvcc` → `nvidia-smi` → Spack → SLURM probe), maps the version to a PyTorch wheel tag (`cu118` / `cu121` / `cu124`), creates a Python 3.11 venv with `uv`, installs the matched torch wheel first, then installs Bhaskera with `[wandb,mlflow]` extras, and finally builds `flash-attn` out-of-band with `--no-build-isolation` (skipped on CPU-only setups; failure is non-fatal).
-
-```bash
-bash setup.sh
-# overrides:
-BHASKERA_CUDA=12.4 bash setup.sh
-BHASKERA_VENV=/path bash setup.sh
-```
-
-The script writes `bhaskera-activate.sh` to the project root — source this at the top of SLURM job scripts to load CUDA and activate the venv in one line.
-
-For QLoRA, also install BitsAndBytes separately (GPU-specific, not in `pyproject.toml`):
-```bash
-pip install bitsandbytes
-```
-
-## CLI entry points
-
-Declared in `pyproject.toml` under `[project.scripts]`:
-
-| Command | Module | Purpose |
-|---|---|---|
-| `bhaskera-train` | `bhaskera.launcher.train` | Ray Train driver — submits `TorchTrainer` with `worker_fn` per GPU |
-| `bhaskera-tokenize` | `bhaskera.launcher.tokenize` | Tokenise a dataset once and persist to Parquet cache |
-| `bhaskera-infer` | `bhaskera.launcher.infer` | Single-prompt or batch generation from a checkpoint |
-| `bhaskera-diag` | `bhaskera.launcher.diagnostics` | NCCL all-reduce + bandwidth check |
-| `bhaskera-dashboard` | `bhaskera.launcher.dashboard` | Start / stop the MLflow UI on the login node |
-
-## Configuration
-
-All runs are driven by a single YAML file passed via `--config`. The schema is defined as dataclasses in `src/bhaskera/config.py` and loaded by `load_config(path)`. Top-level sections:
-
-- `plugins` — list of optimizer plugin module paths to import at startup (`plugins.optimizers: [...]`)
-- `model` — name, dtype, attention implementation, `trust_remote_code`, `use_liger_kernel`, `quantization` (`"none"` / `"qlora"`)
-- `data` — dataset name, sequence length, `is_cpt` flag for CPT, tokenizer cache paths, format renderer, local source paths
-- `lora` — rank, alpha, dropout, target modules (`["auto"]` triggers introspection), MoE knobs
-- `moe` — aux loss weights, router freezing, expert utilisation logging
-- `training` — batch size, gradient accumulation, LR schedule, distributed strategy block
-- `training.optimizer` — `backend: "default"|"torch"|"plugin"`, `class_name` (for built-in torch), `name` (for plugin), `kwargs`
-- `training.distributed` — `strategy: fsdp | ddp` plus an `fsdp` and `ddp` sub-block
-- `checkpoint` — save directory, interval, retention
-- `logging` — tracker selection (`wandb`, `mlflow`, `ray`, list, or `none`), project, run name
-- `evaluation` — `enabled`, `offload_optimizer`, `validation` (metrics, frequency), `benchmarks` (tasks, frequency)
-- `monitoring` — Ray Dashboard host/port, metrics export port, per-step metric toggles
-- `inference` — generation params, KV cache mode, TurboQuant and speculative decoding sub-configs
-
-See `configs/` for working examples:
-
-| Config | Purpose |
+| Type | Included |
 |---|---|
-| `2node.yaml` | Param2-17B MoE, FSDP, 4 GPUs (2 nodes × 2) |
-| `param_qlora.yaml` | Param2-17B QLoRA + DDP, A100 80 GB |
-| `qwen_ddp.yaml` | Qwen2.5-14B dense, DDP |
-| `qwen_hybrid_shard.yaml` | Qwen2.5-14B dense, FSDP HYBRID_SHARD |
-| `fsdp_cpt.yaml` | Qwen2.5-7B CPT, FSDP |
-| `pre.yaml` | Qwen2.5-1.5B CPT, DDP |
-| `eval.yaml` | CPT + validation + benchmark evaluation subsystem |
-| `adadelta.yaml` | CPT with built-in Adadelta optimizer (`backend: torch`) |
-| `lion.yaml` | CPT with Lion optimizer plugin (`backend: plugin`) |
-| `cpt_token.yaml` | Tokenize a CPT JSONL corpus |
-| `tokenize.yaml` | Tokenize UltraChat with Param2 tokenizer |
-| `tokenize_qwen.yaml` | Tokenize UltraChat with Qwen2.5 tokenizer |
+| Validation metrics | Loss, perplexity, token accuracy |
+| Benchmarks | HellaSwag, ARC-Easy, ARC-Challenge |
 
-## Typical workflow
+- Evaluation runs during training under `evaluation.enabled: true` and works under both FSDP2 and DDP.
+- Before evaluation, optimizer state is moved to CPU to free GPU memory. Afterwards it is restored and the data position resumes exactly.
+- New metrics and benchmarks register with `@register_metric` and `@register_benchmark`.
 
-### Supervised Fine-Tuning (SFT)
+### Optimizers (`trainer/optim.py`, `trainer/optimizer_registry.py`, `plugins/optimizers/`)
 
-1. **Tokenise once.** `bhaskera-tokenize --config configs/tokenize.yaml [--split both]` writes a Parquet shard set under `cfg.data.cache_dir` and prints a `tokenized_path:` snippet.
-2. **Paste the path** into the training config's `data.tokenized_path` (and `data.val_tokenized_path` if you tokenised a val split).
-3. **Train.** `bhaskera-train --config configs/your_run.yaml --num-workers <N>`. On SLURM, `scripts/submit.sh` bootstraps the Ray cluster and forwards to the same command.
-4. **Monitor.** Start `bhaskera-dashboard` on the login node for the MLflow UI; Ray Dashboard is exposed on `monitoring.dashboard_port` (default 8265).
-5. **Infer.** `bhaskera-infer --config configs/inference.yaml --prompt "..."`.
-
-### Continual Pre-Training (CPT)
-
-1. Prepare a JSONL corpus with one document per line (`{"text": "..."}`).
-2. Tokenize: `bhaskera-tokenize --config configs/cpt_token.yaml`. Set `data.is_cpt: true`, `data.path: /path/to/corpus.jsonl`, `data.cache_dir: ...`.
-3. Train: use `pre.yaml` / `fsdp_cpt.yaml` (set `data.is_cpt: true`, `lora.enabled: false`).
-
-### QLoRA Fine-Tuning
-
-1. Install BitsAndBytes: `pip install bitsandbytes`.
-2. In your config: `model.quantization: qlora`, `training.distributed.strategy: ddp`.
-3. Tokenize and train as with standard SFT. See `param_qlora.yaml` for a full working example.
-
-### Pluggable Optimizer
-
-To use a built-in PyTorch optimizer:
 ```yaml
 training:
   optimizer:
-    backend: "torch"
-    class_name: "Adadelta"
-    kwargs:
-      lr: 1.0
-      rho: 0.95
+    backend: torch          # default (fused AdamW) | torch | plugin
+    class_name: Adadelta    # any torch.optim class when backend: torch
+    # name: lion            # registered plugin when backend: plugin
 ```
 
-To use the Lion plugin:
-```yaml
-plugins:
-  optimizers:
-    - "bhaskera.plugins.optimizers.lion"
-training:
-  optimizer:
-    backend: "plugin"
-    name: "lion"
-    kwargs:
-      lr: 5.0e-6
-      betas: [0.9, 0.99]
-```
+- **Built-in plugins:** Lion and GaLore. GaLore has been tested with DDP only.
+- **Custom optimizers:** plugin modules listed under `plugins.optimizers` are loaded on both the driver and the workers.
 
-### In-Training Evaluation
+### Throughput and MFU (`utils/throughput.py`, `trainer/loop.py`)
 
-Add to your config:
-```yaml
-evaluation:
-  enabled: true
-  offload_optimizer: true
-  validation:
-    dataset: "validation"
-    every_n_steps: 40
-    every_n_epochs: 1
-    metrics:
-      - loss
-      - perplexity
-      - token_accuracy
-  benchmarks:
-    every_n_steps: 200
-    every_n_epochs: 1
-    tasks:
-      - hellaswag
-      - arc_easy
-      - arc_challenge
-```
+The FLOPs-per-token estimate now:
+- includes the attention term
+- adds the extra forward pass when activation checkpointing is on
 
-A `val_tokenized_path` must be set in `data` for validation to run. Benchmarks use the HuggingFace `datasets` library and do not require pre-tokenization.
+### Documentation and configuration
 
-## Extension points
+- **Documentation:**
+  - Adds `CODE_FLOW.md`, `CLAUDE.md` and `AGENTS.md`.
+  - Extends `ARCHITECTURE.md`.
+- **Example configs:** `param_qlora.yaml`, `fsdp_cpt.yaml`, `pre.yaml`, `cpt_token.yaml`, `eval.yaml`, `galore.yaml`, `lion.yaml`, `adadelta.yaml`.
 
-| What to extend | Decorator | Where to register |
-|---|---|---|
-| New dataset | `@register("name")` / `@register_raw("name")` | `data/datasets/my_dataset.py` + `__init__.py` |
-| New chat format | `@register_format("name")` | Any module imported before training |
-| New validation metric | `@register_metric("name")` | Any module; lazy-imported by `get_metric("name")` |
-| New benchmark | `@register_benchmark("name")` | Any module; lazy-imported by `get_benchmark("name")` |
-| New optimizer plugin | `@register_optimizer("name")` | `plugins/optimizers/my_opt.py`; declare in `plugins.optimizers` YAML |
-| New logger | Subclass `BaseLogger` | Add branch in `utils/loggers/__init__.py` |
-| New model loader | `@register_model("org/name")` | Any module imported before `build_model` |
+## Merge notes
 
-See `ARCHITECTURE.md §7` for code examples for each extension type.
-
-## Dependencies
-
-Core runtime (from `pyproject.toml`):
-
-- `torch>=2.4`, `transformers>=4.45,<5.0.0`, `ray[train,data,default]>=2.10`
-- `peft>=0.10`, `accelerate>=0.20`, `datasets>=2.0`, `safetensors>=0.4`
-- `liger-kernel>=0.5`, `nvidia-ml-py>=12.535`
-- `omegaconf>=2.3.0`, `pyyaml>=6.0`, `numpy`, `pandas`, `psutil`, `tqdm`
-
-Optional extras: `wandb`, `mlflow`, `flash` (`flash-attn>=2.5`), `inference` (`scipy`), `dev` (`pytest`, `ruff`), `observability` (wandb + mlflow).
-
-Additional (install separately):
-- `bitsandbytes` — required for `model.quantization: qlora`.
+- **`trainer/checkpointing.py` conflicts with `main`.**
+- **MFU definition:** counting the recomputed forward pass measures hardware utilization (HFU), not model FLOPs utilization (MFU) as usually defined. Consider reporting both.
+- **Overlapping fixes:** `fsdp-moe-fixes` separately fixes a double division by `world_size` in `throughput.py`. Reconcile the two changes when both are merged.
+- **Machine-specific files:**
+  - `bhaskera-activate.sh` points to a machine-specific virtual environment (`/mnt/disk1/...`) and CUDA 12.0.
+  - `scripts/submit.sh` changes the default node count to 5.
+  - Revert both before merging.
+- **Agent guidance files:** `main` deliberately removed `CLAUDE.md`. Decide whether `CLAUDE.md` and `AGENTS.md` should be added back.
+- **Duplicate QLoRA:** the QLoRA commit also exists on the `serve` branch. Merge it from one branch only.
