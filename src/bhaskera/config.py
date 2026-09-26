@@ -251,6 +251,11 @@ class MetricsConfig:
     peak_tflops_per_gpu: float = 312.0
     throughput_window: int = 50
     throughput_warmup: int = 5
+    # Per-step data/compute/optimizer breakdown (trainer/step_timing.py) and,
+    # every straggler_every_n_steps, a cross-rank all-gather naming the
+    # slowest rank and host. 0 disables the straggler check.
+    step_timing: bool = True
+    straggler_every_n_steps: int = 10
 
 @dataclass
 class MonitoringConfig:
@@ -475,6 +480,8 @@ def _dict_to_config(raw: dict) -> Config:
                 peak_tflops_per_gpu=float(metrics_raw.get("peak_tflops_per_gpu", 312.0)),
                 throughput_window=int(metrics_raw.get("throughput_window", 50)),
                 throughput_warmup=int(metrics_raw.get("throughput_warmup", 5)),
+                step_timing=bool(metrics_raw.get("step_timing", True)),
+                straggler_every_n_steps=int(metrics_raw.get("straggler_every_n_steps", 10)),
             ),
         ),
     )
