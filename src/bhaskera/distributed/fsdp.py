@@ -233,11 +233,18 @@ def _broadcast_pretrained_weights(
     for name, tensor in named:
         if rank == 0:
             src = sd.get(name)
+            # Non-persistent buffers (e.g. rotary_emb.inv_freq) are absent
+            # from state_dict(), but rank 0 built the model for real, so its
+            # live value is correct. Broadcasting torch.empty() here instead
+            # overwrote RoPE frequencies with garbage on every rank, including
+            # rank 0, and FSDP runs started at loss ~9-15 vs ~1.4 under DDP.
+            if src is None and not isinstance(tensor, DTensor) and not tensor.is_meta:
+                src = tensor
             if src is None:
                 missing.append(name)
                 full = torch.empty(tensor.shape, dtype=tensor.dtype, device=device)
             else:
-                full = src.detach().to(device=device, dtype=tensor.dtype)
+                full = src.detach().to(device=device, dtype=tensor.dtype, copy=True)
         else:
             full = torch.empty(tensor.shape, dtype=tensor.dtype, device=device)
 
