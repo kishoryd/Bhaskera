@@ -1,23 +1,23 @@
-# Bhaskera — branch `feature/hsdp`
+# Branch: `feature/hsdp`
 
-This branch adds **HSDP (hybrid-sharded data parallelism)** to FSDP2 training. It is built on `fsdp-moe-fixes`; see that branch for the MoE fixes and `main` for the full documentation.
+## Summary
 
-## What it does
+Adds hybrid-sharded data parallelism (HSDP) to FSDP2 training. Model weights are sharded across the GPUs of one node and replicated across nodes. Each layer's weight all-gather then stays inside the node, and only gradients cross the network.
 
-**In plain terms.** Think of the model as a large reference book that every GPU needs to read, one chapter (layer) at a time.
+On `main`, `sharding_strategy: HYBRID_SHARD` has no effect and runs as `FULL_SHARD`. This branch implements it.
 
-- **`FULL_SHARD` (current default):** the book is torn into as many pieces as there are GPUs in the job, and each GPU keeps one piece. To read a chapter, a GPU must collect that chapter's pieces from *every other GPU*. At 64 nodes that means 128 GPUs, most of them in other nodes across the network, for every chapter, every step. Memory use is as low as possible, but the network becomes the bottleneck.
-- **HSDP:** each node gets its own complete copy of the book, torn into pieces only among that node's GPUs. To read a chapter, a GPU collects pieces only from the other GPU in its own node. Nodes talk to each other just once per step, to agree on what was learned (the gradients). Under LoRA that is only the small adapter weights, so it's cheap.
+Depends on `fsdp-moe-fixes`; merge that branch first.
 
-The trade-off is memory: each GPU holds a bigger piece of the book (1/2 of the model on a 2-GPU node instead of 1/128), so HSDP suits models that fit comfortably in one node's GPU memory.
+## How it works
 
-**Technically.** FSDP2 has no `ShardingStrategy` enum; the strategy is the `DeviceMesh` passed to `fully_shard()`.
-- `FULL_SHARD` uses a 1D mesh over all ranks (ZeRO-3): every per-layer all-gather and reduce-scatter spans the whole job.
-- `HYBRID_SHARD` now builds a 2D mesh `(replicate, shard)`. Parameters are `Shard(0)` within a shard group of `hsdp_shard_size` GPUs and `Replicate` across groups:
-  - Per-layer all-gathers and reduce-scatters run only inside the shard group, which is intra-node with the default group size.
-  - The cross-group collective is one gradient all-reduce over the replicate dimension per optimizer step, covering only the trainable (LoRA) parameters.
+| Strategy | Weights on each GPU | Per-layer all-gather spans | Cross-node traffic |
+|---|---|---|---|
+| `FULL_SHARD` | 1 / total GPUs | Every GPU in the job | Weights and gradients, every layer |
+| `HYBRID_SHARD` | 1 / GPUs per group | GPUs in the same group (default: one node) | One gradient all-reduce per step |
 
-Before this branch, `HYBRID_SHARD` had no effect: it ran as `FULL_SHARD` with only a warning, so configs asking for it got full sharding.
+Under LoRA, the gradient all-reduce covers only the adapter parameters, so cross-node traffic is small. The cost is memory: each GPU holds a larger share of the model. HSDP therefore suits models whose sharded weights fit within one group, with room left for activations.
+
+FSDP2 expresses the strategy as a `DeviceMesh`. `HYBRID_SHARD` builds a 2D mesh `(replicate, shard)`, and parameters are placed as `(Replicate, Shard(0))`.
 
 ## Usage
 
@@ -27,37 +27,33 @@ training:
     strategy: fsdp
     fsdp:
       sharding_strategy: HYBRID_SHARD
-      hsdp_shard_size: 0      # GPUs per shard group; 0 = one node (LOCAL_WORLD_SIZE)
+      hsdp_shard_size: 0      # GPUs per shard group; 0 = GPUs per node
 ```
 
-| `sharding_strategy` | Device mesh | Behaviour |
-|---|---|---|
-| `FULL_SHARD` (default) | 1D over all ranks | ZeRO-3, unchanged |
-| `HYBRID_SHARD` | 2D `(replicate, shard)` | shard within a group, replicate across groups |
-| anything else | 1D, with a warning | runs as `FULL_SHARD` |
-
-**Constraints**
-- `hsdp_shard_size` must divide `world_size`.
-- `model_bytes / hsdp_shard_size` must leave room for activations on each GPU. On 2-GPU A100 80 GB nodes, a one-node group suits models up to ~30B. Qwen3-235B needs larger groups or `FULL_SHARD`.
-
-At startup, rank 0 logs the mesh and how many nodes each shard group spans. A group that stays inside one node keeps weight traffic off the network entirely.
+- `hsdp_shard_size` must divide the total number of GPUs.
+- On 2 × A100 80 GB nodes, one-node groups suit models up to about 30B parameters. Larger models, such as Qwen3-235B-A22B, need larger groups or `FULL_SHARD`.
+- At startup, rank 0 logs the mesh shape and how many nodes each shard group spans.
 
 ## Changes
 
 | File | Change |
 |---|---|
-| `distributed/fsdp.py` | `_build_device_mesh()` turns `sharding_strategy` into a mesh. `_log_shard_group_placement()` logs where each group sits. `mesh=` is passed to every `fully_shard()` call. |
-| `config.py` | New `fsdp.hsdp_shard_size` (default 0). |
-| `distributed/README.md` | Section on sharding strategy and mesh. |
-| `distributed/tests/test_hsdp.py` | New unit test. |
+| `distributed/fsdp.py` | `_build_device_mesh()` maps `sharding_strategy` to a device mesh. The mesh is passed to every `fully_shard()` call. Group placement is logged. |
+| `config.py` | Adds `fsdp.hsdp_shard_size` (default `0`). |
+| `distributed/README.md` | Documents the sharding strategies. |
+| `distributed/tests/test_hsdp.py` | New test. |
 
-## Test
+## Validation
 
 ```bash
-sbatch .claude_tmp/hsdp_unittest.sbatch   # 2 nodes x 2 GPUs; runs python -m bhaskera.distributed.tests.test_hsdp
+torchrun --nnodes=2 --nproc_per_node=2 --rdzv_backend=c10d --rdzv_endpoint=<head>:29500 \
+    -m bhaskera.distributed.tests.test_hsdp
 ```
 
-The test trains the same tiny model one step under `FULL_SHARD` and under HSDP, from identical weights and data. Result on A100 (job 80857): **PASS**
-1. **Placement:** under `FULL_SHARD` each GPU holds 0.25 of each parameter. Under HSDP it holds 0.5, with mesh `(2, 2)` and placements `(Replicate, Shard)`.
-2. **Same result:** the loss is identical (5.564554), and post-step weights differ by at most 3.7e-9. HSDP changes where data lives, not what is computed.
-3. **Replicas agree:** both nodes' copies are identical after the optimizer step.
+Tested on 2 nodes × 2 A100 GPUs, training the same model one step under each strategy:
+
+| Check | Result |
+|---|---|
+| Shard placement | `FULL_SHARD` holds 1/4 of each parameter per GPU. HSDP holds 1/2, with mesh `(2, 2)`. |
+| Numerical equivalence | Identical loss. Weights after the optimizer step differ by at most 3.7e-9. |
+| Replica consistency | Both replica groups hold identical weights after the step. |
