@@ -21,8 +21,8 @@ env/
 *.out
 
 # Datasets and model weights (131G + 1.4T — never commit)
-data1/
-models/
+/data1/
+/models/
 
 # Ray scratch / spill
 .ray_tmp/
