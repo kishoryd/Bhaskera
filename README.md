@@ -1,17 +1,23 @@
 # Bhaskera — branch `feature/expert-parallel`
 
-This branch adds **expert parallelism (EP)** for routed MoE models under FSDP2. It is built on `fsdp-moe-fixes`; see that branch for the MoE fixes and `main` for the full documentation.
+This branch adds **expert parallelism (EP)** for routed Mixture-of-Experts (MoE) models under FSDP2. It is built on `fsdp-moe-fixes`; see that branch for the MoE fixes and `main` for the full documentation.
 
 ## What it does
 
-Under plain FSDP, every MoE layer all-gathers **all** experts' weights on every GPU, even though each token uses only its top-k experts. For 128-expert models this dominates step time.
+**In plain terms.** An MoE layer is like a hospital with 128 specialists, where each patient (token) sees only the few specialists the receptionist (router) picks for them.
 
-With EP, each GPU keeps a fixed slice of the experts resident and sends tokens to whichever GPU holds their experts:
+- **Plain FSDP:** every GPU is a small clinic that owns a sliver of every specialist. For each layer, each clinic calls in *all 128 specialists* from across the network, even though its patients need only a handful of them. For 128-expert models, that moving of specialists dominates the step time.
+- **Expert parallelism:** the specialists stay put. Each GPU permanently hosts a fixed group of them (with 2 GPUs, experts 0–63 on one and 64–127 on the other). Patients are sent to whichever GPU hosts their specialist, and the results are sent back. Moving patients (a few kilobytes per token) is far cheaper than moving specialists (all expert weights).
 
-- Rank `p` in an EP group of size `P` owns experts `[p·L, (p+1)·L)`, where `L = num_experts / P`.
-- Tokens go out and come back via two differentiable `all_to_all_single` calls. The traffic is `tokens × top_k × hidden` per direction, instead of every expert's weights.
-- Experts are removed from FSDP's view. Non-owned experts sit on `meta` and use no memory.
-- Attention, routers and LoRA adapters are still sharded by FSDP as usual.
+Everything that isn't an expert (attention, routers, LoRA adapters) is still handled by FSDP as before.
+
+**Technically.**
+- **Ownership.** Rank `p` in an EP group of size `P` owns experts `[p·L, (p+1)·L)`, where `L = num_experts / P`. They are loaded from rank 0 by a bucketed broadcast.
+- **Hidden from FSDP.** Experts are removed from the registered module tree, so FSDP, the optimizer and `state_dict()` never see them. Non-owned experts are on `meta` and use no memory.
+- **New forward.** Each MoE block's forward is replaced. Routing is computed exactly as HF does it: softmax top-k, renormalised unless `norm_topk_prob` is `False`. Tokens are dispatched to their experts' owners with a differentiable `all_to_all_single`, and results come back with a second one.
+  - Communication per layer is `tokens × top_k × hidden` each way, instead of all-gathering every expert's weights.
+- **Recompute-safe routing.** Top-k goes through `select_experts()` from `moe_routing.py`, so the expert choice stays pinned under activation-checkpoint recompute (see fix 2 on `fsdp-moe-fixes`).
+- **Per-expert sharding.** Per-expert FSDP sharding (`shard_experts_individually`) is skipped.
 
 ## Usage
 
@@ -40,8 +46,8 @@ lora:
 |---|---|
 | `distributed/expert_parallel.py` (new) | `apply_expert_parallel()`: builds the EP groups, broadcasts expert weights in buckets, drops non-owned experts, and replaces each MoE block's forward with dispatch → local experts → combine. |
 | `distributed/fsdp.py` | Calls `apply_expert_parallel()` before `fully_shard()` and skips per-expert sharding. |
-| `distributed/moe_routing.py` | Top-k goes through `select_experts()`, so routing stays pinned under activation-checkpoint recompute. |
-| `trainer/loop.py` | Adds the expert parameters back into the MFU count (`model._bhaskera_ep_expert_params`). |
+| `distributed/moe_routing.py` | Top-k goes through `select_experts()`. |
+| `trainer/loop.py` | Adds the non-resident expert parameters back into the MFU count (`model._bhaskera_ep_expert_params`), so MFU stays comparable with plain FSDP. |
 | `config.py` | New `fsdp.expert_parallel_size` (default 1). |
 | `distributed/README.md` | Expert-parallelism section. |
 
@@ -51,6 +57,6 @@ lora:
 torchrun --nproc_per_node=2 -m bhaskera.distributed.tests.test_ep_equivalence
 ```
 
-Result on A100 (job 80849): **PASS**
-- Compared against the unmodified HF MoE block in fp32 for Qwen3-MoE (with and without `norm_topk_prob`) and Mixtral: output, router logits, input gradients and router gradients all agree within ≤ 7e-7.
-- With activation checkpointing and noise injected into the recompute, results match the run without checkpointing exactly (error 0).
+The test runs each MoE block both ways, the original HF block and the expert-parallel version split across 2 GPUs, and compares the results. Result on A100 (job 80849): **PASS**
+- **Same results:** for Qwen3-MoE (with and without `norm_topk_prob`) and Mixtral in fp32, the output, router logits, input gradients and router gradients agree within ≤ 7e-7, i.e. fp32 rounding.
+- **Checkpoint-safe:** with activation checkpointing and deliberate noise injected into the recompute, results match the run without checkpointing exactly (error 0).
