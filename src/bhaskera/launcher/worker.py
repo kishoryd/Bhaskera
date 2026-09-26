@@ -59,7 +59,7 @@ def worker_fn(cfg_dict: dict) -> None:
     strategy    = cfg.training.distributed.strategy.lower()
     load_device = torch.device("cpu") if strategy == "fsdp" else device
 
-    model, profile = build_model(cfg, load_device)
+    model, profile = build_model(cfg, load_device, rank=rank)
 
     if rank == 0:
         logger.info(

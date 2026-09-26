@@ -76,8 +76,10 @@ Two-path activation checkpointing:
 
 Dispatch by `ModelProfile`:
 
-- MoE with `profile.expert_modules` → each expert is checkpointed individually.
-- Dense (or MoE without expert detection) → each `decoder_cls` instance is checkpointed.
+- Dense and MoE alike → each `decoder_cls` instance is checkpointed.
+- MoE with no detected `decoder_cls` → falls back to checkpointing each expert individually (logged as a warning: attention, router and dispatch activations are then not checkpointed).
+
+Per-expert checkpointing used to be the MoE default. It leaves attention, LoRA, router and top-k dispatch activations resident for every layer, a per-GPU cost that more GPUs don't reduce; see the module docstring in `activation_ckpt.py`.
 
 If no target classes are found, the call is a logged no-op.
 
