@@ -70,4 +70,4 @@ The FLOPs-per-token estimate now:
   - `scripts/submit.sh` changes the default node count to 5.
   - Revert both before merging.
 - **Agent guidance files:** `main` deliberately removed `CLAUDE.md`. Decide whether `CLAUDE.md` and `AGENTS.md` should be added back.
-- **Duplicate QLoRA:** the QLoRA commit also exists on the `serve` branch. Merge it from one branch only.
+- **QLoRA is shared with the `serve` branch.** Both branches start from the QLoRA commit (`ef99b8e`). Git applies it once, whichever branch is merged first.
