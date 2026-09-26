@@ -371,6 +371,9 @@ def _run_epoch(
     if startup_watchdog is not None:
         startup_watchdog.phase("first batch + first step")
 
+    # Packed rows (data/packing.py) carry per-example position_ids.
+    packed = bool(getattr(cfg.data, "runtime_packing", False))
+
     # ── Data loader ─────────────────────────────────────────────────
     # fix #16: use prefetch_batches from config
     # fix loop: drop_last=True prevents shape mismatches in the last batch
@@ -387,6 +390,7 @@ def _run_epoch(
             "input_ids":      torch.long,
             "attention_mask": torch.long,
             "labels":         torch.long,
+            **({"position_ids": torch.long} if packed else {}),
         },
         device=device,
     )
@@ -472,12 +476,24 @@ def _run_epoch(
             )
 
             with autocast_ctx:
-                forward_kwargs = dict(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    use_cache=False,
-                )
+                if packed:
+                    # Flatten to [1, B*S] and drop the mask: flash-attention only
+                    # switches to per-example (varlen) attention from position_ids
+                    # at batch size 1; otherwise packed examples attend to each
+                    # other. attention_mask stays above for token counting only.
+                    forward_kwargs = {
+                        "input_ids": input_ids.reshape(1, -1),
+                        "position_ids": batch["position_ids"].reshape(1, -1),
+                        "labels": labels.reshape(1, -1),
+                        "use_cache": False,
+                    }
+                else:
+                    forward_kwargs = dict(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        use_cache=False,
+                    )
                 if profile.is_moe and profile.has_aux_loss:
                     forward_kwargs["output_router_logits"] = True
 

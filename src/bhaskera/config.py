@@ -92,6 +92,12 @@ class DataConfig:
     prefetch_batches: int = 2
     local_shuffle_buffer_multiplier: int = 10
     pack_sequences: bool = False
+    # Runtime packing of a padded cache (data/packing.py): several examples per
+    # seq_len row, boundaries via position_ids. Distinct from pack_sequences
+    # above, which only synthesizes masks for caches that are already packed.
+    # Train split only; requires model.attn_impl: flash_attention_2.
+    runtime_packing: bool = False
+    packing_window_rows: int = 2048   # rows packed together per Ray Data batch
 
     # ── Phase 2: chat-format / local-files plumbing ────────────────────────
     # Name of a registered format renderer (chatml, alpaca, sharegpt, or
@@ -349,6 +355,8 @@ def _dict_to_config(raw: dict) -> Config:
                 data_raw.get("local_shuffle_buffer_multiplier", 10)
             ),
             pack_sequences=bool(data_raw.get("pack_sequences", False)),
+            runtime_packing=bool(data_raw.get("runtime_packing", False)),
+            packing_window_rows=int(data_raw.get("packing_window_rows", 2048)),
 
             # Phase 2
             format=data_raw.get("format"),
