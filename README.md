@@ -1,103 +1,99 @@
-# Bhaskera — branch `feature/robustness`
+# Branch: `feature/robustness`
 
-This branch adds features that catch failures early and show where step time goes on large multi-node runs. It is built on `fsdp-moe-fixes`; see that branch for the MoE fixes and `main` for the full documentation.
+## Summary
 
-## Features
+Features for large multi-node runs. They catch failures before or early in a job, show where step time is spent, and remove padding waste from training data.
 
-### 1. Startup watchdog — `utils/watchdog.py`
+Depends on `fsdp-moe-fixes`; merge that branch first.
 
-**In plain terms.** Two earlier runs sat at 0 training steps for 3.5 hours and 1.4 hours, burning their node allocations without any error message. Now each worker announces which startup stage it's in. If training hasn't taken its first step within a time limit, the worker records exactly where every part of the program was stuck and stops, instead of hanging silently.
+## Changes
 
-**Technically.**
-- Workers log phases: distributed init → build_model → wrap_model → resume checkpoint → first batch.
-- A heartbeat names the phase each rank is in.
-- If no forward+backward window completes within `training.startup_timeout_s` (default 3600, 0 disables), the worker dumps every thread's Python stack via `faulthandler` and exits with code 86.
-- Ray Data's `split(N)` progress bar can sit at 0% while training runs normally, so it is not a stall signal. The first completed step is.
+### Startup watchdog (`utils/watchdog.py`)
 
-### 2. Per-step time breakdown and straggler detection — `trainer/step_timing.py`
+Stops a job that hangs before training starts, instead of leaving it idle for its full allocation.
 
-**In plain terms.** When a run is slow, the question is *where* the time goes: waiting for data, computing, updating weights, or waiting on one slow machine. Every step is now split into those parts. Every few steps, all GPUs compare their timings and the slowest machine is named. In a synchronised job one bad node slows everyone down, so it shows up as the one the others wait for.
+- Each worker logs its startup phase: distributed init, model build, model wrap, checkpoint resume, first batch.
+- If no training step completes within `training.startup_timeout_s` (default 3600 s; `0` disables it), the worker writes the stack trace of every thread and exits with code 86.
 
-**Technically.**
-- Each optimizer step is split into four metrics:
-  - `time/data_wait_s`: blocked on the loader
-  - `time/compute_s`: forward+backward, including the FSDP collectives
-  - `time/optimizer_s`
-  - `time/other_s`
-- GPU times come from CUDA events read after the loop's existing `loss.item()` sync, so no extra synchronisation is added.
-- Every `monitoring.metrics.straggler_every_n_steps` (default 10) steps, per-rank times are all-gathered. Rank 0 logs the slowest rank and its host, and warns when it is more than 1.25× the median and more than 1 s slower.
-- `monitoring.metrics.step_timing: false` turns this off.
+### Step time breakdown and straggler detection (`trainer/step_timing.py`)
 
-### 3. `bhaskera-preflight` — `launcher/preflight.py`
+Splits each optimizer step into four metrics:
 
-**In plain terms.** Many failures only appeared after a job had waited in the queue and started: a missing Python package, a tokenised dataset that didn't match the config, a model too big for the GPUs requested. This command checks all of that on the login node in seconds, before you submit.
+| Metric | Measures |
+|---|---|
+| `time/data_wait_s` | Time blocked on the data loader |
+| `time/compute_s` | Forward and backward pass, including FSDP communication |
+| `time/optimizer_s` | Optimizer step |
+| `time/other_s` | Remainder |
 
-**Technically.** CPU-only checks, exit code 1 on any FAIL:
-- model directory and tokenizer load (catches missing `sentencepiece` and similar)
-- flash-attn / Liger import against the installed torch
-- tokenised caches: they exist and match the config's `seq_len` and model
-- config combinations known to fail here (`shard_experts_individually` with ≥ 64 experts)
-- per-GPU memory estimate, plus the smallest GPU count that fits. The estimate adds up sharded weights, two gathered layers, decoder-level activation checkpoints, one layer's recompute, logits and 3.5 GiB overhead.
+- GPU times are measured with CUDA events at an existing synchronization point, so the measurement adds no overhead.
+- Every `monitoring.metrics.straggler_every_n_steps` steps (default 10), all ranks share their timings.
+- Rank 0 logs the slowest rank and its host, and warns when that rank is more than 25% and more than 1 s slower than the median.
+
+### Pre-submission checks (`bhaskera-preflight`)
 
 ```bash
-bhaskera-preflight --config configs/qwen3_235b_a22b_fsdp_8node_nemotron.yaml
+bhaskera-preflight --config <config.yaml>
 ```
 
-### 4. Node health check and bad-node exclusion — `scripts/`
+Runs on the login node in seconds, with no GPU required. It checks:
+- the model directory and tokenizer
+- flash-attention and Liger imports
+- that the tokenized caches exist and match the config
+- for config combinations known to fail
 
-**In plain terms.** On a large cluster, one faulty or slow node can ruin a 64-node job. Before training starts, every node now runs a one-minute GPU test. A bad node is recorded and the job stops early. The next submission automatically avoids the recorded nodes.
+It also estimates per-GPU memory and reports the smallest GPU count that fits. It exits with code 1 if any check fails.
 
-**Technically.**
-- `submit.sh` runs `node_healthcheck.py` on every node before training. It checks GPU count, bf16 matmul finiteness, matmul throughput, a cross-GPU checksum and a local P2P copy.
-- A node that errors, hangs past `PREFLIGHT_TIMEOUT_S`, or runs below 70% of the *fastest* node is appended to `.bad_nodes`, and the job exits with code 3.
-  - The fastest node is the reference, not the median. With a median reference, a slow node in a 2-node allocation would pass.
-- `scripts/sbatch_x.sh <sbatch args>` resubmits with recent bad nodes (newer than `BAD_NODE_TTL_DAYS`, default 7) merged into the script's own `#SBATCH --exclude`. A plain command-line `--exclude` would replace that list rather than add to it.
-- `BHASKERA_PREFLIGHT=0` skips the check.
+### Node health check (`scripts/node_healthcheck.py`, `scripts/sbatch_x.sh`)
 
-### 5. Tokenised-cache validation — `data/tokenize.py`
+- `scripts/submit.sh` runs a one-minute GPU test on every node before training. The test checks GPU count, bf16 matmul correctness and throughput, a cross-GPU checksum, and peer-to-peer copy.
+- A node that fails, hangs, or runs below 70% of the fastest node is recorded in `.bad_nodes`, and the job exits with code 3.
+- `scripts/sbatch_x.sh` resubmits a job, excluding nodes recorded in the last `BAD_NODE_TTL_DAYS` days (default 7).
+- Set `BHASKERA_PREFLIGHT=0` to skip the check.
 
-**In plain terms.** Training reads a pre-tokenised dataset from disk. If that dataset was built with a different sequence length than the config says, training would run but report the wrong numbers. It now refuses to start in that case.
+### Tokenized cache validation (`data/tokenize.py`)
 
-**Technically.** `load_tokenized()` checks the cache's `metadata.json` against the config.
-- A `seq_len` mismatch is an error, because rows are never re-padded.
-- A different model is only a warning, because models that share a tokeniser can share a cache.
+Training checks the cache metadata against the config:
+- A `seq_len` mismatch is an error.
+- A different model name is a warning, because models that share a tokenizer can share a cache.
 
-### 6. Runtime sequence packing — `data/packing.py`
+### Runtime sequence packing (`data/packing.py`)
 
-**In plain terms.** Each training row has a fixed length (4096 tokens), but most conversations are shorter, so the rest of the row was padding that the GPU still processes. On Nemotron, 42.7% of all compute went to padding. Packing fits several conversations into each row, like packing a suitcase properly. Padding drops to 0.1%, and the same data needs 1.74× fewer rows. The conversations in a row are kept strictly separate, so none of them can see another.
+`data.runtime_packing: true` packs several training examples into each `seq_len` row.
 
-**Technically.**
-- `data.runtime_packing: true` packs the train split first-fit-decreasing, within windows of `data.packing_window_rows` rows (default 2048).
-- Example boundaries are `position_ids` restarting at 0. The first label of each example is -100, so the causal shift never predicts across examples.
-- `attention_mask` is kept only to count real tokens for throughput/MFU; the model never receives it.
-- `trainer/loop.py` flattens each packed micro-batch to `[1, B × S]` and passes `position_ids`. transformers only switches flash-attention to its per-example (varlen) path at batch size 1. At batch size 2, packed examples attend to each other.
-- Requires `model.attn_impl: flash_attention_2`. Eval stays unpacked.
-- Distinct from `data.pack_sequences`, which only builds masks for caches that are already packed.
+- **Effect:** on Nemotron at 4096 tokens, padding drops from 42.7% to 0.1%, and the same data needs 1.74× fewer rows.
+- **Isolation:** examples in a row never attend to each other.
+  - `position_ids` restart at each example boundary.
+  - Each micro-batch is flattened to batch size 1, which makes flash-attention treat each example as a separate sequence (variable-length mode).
+  - The first label of each example is masked, so no example is trained to predict across a boundary.
+- **Requirements:** `model.attn_impl: flash_attention_2`. Only the training split is packed; evaluation is unchanged.
 
-## New config keys
+## New configuration keys
 
 | Key | Default |
 |---|---|
-| `training.startup_timeout_s` | 3600 |
-| `monitoring.metrics.step_timing` | true |
-| `monitoring.metrics.straggler_every_n_steps` | 10 |
-| `data.runtime_packing` | false |
-| `data.packing_window_rows` | 2048 |
+| `training.startup_timeout_s` | `3600` |
+| `monitoring.metrics.step_timing` | `true` |
+| `monitoring.metrics.straggler_every_n_steps` | `10` |
+| `data.runtime_packing` | `false` |
+| `data.packing_window_rows` | `2048` |
 
-## Tests
+## Validation
 
 ```bash
 python -m bhaskera.data.tests.test_packing
 python -m bhaskera.trainer.tests.test_step_timing
-python -m bhaskera.trainer.tests.test_packing_fa2      # GPU, flash-attn 2
+python -m bhaskera.trainer.tests.test_packing_fa2      # requires GPU and flash-attention 2
 ```
 
-Result on A100 (job 80848): **PASS**
-- **Step timing:** PASS.
-- **Packing:**
-  - A packed example gives the same output as running it alone, within bf16 precision (0.0039).
-  - Changing one example leaves the others in its row exactly unchanged (difference 0).
-  - The loss is identical (6.2670).
-  - Negative control: batch size 2 without flattening does leak between examples (difference 1.1). This confirms the test would catch the leak the flattening prevents.
+Tested on A100:
 
-Each feature is documented further in the READMEs under `src/bhaskera/data/`, `launcher/` and `trainer/`.
+| Check | Result |
+|---|---|
+| Step timing | Pass |
+| Packed example vs. same example alone | Outputs match within bf16 precision (0.0039) |
+| Isolation between packed examples | Changing one example leaves the others exactly unchanged |
+| Loss | Identical packed and unpacked (6.2670) |
+| Negative control (batch size 2, not flattened) | Leak detected, confirming the test catches it |
+
+More detail is in the READMEs under `src/bhaskera/data/`, `launcher/` and `trainer/`.
