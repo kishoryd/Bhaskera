@@ -92,6 +92,49 @@ def _check(name, make_block, shape, device, rank, world):
     return ok
 
 
+def _check_checkpointed(name, make_block, device, rank, world):
+    """EP block under activation checkpointing with recompute-only router noise:
+    must not raise, and without noise must match the un-checkpointed EP block."""
+    from torch.distributed._composable import checkpoint
+
+    from bhaskera.distributed import moe_routing as mr
+
+    def build(ac: bool, noise: bool):
+        torch.manual_seed(0)
+        blk = make_block().to(device=device, dtype=torch.float32)
+        for p in blk.experts.parameters():
+            p.requires_grad_(False)
+        model = _Wrapper(blk)
+        sd = model.state_dict() if rank == 0 else None
+        apply_expert_parallel(model, types.SimpleNamespace(model_dtype=torch.float32), world, sd, device)
+        if noise:
+            def hook(_m, _i, out):
+                return out + 3.0 * torch.randn_like(out) if getattr(mr._state, "phase", None) == "recompute" else out
+            model.mlp.gate.register_forward_hook(hook)
+        if ac:
+            checkpoint(model.mlp, context_fn=mr.recompute_contexts)
+        return model
+
+    torch.manual_seed(200 + rank)
+    x0 = torch.randn(2, 16, 64, device=device)
+    g = torch.randn(2, 16, 64, device=device)
+    grads = {}
+    for tag, ac, noise in (("plain", False, False), ("ac", True, False), ("ac+noise", True, True)):
+        model = build(ac, noise)
+        x = x0.clone().requires_grad_(True)
+        try:
+            model.mlp(x)[0].backward(g)
+            grads[tag] = x.grad
+        except Exception as e:  # noqa: BLE001 -- report any failure as a test failure
+            print(f"[rank {rank}] {name:16s} checkpointed {tag}: {type(e).__name__}: {str(e)[:120]} FAIL", flush=True)
+            return False
+    err = (grads["ac"] - grads["plain"]).abs().max().item()
+    ok = err < 1e-5
+    print(f"[rank {rank}] {name:16s} checkpointed: AC==plain max_abs_err={err:.2e}, "
+          f"recompute noise survived {'OK' if ok else 'FAIL'}", flush=True)
+    return ok
+
+
 def main() -> int:
     dist.init_process_group("nccl")
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -103,6 +146,9 @@ def main() -> int:
     for name, make in _blocks():
         for shape in [(2, 16, 64), (1, 3, 64)]:  # (1,3): most experts get no tokens
             ok &= _check(name, make, shape, device, rank, world)
+
+    for name, make in _blocks():
+        ok &= _check_checkpointed(name, make, device, rank, world)
 
     flag = torch.tensor([1 if ok else 0], device=device)
     dist.all_reduce(flag, op=dist.ReduceOp.MIN)

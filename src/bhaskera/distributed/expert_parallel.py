@@ -43,6 +43,8 @@ from torch import nn
 
 from bhaskera.introspect import ModelProfile
 
+from .moe_routing import select_experts
+
 logger = logging.getLogger(__name__)
 
 _EXPERT_ATTRS = ("experts", "local_experts", "routed_experts")
@@ -94,10 +96,14 @@ def _ep_forward(self, hidden_states: torch.Tensor):
     num_tokens = x.shape[0]
     top_k, num_experts, P, L = ep["top_k"], ep["num_experts"], ep["size"], ep["local"]
 
-    # Routing -- identical arithmetic to the HF block it replaces.
+    # Routing -- identical arithmetic to the HF block it replaces. top-k goes
+    # through select_experts so an activation-checkpoint recompute reuses the
+    # forward's choice; here that also keeps the all-to-all split sizes, which
+    # every rank in the EP group derives from the routing, identical.
     router_logits = self.gate(x)
-    weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-    weights, selected = torch.topk(weights, top_k, dim=-1)
+    probs = F.softmax(router_logits, dim=1, dtype=torch.float)
+    selected = select_experts(self, probs, top_k)
+    weights = probs.gather(1, selected)
     if ep["norm_topk_prob"]:
         weights = weights / weights.sum(dim=-1, keepdim=True)
     weights = weights.to(x.dtype)
