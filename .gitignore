@@ -28,3 +28,4 @@ env/
 .ray_tmp/
 .ray_spill/
 tmp*/
+.bad_nodes
