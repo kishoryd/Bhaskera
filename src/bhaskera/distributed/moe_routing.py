@@ -32,6 +32,7 @@ import types
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.distributed.tensor import DTensor
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,75 @@ def routed_moe_blocks(model: nn.Module) -> tuple[list, list]:
     return ok, other
 
 
+# SwiGLU expert layouts: (gate, up, down) attribute names.
+_SWIGLU_LAYOUTS = (("gate_proj", "up_proj", "down_proj"), ("w1", "w3", "w2"))
+
+
+def _grouped_layout(experts: nn.ModuleList):
+    """(gate, up, down) names if every expert is a bias-free SiLU SwiGLU MLP
+    of plain nn.Linear layers with ordinary (unsharded) weights; otherwise
+    None, and the caller keeps HF's loop.
+
+    LoRA on experts is excluded because PEFT replaces the Linear with its own
+    wrapper, whose adapter this path would bypass.
+    """
+    first = experts[0]
+    for names in _SWIGLU_LAYOUTS:
+        if all(type(getattr(first, n, None)) is nn.Linear for n in names):
+            break
+    else:
+        return None
+    act = getattr(first, "act_fn", None)
+    if not isinstance(act, nn.SiLU) and type(act).__name__ not in ("SiLU", "SiLUActivation"):
+        return None
+    for e in experts:
+        for n in names:
+            lin = getattr(e, n, None)
+            if type(lin) is not nn.Linear or lin.bias is not None:
+                return None
+            # Experts FSDP-wrapped on their own (shard_experts_individually)
+            # only unshard when their own forward runs, which this path skips.
+            if isinstance(lin.weight, DTensor):
+                return None
+    return names
+
+
+def _grouped_experts(x, selected, weights, experts, names):
+    """Run every expert on a contiguous slice of expert-sorted tokens.
+
+    HF's block loops over experts and, per expert, calls nonzero/where (a
+    GPU->CPU sync) and gathers/scatters its tokens with ~10 small kernels. On
+    Qwen3-30B-A3B (128 experts x 48 layers, forward + recompute + backward)
+    that was ~24k syncs and ~340k kernel launches per micro-step, leaving the
+    step CPU-bound. Here tokens are sorted by expert once, gathered once,
+    scattered back once, and the only sync is one read of the per-expert
+    counts per layer. Each expert's three GEMMs run on exactly its own rows:
+    no capacity padding. (An earlier padded-bmm version sized every expert
+    to the busiest one; padding tokens all route to the same few experts,
+    so that computed ~8x the needed rows.)
+
+    Rows and their order match HF's loop exactly (stable sort keeps token
+    order within an expert, experts accumulate in ascending order), so the
+    output is bitwise identical to HF on deterministic backends. Gradients
+    reach x, the routing weights and the expert weights as in HF.
+    """
+    gate_n, up_n, down_n = names
+    top_k = selected.shape[1]
+    flat = selected.reshape(-1)
+    order = torch.argsort(flat, stable=True)
+    counts = torch.bincount(flat, minlength=len(experts)).tolist()   # the one sync
+    token = order // top_k
+    rows = x[token].split(counts)
+    outs = []
+    for expert, seg, n in zip(experts, rows, counts):
+        if n:
+            h = F.silu(F.linear(seg, getattr(expert, gate_n).weight)) * F.linear(
+                seg, getattr(expert, up_n).weight)
+            outs.append(F.linear(h, getattr(expert, down_n).weight))
+    contrib = torch.cat(outs) * weights.reshape(-1)[order, None]
+    return torch.zeros_like(x).index_add(0, token, contrib.to(x.dtype))
+
+
 def _stable_forward(self, hidden_states: torch.Tensor):
     """HF Qwen3Moe/Mixtral SparseMoeBlock.forward, top-k via select_experts."""
     batch_size, seq_len, hidden_dim = hidden_states.shape
@@ -109,6 +179,11 @@ def _stable_forward(self, hidden_states: torch.Tensor):
     weights = weights.to(x.dtype)
 
     experts = self._modules[self._bhaskera_experts_attr]
+    names = _grouped_layout(experts)
+    if names is not None:
+        out = _grouped_experts(x, selected, weights, experts, names)
+        return out.reshape(batch_size, seq_len, hidden_dim), router_logits
+
     out = torch.zeros((batch_size * seq_len, hidden_dim), dtype=x.dtype, device=x.device)
     expert_mask = F.one_hot(selected, num_classes=len(experts)).permute(2, 1, 0)
     expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
