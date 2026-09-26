@@ -93,8 +93,23 @@ def wrap_fsdp2(
     # not something this config exposes a reason to do.
     offload_policy = CPUOffloadPolicy() if fsdp_cfg.cpu_offload else OffloadPolicy()
 
+    # Expert parallelism takes experts out of the module tree before any
+    # fully_shard(), so FSDP only ever manages the non-expert parameters.
+    ep_size = int(getattr(fsdp_cfg, "expert_parallel_size", 1) or 1)
+    if ep_size > 1:
+        if not profile.is_moe:
+            raise ValueError("fsdp.expert_parallel_size > 1 requires a MoE model.")
+        from .expert_parallel import apply_expert_parallel
+        apply_expert_parallel(
+            model, profile, ep_size, _pretrained_state_dict,
+            torch.device(f"cuda:{local_rank}"),
+        )
+        if fsdp_cfg.shard_experts_individually:
+            logger.info("expert_parallel_size > 1: skipping per-expert FSDP sharding.")
+
     # Step 1 — per-expert sharding (MoE only).
-    if profile.is_moe and fsdp_cfg.shard_experts_individually and profile.expert_modules:
+    if (profile.is_moe and ep_size <= 1 and fsdp_cfg.shard_experts_individually
+            and profile.expert_modules):
         for expert in profile.expert_modules:
             fully_shard(expert, mp_policy=mp_policy, offload_policy=offload_policy)
         logger.info(

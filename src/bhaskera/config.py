@@ -149,6 +149,13 @@ class FSDPConfig:
     forward_prefetch: bool = False
     backward_prefetch: bool = False
 
+    # ── Expert parallelism (MoE only) ───────────────────────────────────────
+    # >1: each rank keeps num_experts/expert_parallel_size experts resident and
+    # tokens are all-to-all'd to them, instead of FSDP all-gathering every
+    # expert per layer. Consecutive ranks form an EP group. Requires frozen
+    # experts (lora.include_experts: false); see distributed/expert_parallel.py.
+    expert_parallel_size: int = 1
+
 
 @dataclass
 class DDPConfig:
@@ -403,6 +410,7 @@ def _dict_to_config(raw: dict) -> Config:
                     ),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
+                    expert_parallel_size=int(fsdp_raw.get("expert_parallel_size", 1) or 1),
                 ),
                 ddp=DDPConfig(
                     find_unused_parameters=bool(ddp_raw.get("find_unused_parameters", False)),
