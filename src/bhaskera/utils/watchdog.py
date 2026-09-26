@@ -19,6 +19,7 @@ max_failures policy.
 """
 from __future__ import annotations
 
+import contextlib
 import faulthandler
 import logging
 import os
@@ -97,10 +98,8 @@ class StartupWatchdog:
             f"training.startup_timeout_s if this phase is legitimately slow."
         )
         for handler in logging.getLogger().handlers:
-            try:
+            with contextlib.suppress(OSError, ValueError):  # closed/broken stream
                 handler.flush()
-            except Exception:
-                pass
         faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
         sys.stderr.flush()
         os._exit(STARTUP_TIMEOUT_EXIT_CODE)
