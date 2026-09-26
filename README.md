@@ -51,4 +51,4 @@ Merging as-is would break training on `main`:
 - **16 configuration files are deleted**, including `2node.yaml`, `config.yaml`, `qwen_ddp.yaml`, `qwen_hybrid_shard.yaml`, `tokenize.yaml` and the inference configs.
 - **API keys are hard-coded in `gateway.py`**, and the gateway can expose the server publicly. Move the keys to environment variables or a secrets file before merging.
 - **`config.py` conflicts with `main`.**
-- **QLoRA is also on the `qlora` branch**, from the same commit. Merge it from one branch only.
+- **QLoRA is shared with the `qlora` branch.** This branch starts from the QLoRA commit (`ef99b8e`), which is also the base of `qlora`. Git applies that commit once, whichever branch is merged first.
