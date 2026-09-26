@@ -166,6 +166,15 @@ class FSDPConfig:
     reshard_after_forward_group: int = 0
     keep_gathered_layers: int = 0
 
+    # ── HSDP (sharding_strategy: "HYBRID_SHARD") ────────────────────────────
+    # GPUs per shard group. Weights are sharded within a group and replicated
+    # across groups, so the per-layer all-gathers only span the group while
+    # the cross-group traffic is one gradient all-reduce per step (tiny under
+    # LoRA, where only adapter params have grads). 0 = one node's worth
+    # (LOCAL_WORLD_SIZE). Must divide world_size, and the model's weights /
+    # group_size must still leave activation headroom on each GPU.
+    hsdp_shard_size: int = 0
+
 
 @dataclass
 class DDPConfig:
@@ -425,6 +434,7 @@ def _dict_to_config(raw: dict) -> Config:
                     keep_gathered_layers=int(fsdp_raw.get("keep_gathered_layers", 0) or 0),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
+                    hsdp_shard_size=int(fsdp_raw.get("hsdp_shard_size", 0) or 0),
                 ),
                 ddp=DDPConfig(
                     find_unused_parameters=bool(ddp_raw.get("find_unused_parameters", False)),
