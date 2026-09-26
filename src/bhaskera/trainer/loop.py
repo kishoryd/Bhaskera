@@ -154,6 +154,7 @@ def train(
     tracker=None,
     world_size: int = 1,
     val_dataset=None,
+    startup_watchdog=None,
 ) -> None:
     """
     Run the training loop.
@@ -180,6 +181,8 @@ def train(
     model.train()
     step = 0
     if ckpt_cfg.enabled:
+        if startup_watchdog is not None:
+            startup_watchdog.phase("resume checkpoint")
         step = maybe_resume(model, optimizer, ckpt_cfg.save_dir)
         model.train()
     best_ckpts: list[tuple[float, str]] = []
@@ -219,6 +222,7 @@ def train(
             epoch=epoch, step=step, tracker=tracker,
             best_ckpts=best_ckpts, throughput=throughput,
             world_size=world_size, grad_skip_count=grad_skip_count,
+            startup_watchdog=startup_watchdog,
         )
         if step >= train_cfg.max_steps or stop_early:
             break
@@ -340,6 +344,7 @@ def _run_epoch(
     rank, local_rank, device, epoch, step, tracker, best_ckpts,
     throughput: Optional[ThroughputTracker], world_size: int,
     grad_skip_count: int = 0,
+    startup_watchdog=None,
 ):
     train_cfg  = cfg.training
     ckpt_cfg   = cfg.checkpoint
@@ -361,6 +366,9 @@ def _run_epoch(
     sys_every   = int(getattr(metrics_cfg, "system_every_n_steps", 10)) if metrics_cfg else 10
     cuda_every  = int(getattr(metrics_cfg, "cuda_every_n_steps", 10))   if metrics_cfg else 10
     sys_on      = bool(getattr(metrics_cfg, "enabled", True))           if metrics_cfg else True
+
+    if startup_watchdog is not None:
+        startup_watchdog.phase("first batch + first step")
 
     # ── Data loader ─────────────────────────────────────────────────
     # fix #16: use prefetch_batches from config
@@ -507,6 +515,11 @@ def _run_epoch(
         # Ensure sync is re-enabled after the accumulation window in case
         # something above exited early (e.g. StopIteration on last micro-step).
         _set_grad_sync(model, enabled=True)
+
+        # A full forward/backward window completed: startup is over even if
+        # this step's grads turn out non-finite and the update is skipped.
+        if startup_watchdog is not None:
+            startup_watchdog.done()
 
         # ── Optimizer step ──────────────────────────────────────────
         # Use model.clip_grad_norm_ for FSDP2 if available (handles sharded grads).

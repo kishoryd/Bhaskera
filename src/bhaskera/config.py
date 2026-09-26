@@ -196,6 +196,12 @@ class TrainingConfig:
     deterministic: bool = False
     grad_clip: Optional[float] = 1.0          # Phase 1: used by no_sync loop
     max_grad_skip_steps: int = 100
+    # Seconds a worker may take from start to its first completed
+    # forward+backward (dist init, model load/wrap, first batch). On expiry the
+    # worker dumps every thread's stack and exits (utils/watchdog.py), instead
+    # of hanging silently -- two runs sat 3.5h/1.4h at 0 steps before this.
+    # 0 disables. Raise it for very large models whose load is slow.
+    startup_timeout_s: int = 3600
     distributed: DistributedConfig = field(default_factory=DistributedConfig)
 
     # ── Eval / MLPerf-style convergence early-stop ──────────────────────────
@@ -378,6 +384,7 @@ def _dict_to_config(raw: dict) -> Config:
             deterministic=bool(train_raw.get("deterministic", False)),
             grad_clip=train_raw.get("grad_clip", 1.0),
             max_grad_skip_steps=int(train_raw.get("max_grad_skip_steps", 100)),
+            startup_timeout_s=int(train_raw.get("startup_timeout_s", 3600) or 0),
             eval_steps=int(train_raw.get("eval_steps", 0)),
             eval_batch_size=int(train_raw.get("eval_batch_size", 0)),
             target_eval_loss=(
