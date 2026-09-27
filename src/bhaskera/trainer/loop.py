@@ -205,7 +205,8 @@ def train(
     ) if throughput_on else None
 
     bench_file = getattr(metrics_cfg, "benchmark_file", None) if metrics_cfg else None
-    bench = TrainBenchmark(bench_file) if bench_file and throughput is not None else None
+    bench = (TrainBenchmark(bench_file, warmup=int(getattr(metrics_cfg, "throughput_warmup", 5)))
+             if bench_file and throughput is not None else None)
     eval_tok = None
     if cfg.evaluation.tasks:
         # Fail now, not after hours of training at the final evaluation.
@@ -677,6 +678,11 @@ def _run_epoch(
                 device=device, autocast_dtype=autocast_dtype,
                 use_autocast=use_autocast,
             )
+            # Evaluation time is not training time: without this the next
+            # step's duration includes the eval, and the rolling throughput
+            # window under-reports tokens/s and MFU for the following steps.
+            if throughput is not None:
+                throughput.reset_step_clock()
             if eval_loss is None:
                 if rank == 0:
                     logger.warning(
@@ -701,6 +707,8 @@ def _run_epoch(
         every = cfg.evaluation.every_n_steps
         if eval_tok is not None and every > 0 and step % every == 0:
             _run_benchmarks(model, eval_tok, cfg, device, step, rank, tracker)
+            if throughput is not None:
+                throughput.reset_step_clock()
 
     if epoch_steps == 0:
         return step, best_ckpts, stop_early, grad_skip_count

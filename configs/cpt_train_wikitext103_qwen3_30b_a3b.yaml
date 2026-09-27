@@ -1,0 +1,76 @@
+# =============================================================================
+# Bhaskera — continual pre-training on WikiText-103: Qwen3-30B-A3B-Instruct-2507 (MoE, LoRA)
+#
+#   bhaskera-tokenize --config configs/cpt_tokenize_wikitext103_qwen3_30b_a3b.yaml --split both
+#   bhaskera-train    --config configs/cpt_train_wikitext103_qwen3_30b_a3b.yaml --num-workers 4
+#
+# Rows are full 4096-token packed sequences (data.cpt). Benchmarks run every
+# evaluation.every_n_steps and at the end; the training benchmark (median
+# tokens/s, MFU, peak memory) is written to monitoring.metrics.benchmark_file.
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/models/Qwen3-30B-A3B-Instruct-2507"
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  use_liger_kernel: true
+
+data:
+  name: "local"
+  cpt: true
+  seq_len: 4096
+  num_workers: 16
+  tokenized_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/local_train_7fa43c8e72ff76b6"
+  val_tokenized_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/local_val_9155dfa881d66919"
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.0
+  target_modules: ["auto"]
+  include_experts: false
+
+training:
+  batch_size: 1
+  grad_accum: 4
+  lr: 1.0e-4
+  weight_decay: 0.1
+  max_steps: 20
+  num_epochs: 1
+  warmup_steps: 5
+  grad_clip: 1.0
+  eval_steps: 10
+  eval_batch_size: 1
+  distributed:
+    strategy: "fsdp"
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      param_dtype: "bfloat16"
+      reduce_dtype: "bfloat16"
+      activation_checkpointing: true
+      shard_experts_individually: false
+      root_reshard_after_forward: false
+
+evaluation:
+  tasks: [wikitext2, hellaswag, bfcl_simple]
+  data_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/eval"
+  batch_size: 8
+  max_length: 2048
+  limit: 100
+  every_n_steps: 10
+  output_dir: "./eval_results"
+
+checkpoint:
+  enabled: false
+  save_dir: "./checkpoints/cpt-wikitext103-qwen3_30b_a3b"
+
+logging:
+  tracker: null
+  run_name: "cpt-wikitext103-qwen3_30b_a3b"
+
+monitoring:
+  metrics:
+    throughput_warmup: 3
+    throughput_window: 5
+    benchmark_file: "./benchmarks/cpt-wikitext103-qwen3_30b_a3b.json"

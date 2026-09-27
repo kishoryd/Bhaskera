@@ -4,11 +4,11 @@ bhaskera.trainer.benchmark
 End-of-run training benchmark: one JSON per run, comparable across models
 (dense / MoE), strategies and node counts.
 
-Records the throughput tracker's per-step output after its warm-up (the
-tracker omits tokens/s and MFU during warm-up, so compile, cache and
-allocator warm-up never skew the result) and reports medians -- a single
-slow step (eval, checkpoint, straggler) does not move a median the way it
-moves a mean. Peak GPU memory is the maximum over all ranks, since the
+Records the throughput tracker's per-step output, skipping the first
+`warmup` steps (compile, cache and allocator warm-up; the tracker itself
+emits tokens/s from its second step), and reports medians -- a single slow
+step (checkpoint, straggler) does not move a median the way it moves a
+mean. Peak GPU memory is the maximum over all ranks, since the
 largest rank is what decides whether a config fits.
 """
 from __future__ import annotations
@@ -29,11 +29,16 @@ _KEYS = ("throughput/tokens_per_sec", "throughput/tokens_per_sec_per_gpu",
 
 
 class TrainBenchmark:
-    def __init__(self, path: str):
+    def __init__(self, path: str, warmup: int = 0):
         self.path = path
+        self.warmup = max(0, int(warmup))
+        self.seen = 0
         self.history: dict[str, list[float]] = {k: [] for k in _KEYS}
 
     def record(self, step_metrics: dict) -> None:
+        self.seen += 1
+        if self.seen <= self.warmup:
+            return
         for k in _KEYS:
             if k in step_metrics:
                 self.history[k].append(float(step_metrics[k]))
@@ -61,6 +66,7 @@ class TrainBenchmark:
             "cpt": bool(getattr(cfg.data, "cpt", False)),
             "lora": bool(cfg.lora.enabled),
             "steps": steps,
+            "warmup_steps": self.warmup,
             "measured_steps": len(self.history["throughput/step_time_s"]),
             "median": med,
             "peak_gpu_mem_gib": round(float(peak), 2),
