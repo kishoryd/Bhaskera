@@ -8,6 +8,7 @@ Pure training loop.
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import math
 import os
@@ -22,6 +23,7 @@ from bhaskera.introspect import ModelProfile
 from bhaskera.utils import ThroughputTracker
 from bhaskera.utils.system_stats import system_stats, cuda_memory_stats
 
+from .benchmark import TrainBenchmark
 from .checkpointing import maybe_resume, save_and_prune
 from .moe import compute_expert_utilization, extract_aux_loss
 from .optim import build_optimizer, build_scheduler
@@ -202,6 +204,17 @@ def train(
         warmup_steps=int(getattr(metrics_cfg, "throughput_warmup", 5)) if metrics_cfg else 5,
     ) if throughput_on else None
 
+    bench_file = getattr(metrics_cfg, "benchmark_file", None) if metrics_cfg else None
+    bench = TrainBenchmark(bench_file) if bench_file and throughput is not None else None
+    eval_tok = None
+    if cfg.evaluation.tasks:
+        # Fail now, not after hours of training at the final evaluation.
+        if not cfg.evaluation.data_dir:
+            raise ValueError("evaluation.tasks is set but evaluation.data_dir is not")
+        from transformers import AutoTokenizer
+        eval_tok = AutoTokenizer.from_pretrained(
+            cfg.model.name, trust_remote_code=getattr(cfg.model, "trust_remote_code", False))
+
     if tracker:
         tracker.log({
             "model/total_params":     float(total_params),
@@ -219,14 +232,45 @@ def train(
             epoch=epoch, step=step, tracker=tracker,
             best_ckpts=best_ckpts, throughput=throughput,
             world_size=world_size, grad_skip_count=grad_skip_count,
+            bench=bench, eval_tok=eval_tok,
         )
         if step >= train_cfg.max_steps or stop_early:
             break
+
+    # Final benchmark evaluation, unless the last periodic one was this step.
+    every = cfg.evaluation.every_n_steps
+    if eval_tok is not None and not (every > 0 and step % every == 0):
+        _run_benchmarks(model, eval_tok, cfg, device, step, rank, tracker)
+    if bench is not None:
+        bench.finish(cfg, profile, device, rank, world_size, step)
 
     if tracker:
         tracker.finish()
     if rank == 0:
         logger.info("Training complete.")
+
+
+def _run_benchmarks(model, tokenizer, cfg, device, step: int, rank: int, tracker) -> None:
+    """Collective: every rank scores its share; rank 0 logs and writes."""
+    from bhaskera.evaluation import evaluate, write_results
+
+    results = evaluate(model, tokenizer, cfg.evaluation, device)
+    if rank != 0:
+        return
+    flat = {f"bench/{task}/{k}": float(v) for task, m in results.items()
+            for k, v in m.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    if tracker and flat:
+        tracker.log(flat, step=step)
+    out_dir = os.path.join(cfg.evaluation.output_dir, f"{cfg.logging.run_name}_steps")
+    cfg_step = copy.copy(cfg.logging)
+    cfg_step.run_name = f"step_{step:07d}"
+    write_results(results, _with_logging(cfg, cfg_step), out_dir, {"step": step})
+
+
+def _with_logging(cfg, logging_cfg):
+    new = copy.copy(cfg)
+    new.logging = logging_cfg
+    return new
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +383,7 @@ def _run_epoch(
     *, model, dataset, val_dataset, optimizer, scheduler, cfg, profile,
     rank, local_rank, device, epoch, step, tracker, best_ckpts,
     throughput: Optional[ThroughputTracker], world_size: int,
-    grad_skip_count: int = 0,
+    grad_skip_count: int = 0, bench=None, eval_tok=None,
 ):
     train_cfg  = cfg.training
     ckpt_cfg   = cfg.checkpoint
@@ -580,6 +624,8 @@ def _run_epoch(
                 samples_in_step=window_samples,
                 seq_len=window_seq_len,
             )
+            if bench is not None:
+                bench.record(throughput_metrics)
 
         # ── Logging ────────────────────────────────────────────────
         if rank == 0:
@@ -650,6 +696,11 @@ def _run_epoch(
                             f"eval_loss {eval_loss:.4f} <= target_eval_loss {target} "
                             "— stopping early (convergence target reached)"
                         )
+
+        # ── Periodic benchmark evaluation (bhaskera.evaluation) ──────
+        every = cfg.evaluation.every_n_steps
+        if eval_tok is not None and every > 0 and step % every == 0:
+            _run_benchmarks(model, eval_tok, cfg, device, step, rank, tracker)
 
     if epoch_steps == 0:
         return step, best_ckpts, stop_early, grad_skip_count

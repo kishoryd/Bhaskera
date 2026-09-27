@@ -11,6 +11,6 @@ Public API:
 from __future__ import annotations
 
 from .wrap import wrap_model
-from .checkpoint import save_checkpoint, maybe_resume as load_checkpoint
+from .checkpoint import load_model_weights, save_checkpoint, maybe_resume as load_checkpoint
 
-__all__ = ["wrap_model", "save_checkpoint", "load_checkpoint"]
+__all__ = ["wrap_model", "save_checkpoint", "load_checkpoint", "load_model_weights"]

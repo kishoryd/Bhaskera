@@ -1,0 +1,24 @@
+# =============================================================================
+# Bhaskera — continual pre-training data: WikiText-103 packed for Qwen3-14B
+#
+#   bhaskera-tokenize --config configs/cpt_tokenize_wikitext103_qwen3_14b.yaml --split both
+#
+# data.cpt: documents are tokenized without padding, each followed by EOS,
+# concatenated and cut into full seq_len rows (every token is a training
+# token). Paste the printed paths into the CPT training config.
+# Source JSONL: scripts/fetch_eval_data.py (wikitext103_train; wikitext2 as
+# the held-out validation text).
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/models/Qwen3-14B"
+
+data:
+  name: "local"
+  cpt: true
+  seq_len: 4096
+  train_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/eval/wikitext103_train.jsonl"
+  val_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/eval/wikitext2.jsonl"
+  cache_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1"
+  tokenize_batch_size: 512
+  num_workers: 32

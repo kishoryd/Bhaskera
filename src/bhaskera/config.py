@@ -92,6 +92,13 @@ class DataConfig:
     prefetch_batches: int = 2
     local_shuffle_buffer_multiplier: int = 10
     pack_sequences: bool = False
+    # Continual pre-training layout (data/cpt.py): documents are tokenized
+    # without padding, each followed by EOS, concatenated, and cut into full
+    # seq_len rows -- every token is a training token. Applies at tokenize
+    # time and is part of the cache key. Works with raw text and with any
+    # format (chat, agentic tool-call transcripts rendered by the model's
+    # own chat template).
+    cpt: bool = False
 
     # ── Phase 2: chat-format / local-files plumbing ────────────────────────
     # Name of a registered format renderer (chatml, alpaca, sharegpt, or
@@ -245,6 +252,10 @@ class MetricsConfig:
     peak_tflops_per_gpu: float = 312.0
     throughput_window: int = 50
     throughput_warmup: int = 5
+    # If set, rank 0 writes a JSON training benchmark here at the end of the
+    # run: median tokens/s, MFU and step time after warm-up, and peak GPU
+    # memory across ranks (trainer/benchmark.py).
+    benchmark_file: Optional[str] = None
 
 @dataclass
 class MonitoringConfig:
@@ -254,6 +265,23 @@ class MonitoringConfig:
     dashboard_port:      int           = 8265
     metrics_export_port: int           = 8080
     metrics:             MetricsConfig = field(default_factory=MetricsConfig)
+
+
+@dataclass
+class EvaluationConfig:
+    """Benchmark evaluation (bhaskera.evaluation), standalone via
+    bhaskera-eval or periodically during training."""
+    tasks: list[str] = field(default_factory=list)   # e.g. [hellaswag, arc_easy, bfcl_multiple]
+    data_dir: Optional[str] = None     # local snapshot from scripts/fetch_eval_data.py
+    batch_size: int = 8                # scoring sequences per forward, per GPU
+    max_length: int = 2048             # context is left-truncated to fit
+    limit: int = 0                     # examples per task; 0 = all
+    every_n_steps: int = 0             # in-training evaluation cadence; 0 = off
+    output_dir: str = "./eval_results"
+    # Variables for the model's chat template in agentic tasks. Thinking off
+    # by default so hybrid-reasoning models (Qwen3) are scored on the direct
+    # answer; templates that do not use a variable ignore it.
+    chat_template_kwargs: dict = field(default_factory=lambda: {"enable_thinking": False})
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +299,7 @@ class Config:
     logging: LoggingConfig        = field(default_factory=LoggingConfig)
     inference: InferenceConfig    = field(default_factory=InferenceConfig)
     monitoring: MonitoringConfig  = field(default_factory=MonitoringConfig)
+    evaluation: EvaluationConfig  = field(default_factory=EvaluationConfig)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -313,6 +342,7 @@ def _dict_to_config(raw: dict) -> Config:
     prom_raw    = _get(raw, "monitoring", "prometheus", default={}) or {}
     graf_raw    = _get(raw, "monitoring", "grafana",    default={}) or {}
     metrics_raw = _get(raw, "monitoring", "metrics",    default={}) or {}
+    eval_raw    = _get(raw, "evaluation", default={}) or {}
 
     return Config(
         model=ModelConfig(
@@ -338,6 +368,7 @@ def _dict_to_config(raw: dict) -> Config:
                 data_raw.get("local_shuffle_buffer_multiplier", 10)
             ),
             pack_sequences=bool(data_raw.get("pack_sequences", False)),
+            cpt=bool(data_raw.get("cpt", False)),
 
             # Phase 2
             format=data_raw.get("format"),
@@ -468,6 +499,19 @@ def _dict_to_config(raw: dict) -> Config:
                 peak_tflops_per_gpu=float(metrics_raw.get("peak_tflops_per_gpu", 312.0)),
                 throughput_window=int(metrics_raw.get("throughput_window", 50)),
                 throughput_warmup=int(metrics_raw.get("throughput_warmup", 5)),
+                benchmark_file=metrics_raw.get("benchmark_file"),
+            ),
+        ),
+        evaluation=EvaluationConfig(
+            tasks=[str(t) for t in (eval_raw.get("tasks") or [])],
+            data_dir=eval_raw.get("data_dir"),
+            batch_size=int(eval_raw.get("batch_size", 8)),
+            max_length=int(eval_raw.get("max_length", 2048)),
+            limit=int(eval_raw.get("limit", 0) or 0),
+            every_n_steps=int(eval_raw.get("every_n_steps", 0) or 0),
+            output_dir=str(eval_raw.get("output_dir", "./eval_results")),
+            chat_template_kwargs=dict(
+                eval_raw.get("chat_template_kwargs", {"enable_thinking": False}) or {}
             ),
         ),
     )

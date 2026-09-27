@@ -1,0 +1,44 @@
+# =============================================================================
+# Bhaskera — benchmark evaluation: Qwen3-30B-A3B-Instruct-2507 (MoE)
+#
+#   bhaskera-eval --config configs/eval_qwen3_30b_a3b.yaml --num-workers 2
+#
+# Needs the local benchmark snapshot (scripts/fetch_eval_data.py). The model is
+# sharded with FSDP exactly as in training; evaluation is forward-only, so
+# activation checkpointing and LoRA are off.
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/models/Qwen3-30B-A3B-Instruct-2507"
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  use_liger_kernel: true
+
+lora:
+  enabled: false
+
+training:
+  distributed:
+    strategy: "fsdp"
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      transformer_layer_cls: ["Qwen3MoeDecoderLayer"]
+      param_dtype: "bfloat16"
+      reduce_dtype: "bfloat16"
+      activation_checkpointing: false
+      shard_experts_individually: false
+
+evaluation:
+  tasks: [hellaswag, arc_easy, arc_challenge, mmlu, winogrande, wikitext2, bfcl_simple, bfcl_multiple]
+  data_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/eval"
+  batch_size: 8
+  max_length: 2048
+  limit: 0
+  output_dir: "./eval_results"
+  chat_template_kwargs: {enable_thinking: false}
+
+checkpoint:
+  save_dir: "./checkpoints/eval"
+
+logging:
+  run_name: "eval-qwen3_30b_a3b"

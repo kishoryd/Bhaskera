@@ -35,6 +35,7 @@ def _cache_version_hash(
     dataset_name: str,
     format_name: Optional[str] = None,
     format_options: Optional[dict] = None,
+    cpt: bool = False,
 ) -> str:
     """
     Deterministic 16-char hex hash.
@@ -52,6 +53,11 @@ def _cache_version_hash(
         parts.append(f"fmt:{format_name}")
     if format_options:
         parts.append(f"opts:{json.dumps(format_options, sort_keys=True, default=str)}")
+    if cpt:
+        # Packed CPT rows and padded per-example rows of the same corpus
+        # must never share a cache. Appended only when set, so existing
+        # (non-CPT) cache keys are unchanged.
+        parts.append("layout:cpt")
     key = "|".join(parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
@@ -64,6 +70,7 @@ def _write_metadata(
     num_rows: int,
     format_name: Optional[str] = None,
     format_options: Optional[dict] = None,
+    cpt: bool = False,
 ) -> None:
     """
     Write metadata.json alongside the parquet files.
@@ -82,6 +89,7 @@ def _write_metadata(
         "bhaskera_version": _BHASKERA_VERSION,
         "format_name":      format_name,
         "format_options":   format_options or {},
+        "layout":           "cpt" if cpt else "per_example",
     }
     meta_path = os.path.join(cache_path, "metadata.json")
     with open(meta_path, "w") as f:
@@ -184,8 +192,9 @@ def persist_tokenized(
     format_name    = getattr(cfg.data, "format", None)
     format_options = dict(getattr(cfg.data, "format_options", None) or {})
 
+    cpt        = bool(getattr(cfg.data, "cpt", False))
     version    = _cache_version_hash(model_name, seq_len, dataset_name,
-                                     format_name, format_options)
+                                     format_name, format_options, cpt)
     cache_path = os.path.join(cfg.data.cache_dir, f"{dataset_name}_{version}")
 
     if (_verify_cache(cache_path, model_name, seq_len, dataset_name, format_name)
@@ -223,7 +232,7 @@ def persist_tokenized(
         num_rows = -1
 
     _write_metadata(cache_path, model_name, seq_len, dataset_name, num_rows,
-                    format_name, format_options)
+                    format_name, format_options, cpt)
 
     logger.info(f"Tokenization complete → {cache_path}")
     return cache_path
@@ -333,6 +342,7 @@ class TokenizerActor:
         trust_remote_code: bool = False,
         format_name: Optional[str] = None,
         format_options: Optional[dict] = None,
+        cpt: bool = False,
     ):
         from transformers import AutoTokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -345,6 +355,7 @@ class TokenizerActor:
         self.text_col       = text_col
         self.format_name    = format_name
         self.format_options = format_options or {}
+        self.cpt            = cpt
 
         # Pre-import the format registry on this worker so the lookup is hot.
         if self.format_name:
@@ -383,6 +394,9 @@ class TokenizerActor:
             texts = batch[self.text_col]
             if hasattr(texts, "tolist"):
                 texts = texts.tolist()
+
+        if self.cpt:
+            return self._cpt_rows(texts)
 
         out = self.tokenizer(
             texts,
@@ -426,6 +440,30 @@ class TokenizerActor:
         }
 
 
+    def _cpt_rows(self, texts: list) -> dict:
+        """Concatenate + chunk instead of pad (data/cpt.py)."""
+        from bhaskera.data.cpt import cpt_batch
+
+        # A chat/agentic template writes its own special tokens as text;
+        # adding them again (e.g. a second Llama BOS) would corrupt the
+        # stream. Raw text gets the model's normal per-document specials.
+        ids = self.tokenizer(
+            [str(t) for t in texts],
+            add_special_tokens=not self.format_name,
+            truncation=False,
+            padding=False,
+        )["input_ids"]
+        cols, dropped = cpt_batch(ids, self.seq_len, self.tokenizer.eos_token_id)
+        total = sum(len(x) for x in ids)
+        if total and dropped / total > 0.05:
+            logger.warning(
+                f"CPT packing dropped {dropped}/{total} tokens ({dropped / total:.1%}) "
+                "from this batch's final partial row; raise data.tokenize_batch_size "
+                "to pack more documents per batch"
+            )
+        return cols
+
+
 class _TokenizerActorFactory:
     """
     Lazy per-process initialiser for Ray-Data map_batches.
@@ -442,6 +480,7 @@ class _TokenizerActorFactory:
         trust_remote_code: bool = False,
         format_name: Optional[str] = None,
         format_options: Optional[dict] = None,
+        cpt: bool = False,
     ):
         self.model_name        = model_name
         self.seq_len           = seq_len
@@ -449,6 +488,7 @@ class _TokenizerActorFactory:
         self.trust_remote_code = trust_remote_code
         self.format_name       = format_name
         self.format_options    = format_options
+        self.cpt               = cpt
         self._actor: Optional[TokenizerActor] = None
 
     def __call__(self, batch: dict) -> dict:
@@ -460,6 +500,7 @@ class _TokenizerActorFactory:
                 trust_remote_code=self.trust_remote_code,
                 format_name=self.format_name,
                 format_options=self.format_options,
+                cpt=self.cpt,
             )
         return self._actor(batch)
 
@@ -491,6 +532,7 @@ def _apply_map_batches(
         trust_remote_code=trust_remote_code,
         format_name=format_name,
         format_options=format_options,
+        cpt=bool(getattr(cfg.data, "cpt", False)),
     )
 
     ds = ds.repartition(max(num_workers * 2, 1))

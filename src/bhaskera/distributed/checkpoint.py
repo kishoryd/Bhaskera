@@ -242,6 +242,29 @@ def maybe_resume(
     return start_step
 
 
+def load_model_weights(model: nn.Module, ckpt_path: str) -> int:
+    """
+    Load only the model weights of a checkpoint written by save_checkpoint
+    (no optimizer), e.g. to evaluate it. DCP reshards on load, so the
+    world size may differ from training's. The model must be built with the
+    training config (same LoRA setup), so parameter names match.
+
+    Returns the checkpoint's training step (from meta.json, else -1).
+    """
+    if not (Path(ckpt_path) / ".complete").exists():
+        raise FileNotFoundError(
+            f"{ckpt_path} is not a complete checkpoint (no .complete sentinel)")
+    options = StateDictOptions(full_state_dict=False, cpu_offload=True)
+    model_sd = get_model_state_dict(model, options=options)
+    _dcp_load({"model": model_sd}, os.path.join(ckpt_path, "model"))
+    set_model_state_dict(model, model_state_dict=model_sd, options=options)
+    meta_path = os.path.join(ckpt_path, "meta.json")
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            return int(json.load(f).get("step", -1))
+    return -1
+
+
 # ---------------------------------------------------------------------------
 # Legacy save_and_prune wrapper (used by trainer/checkpointing.py)
 # ---------------------------------------------------------------------------

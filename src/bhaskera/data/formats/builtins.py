@@ -8,6 +8,7 @@ registry stays cheap to import.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, List
 
@@ -118,6 +119,40 @@ def render_chatml(row: dict, tokenizer: Any, options: dict) -> str:
     if not messages:
         return ""
     return _apply_chat_template_safe(tokenizer, messages)
+
+
+# ---------------------------------------------------------------------------
+# Agentic (tool use)
+# ---------------------------------------------------------------------------
+
+@register_format("agentic")
+def render_agentic(row: dict, tokenizer: Any, options: dict) -> str:
+    """
+    Rows with ``messages`` (tool calls / tool results allowed) and ``tools``,
+    rendered in the model's native tool-calling syntax (formats/agentic.py).
+
+    Like chatml, a row the template rejects falls back to manual ChatML --
+    tool schemas as JSON in a system turn, calls as JSON -- rather than
+    aborting the corpus or silently dropping the row.
+    """
+    from .agentic import AgenticTemplateError, normalize_messages, normalize_tools, render_row
+
+    try:
+        return render_row(row, tokenizer, options)
+    except AgenticTemplateError as exc:
+        logger.warning("agentic: chat template unusable for a row (%s); manual ChatML", exc)
+        msgs = normalize_messages(row.get(options.get("messages_field", "messages")) or [])
+        tools = row.get(options.get("tools_field", "tools"))
+        flat = []
+        if tools is not None:
+            flat.append({"role": "system",
+                         "content": "Tools:\n" + json.dumps(normalize_tools(tools))})
+        for m in msgs:
+            content = m.get("content") or ""
+            if m.get("tool_calls"):
+                content += json.dumps([c["function"] for c in m["tool_calls"]])
+            flat.append({"role": m.get("role", "user"), "content": content})
+        return _manual_chatml(flat)
 
 
 # ---------------------------------------------------------------------------
