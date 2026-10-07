@@ -119,6 +119,17 @@ def render(row, tokenizer, options):
 
 Then set `data.format: my_custom` in the YAML config.
 
+## Runtime sequence packing (`packing.py`)
+
+`data.runtime_packing: true` packs several examples into each `seq_len` row of the **train** split, first-fit-decreasing within windows of `data.packing_window_rows` rows (default 2048). On the Nemotron cache at seq_len 4096 this cut padding from 42.7% to 0.1% (1.74x fewer rows for the same tokens). Eval stays unpacked.
+
+- Example boundaries are `position_ids` restarting at 0. The first label of each example is -100, so the causal shift never predicts across examples. Leftover space is a fully masked segment.
+- `attention_mask` is kept only to count real tokens (throughput/MFU). The model never receives it: `trainer/loop.py` flattens each packed micro-batch to `[1, batch × seq_len]` and passes `position_ids`. transformers only switches flash-attention to per-example attention at batch size 1; at batch 2 packed examples attend to each other (`trainer/tests/test_packing_fa2.py` shows the leak).
+- Requires `model.attn_impl: flash_attention_2`.
+- Not the same as `data.pack_sequences`, which only synthesizes masks for caches that are already packed.
+
+`load_tokenized()` also validates the cache's `metadata.json` against the config: a `seq_len` mismatch is an error (rows are never re-padded, so the config would misreport what trains), and a different model is a warning (models sharing a tokenizer can share a cache).
+
 ## Partitioning
 
 `_compute_num_partitions(cfg, world_size)` rounds up to the nearest multiple of `world_size` with a floor of `max(world_size * 4, num_workers * 4, 16)`. This prevents empty or unequal shards on small datasets.
