@@ -43,6 +43,19 @@ Uses the composable `torch.distributed._composable.fsdp.fully_shard` API (requir
 
 `decoder_cls` is resolved by `_resolve_decoder_cls()`: explicit `fsdp.transformer_layer_cls` names win (back-compat); otherwise the class from the introspection profile is used.
 
+### Expert parallelism (`expert_parallel.py`)
+
+With `fsdp.expert_parallel_size: P > 1`, `wrap_fsdp2` calls `apply_expert_parallel()` **before** any `fully_shard()`:
+
+- Ranks form consecutive EP groups of `P`. EP rank `p` keeps experts `[p·L, (p+1)·L)` resident (`L = num_experts / P`), loaded from rank 0 by a bucketed broadcast.
+- Experts are removed from the registered module tree, so FSDP, the optimizer and `state_dict()` never see them. Non-owned experts move to `meta`: they cost no memory, but the MFU meter can still count their parameters. The global expert count is stored as `model._bhaskera_ep_expert_params` and added back in `trainer/loop.py`.
+- Each MoE block's `forward` is replaced. Routing is computed exactly as the HF block does it (softmax top-k, renormalized unless `norm_topk_prob` is `False`). Tokens go to their experts' owners with a differentiable `all_to_all_single`, and results return with a second one. Traffic is `tokens × top_k × hidden` each way, instead of all-gathering every expert's weights.
+- Per-expert FSDP sharding (`shard_experts_individually`) is skipped.
+
+Supported: softmax-top-k routed blocks with an `nn.Linear` router at `gate` and an `nn.ModuleList` of experts (Qwen3MoE, Mixtral). Rejected with a clear error: shared-expert blocks, trainable experts (`lora.include_experts: true`), and `num_experts` or `world_size` not divisible by `P`. Experts are absent from checkpoints; since they're frozen pretrained weights, a resume reloads them from the base model.
+
+Correctness test (2 GPUs): `torchrun --nproc_per_node=2 -m bhaskera.distributed.tests.test_ep_equivalence` compares outputs, router logits, input gradients and router gradients against the HF block in fp32.
+
 ### Mixed precision
 
 `_build_mp_policy()` constructs a `MixedPrecisionPolicy(param_dtype, reduce_dtype, output_dtype)`:

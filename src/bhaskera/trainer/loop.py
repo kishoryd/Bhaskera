@@ -190,7 +190,11 @@ def train(
     throughput_on  = bool(getattr(metrics_cfg, "throughput", True)) if metrics_cfg else True
     peak_tflops    = float(getattr(metrics_cfg, "peak_tflops_per_gpu", 312.0)) if metrics_cfg else 312.0
 
-    total_params     = sum(p.numel() for p in model.parameters())
+    # Expert parallelism unregisters experts from the module tree (they are
+    # resident per-rank, outside FSDP), so add their global count back.
+    total_params     = sum(p.numel() for p in model.parameters()) + int(
+        getattr(model, "_bhaskera_ep_expert_params", 0)
+    )
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     params_for_flops = _flops_params(model, profile, total_params) or trainable_params
 

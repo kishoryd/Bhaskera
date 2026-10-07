@@ -1,64 +1,66 @@
-# Branch: `fsdp-moe-fixes`
+# Branch: `feature/expert-parallel`
 
 ## Summary
 
-Fixes that make Mixture-of-Experts (MoE) models train correctly under FSDP2, plus a six-model dense-vs-MoE benchmark suite. Before these fixes, Qwen3-235B-A22B ran out of GPU memory at every node count, and Qwen3-30B-A3B failed on its first step.
+Adds expert parallelism (EP) for Mixture-of-Experts models under FSDP2. Each GPU permanently holds a subset of the experts, and tokens are sent to the GPU that owns their selected expert. Without this, every MoE layer gathers all expert weights onto every GPU, even though each token uses only a few experts.
 
-`feature/hsdp`, `feature/expert-parallel` and `feature/robustness` are built on this branch. Merge this branch first.
+Depends on `fsdp-moe-fixes`; merge that branch first.
+
+## How it works
+
+| | FSDP only | FSDP + expert parallelism |
+|---|---|---|
+| Expert weights | All experts all-gathered on every GPU, every layer | Each GPU owns `num_experts / P` experts, kept resident |
+| Data moved per MoE layer | Every expert's weights | Routed token activations: `tokens × top_k × hidden`, each direction |
+| Non-expert weights (attention, router, LoRA) | Sharded by FSDP | Sharded by FSDP (unchanged) |
+
+For each MoE layer:
+1. The router selects the top-k experts per token. This matches the Hugging Face implementation exactly.
+2. Tokens are dispatched to the owning GPUs with a differentiable `all_to_all_single`.
+3. Each GPU runs its local experts.
+4. Results are returned with a second `all_to_all_single`.
+
+Experts that a GPU doesn't own are placed on the `meta` device and use no memory. Expert selection goes through the routing helper from `fsdp-moe-fixes`, so it remains stable under activation-checkpoint recompute.
+
+## Usage
+
+```yaml
+training:
+  distributed:
+    strategy: fsdp
+    fsdp:
+      expert_parallel_size: 2   # P; 1 disables expert parallelism
+lora:
+  include_experts: false        # required: experts must be frozen
+```
+
+- **Supported:** softmax top-k routed MoE blocks with an `nn.Linear` router and an `nn.ModuleList` of experts (Qwen3-MoE, Mixtral).
+- **Rejected at startup with a clear error:**
+  - shared-expert blocks
+  - trainable experts
+  - `num_experts` or the world size not divisible by `P`
+- **Checkpoints do not include expert weights.** The experts are frozen pretrained weights and are reloaded from the base model on resume.
 
 ## Changes
 
-### MoE training
-
-| Change | Problem solved | Files |
-|---|---|---|
-| **Checkpoint whole decoder layers for MoE models.** Activation checkpointing now wraps each full decoder layer, as it already did for dense models. | Only the expert MLPs were checkpointed, so attention, LoRA, router and token-dispatch activations were kept for every layer. On Qwen3-235B-A22B this used 65–90 GB per GPU, and adding nodes did not reduce it. | `distributed/activation_ckpt.py` |
-| **Reuse the forward pass's expert selection during recompute.** The recompute uses the same top-k experts that the forward pass chose. Routing weights are still recomputed, so gradients are unchanged. | bf16 router scores can differ slightly between the forward pass and the recompute. When two experts score almost equally, the top-k choice can flip, and PyTorch raises `CheckpointError`. | `distributed/moe_routing.py` (new) |
-| **Honour `lora.include_experts: false`.** Expert modules are excluded with PEFT `exclude_modules`. | PEFT matches modules by name. Expert layers share the names `gate_proj`, `up_proj` and `down_proj`, so every expert received adapters (about 36,000 on Qwen3-235B-A22B). | `models/lora.py` |
-| **Load the model once per job.** Under FSDP, rank 0 loads the checkpoint; the other ranks build the model on the `meta` device. | Every GPU process loaded a full copy into host memory: two copies per node, each about 470 GB for Qwen3-235B-A22B. | `models/loader.py` |
-| **Broadcast weights in buckets after sharding.** Rank 0 sends fixed-size buckets, and each rank keeps only its own shard. Peak extra memory is one bucket. | DCP `broadcast_from_rank0` held the full unsharded model on every GPU. | `distributed/fsdp.py` |
-
-### Metrics, data and tooling
-
-| Change | Files |
+| File | Change |
 |---|---|
-| **MFU and tokens/s are no longer divided by `world_size` twice.** Reported MFU was too low by a factor of the GPU count: a 16-GPU run showed 0.18% instead of 2.87%. | `utils/throughput.py` |
-| **Tokenisation spills to scratch instead of the node-local `/tmp`**, which ran out of space. | `launcher/tokenize.py` |
-| **Rows rejected by a strict chat template (Mistral, gpt-oss) fall back to ChatML** instead of aborting the whole corpus. | `data/formats/builtins.py` |
-| **The validation set is sharded only when it has at least as many rows as workers.** | `launcher/train.py` |
-| **`BHASKERA_PROFILE_OOM=1` prints a CUDA allocator breakdown on out-of-memory.** MLflow now honours `log_gpu_every_n_steps`. | `trainer/loop.py`, `utils/loggers/mlflow_logger.py` |
-| **`.gitignore` patterns are anchored to the repository root** (`/models/`, `/data1/`). The old `models/` pattern also excluded `src/bhaskera/models/`. | `.gitignore` |
-
-### Benchmark suite
-
-`configs/*_8node_nemotron.yaml` define six models trained under identical conditions: Nemotron-Cascade-2-SFT-Data (chat), `seq_len` 4096, LoRA r16/α32, 8 nodes × 2 GPUs.
-
-| Model | Parameters | Architecture | Strategy |
-|---|---|---|---|
-| Qwen3-14B | 14.8B | Dense | DDP |
-| Llama-3.3-70B-Instruct | 70B | Dense | FSDP |
-| Mistral-Large-Instruct-2411 | 123B | Dense | FSDP |
-| Qwen3-30B-A3B-Instruct-2507 | 30B (3B active) | MoE | FSDP |
-| gpt-oss-120b | 120B (5.1B active) | MoE | FSDP |
-| Qwen3-235B-A22B-Instruct-2507 | 235B (22B active) | MoE | FSDP |
-
-The three Qwen3 models share a tokenizer, so they form a controlled dense-vs-MoE comparison. Each model has a tokenization config (`configs/tokenize_<model>_nemotron.yaml`) and a submit script (`scripts/submit_<model>_<strategy>_8_nemotron.sh`). `scripts/submit_nemotron_pipeline.sh` runs all six.
-
-## Configuration guidance
-
-- `data.seq_len` is part of the tokenization cache key. If you change it, re-tokenize and update `tokenized_path` and `val_tokenized_path`.
-- Set `seq_len` to fit the data, not the model's maximum context. At 16384, about 80% of each Nemotron sequence was padding.
-- Keep `fsdp.shard_experts_individually: false` for models with 128 experts. Enabling it creates thousands of small FSDP units, and the NCCL collectives hang.
+| `distributed/expert_parallel.py` (new) | `apply_expert_parallel()`: forms EP groups, broadcasts expert weights, removes experts a GPU doesn't own, and replaces each MoE block's forward with dispatch → local experts → combine. |
+| `distributed/fsdp.py` | Applies expert parallelism before `fully_shard()`. Skips per-expert FSDP units. |
+| `distributed/moe_routing.py` | Adds `select_experts()` for recompute-stable top-k selection. |
+| `trainer/loop.py` | Counts all experts in MFU, so figures stay comparable with FSDP-only runs. |
+| `config.py` | Adds `fsdp.expert_parallel_size` (default `1`). |
+| `distributed/README.md` | Documents expert parallelism. |
 
 ## Validation
 
 ```bash
-python -m bhaskera.distributed.tests.test_moe_routing
+torchrun --nproc_per_node=2 -m bhaskera.distributed.tests.test_ep_equivalence
 ```
 
-CPU, fp32, Qwen3-MoE and Mixtral:
-- With injected recompute noise, the unpatched model raises `CheckpointError` and the patched model trains.
-- Gradients with activation checkpointing exactly match gradients without it.
-- The patched forward pass is bitwise identical to the Hugging Face implementation.
+Tested on 2 A100 GPUs against the unmodified Hugging Face MoE block in fp32, for Qwen3-MoE (with and without `norm_topk_prob`) and Mixtral:
 
-Qwen3-235B-A22B trains at 8, 32 and 64 nodes with these changes.
+| Check | Result |
+|---|---|
+| Outputs, router logits, input gradients, router gradients | Match within 7e-7 (fp32 rounding) |
+| With activation checkpointing and injected recompute noise | Exact match with the non-checkpointed run |
