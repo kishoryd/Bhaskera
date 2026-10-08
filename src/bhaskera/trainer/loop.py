@@ -26,6 +26,7 @@ from .checkpointing import maybe_resume, save_and_prune
 from .moe import compute_expert_utilization, extract_aux_loss
 from .optim import build_optimizer, build_scheduler
 from .precision import resolve_autocast_dtype
+from .step_timing import StepTimer
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ def train(
     tracker=None,
     world_size: int = 1,
     val_dataset=None,
+    startup_watchdog=None,
 ) -> None:
     """
     Run the training loop.
@@ -180,6 +182,8 @@ def train(
     model.train()
     step = 0
     if ckpt_cfg.enabled:
+        if startup_watchdog is not None:
+            startup_watchdog.phase("resume checkpoint")
         step = maybe_resume(model, optimizer, ckpt_cfg.save_dir)
         model.train()
     best_ckpts: list[tuple[float, str]] = []
@@ -223,6 +227,7 @@ def train(
             epoch=epoch, step=step, tracker=tracker,
             best_ckpts=best_ckpts, throughput=throughput,
             world_size=world_size, grad_skip_count=grad_skip_count,
+            startup_watchdog=startup_watchdog,
         )
         if step >= train_cfg.max_steps or stop_early:
             break
@@ -344,6 +349,7 @@ def _run_epoch(
     rank, local_rank, device, epoch, step, tracker, best_ckpts,
     throughput: Optional[ThroughputTracker], world_size: int,
     grad_skip_count: int = 0,
+    startup_watchdog=None,
 ):
     train_cfg  = cfg.training
     ckpt_cfg   = cfg.checkpoint
@@ -366,6 +372,12 @@ def _run_epoch(
     cuda_every  = int(getattr(metrics_cfg, "cuda_every_n_steps", 10))   if metrics_cfg else 10
     sys_on      = bool(getattr(metrics_cfg, "enabled", True))           if metrics_cfg else True
 
+    if startup_watchdog is not None:
+        startup_watchdog.phase("first batch + first step")
+
+    # Packed rows (data/packing.py) carry per-example position_ids.
+    packed = bool(getattr(cfg.data, "runtime_packing", False))
+
     # ── Data loader ─────────────────────────────────────────────────
     # fix #16: use prefetch_batches from config
     # fix loop: drop_last=True prevents shape mismatches in the last batch
@@ -382,6 +394,7 @@ def _run_epoch(
             "input_ids":      torch.long,
             "attention_mask": torch.long,
             "labels":         torch.long,
+            **({"position_ids": torch.long} if packed else {}),
         },
         device=device,
     )
@@ -405,6 +418,13 @@ def _run_epoch(
     if throughput is not None:
         throughput.reset_step_clock()
 
+    timer = StepTimer(
+        enabled=sys_on and bool(getattr(metrics_cfg, "step_timing", True)),
+        device=device, rank=rank, world_size=world_size,
+        straggler_every_n_steps=int(getattr(metrics_cfg, "straggler_every_n_steps", 10))
+        if metrics_cfg else 10,
+    )
+
     # ── Training loop ───────────────────────────────────────────────
     # Gradient-sync invariant (non-negotiable):
     #   All-reduce must fire exactly ONCE per optimizer step — on the last
@@ -421,11 +441,13 @@ def _run_epoch(
         micro_aux_losses: list[torch.Tensor] = []
         window_tokens  = 0
         window_samples = 0
+        timer.start_window()
 
         # ── Gradient accumulation loop ───────────────────────────────
         for micro_step in range(grad_accum):
             try:
-                batch = next(loader_iter)
+                with timer.data_wait():
+                    batch = next(loader_iter)
             except StopIteration:
                 # Epoch exhausted mid-accumulation window — stop cleanly
                 loader_iter = None  # type: ignore[assignment]
@@ -458,12 +480,24 @@ def _run_epoch(
             )
 
             with autocast_ctx:
-                forward_kwargs = dict(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    use_cache=False,
-                )
+                if packed:
+                    # Flatten to [1, B*S] and drop the mask: flash-attention only
+                    # switches to per-example (varlen) attention from position_ids
+                    # at batch size 1; otherwise packed examples attend to each
+                    # other. attention_mask stays above for token counting only.
+                    forward_kwargs = {
+                        "input_ids": input_ids.reshape(1, -1),
+                        "position_ids": batch["position_ids"].reshape(1, -1),
+                        "labels": labels.reshape(1, -1),
+                        "use_cache": False,
+                    }
+                else:
+                    forward_kwargs = dict(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        use_cache=False,
+                    )
                 if profile.is_moe and profile.has_aux_loss:
                     forward_kwargs["output_router_logits"] = True
 
@@ -478,6 +512,7 @@ def _run_epoch(
                     torch.cuda.memory._record_memory_history(max_entries=200_000)
 
                 try:
+                    timer.compute_start()
                     out       = model(**forward_kwargs)
                     main_loss = out.loss
                     aux_loss  = extract_aux_loss(out, profile)
@@ -488,6 +523,7 @@ def _run_epoch(
                         total_loss = main_loss / grad_accum
 
                     total_loss.backward()
+                    timer.compute_end()
                 except torch.OutOfMemoryError:
                     if _profile_oom:
                         snap = torch.cuda.memory._snapshot()
@@ -512,10 +548,16 @@ def _run_epoch(
         # something above exited early (e.g. StopIteration on last micro-step).
         _set_grad_sync(model, enabled=True)
 
+        # A full forward/backward window completed: startup is over even if
+        # this step's grads turn out non-finite and the update is skipped.
+        if startup_watchdog is not None:
+            startup_watchdog.done()
+
         # ── Optimizer step ──────────────────────────────────────────
         # Use model.clip_grad_norm_ for FSDP2 if available (handles sharded grads).
         # DDP doesn't expose clip_grad_norm_; falls through to the manual clip.
         grad_clip = getattr(train_cfg, "grad_clip", None) or getattr(train_cfg, "max_grad_norm", 1.0)
+        timer.optim_start()
         if hasattr(model, "clip_grad_norm_"):
             grad_norm = model.clip_grad_norm_(grad_clip).item()
         else:
@@ -555,6 +597,7 @@ def _run_epoch(
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
+        timer.optim_end()
 
         # ── Loss aggregation ────────────────────────────────────────
         window_loss = torch.stack(micro_losses).mean().item()
@@ -562,6 +605,9 @@ def _run_epoch(
             torch.stack(micro_aux_losses).mean().item()
             if micro_aux_losses else 0.0
         )
+        # After the .item() sync above; collective every straggler interval,
+        # so every rank must call it.
+        timing_metrics = timer.finish(step + 1)
 
         # Loss EMA + spike ratio
         if loss_ema is None:
@@ -595,6 +641,19 @@ def _run_epoch(
                 msg += f" tok/s={throughput_metrics['throughput/tokens_per_sec']:.0f}"
             if "throughput/mfu_pct" in throughput_metrics:
                 msg += f" MFU={throughput_metrics['throughput/mfu_pct']:.1f}%"
+            if timing_metrics:
+                msg += (
+                    f" | step={timing_metrics['time/step_s']:.2f}s"
+                    f" data={timing_metrics['time/data_wait_s']:.2f}s"
+                    f" fwd+bwd={timing_metrics['time/compute_s']:.2f}s"
+                    f" opt={timing_metrics['time/optimizer_s']:.2f}s"
+                )
+                if "time/slowest_rank" in timing_metrics:
+                    msg += (
+                        f" slowest=r{int(timing_metrics['time/slowest_rank'])}"
+                        f"({timing_metrics['time/step_max_s']:.2f}s"
+                        f" vs med {timing_metrics['time/step_median_s']:.2f}s)"
+                    )
             logger.info(msg)
 
             metrics: dict[str, float] = {
@@ -609,6 +668,7 @@ def _run_epoch(
                 metrics["aux_loss"]   = window_aux
                 metrics["total_loss"] = window_loss + aux_loss_weight * window_aux
             metrics.update(throughput_metrics)
+            metrics.update(timing_metrics)
 
             if tracker:
                 if log_expert_util and step % expert_log_every == 0:

@@ -241,6 +241,55 @@ def _add_all_ones_attention_mask(batch: dict) -> dict:
     return batch
 
 
+def _validate_tokenized_cache(tokenized_path: str, cfg) -> None:
+    """
+    Check a pre-tokenized cache against the training config before using it.
+
+    load_tokenized() reads parquet rows as-is and never re-pads or truncates,
+    so data.seq_len in the training config has no effect on a cache built at
+    a different length: a run configured for seq_len 512 on a 4096 cache
+    trains on 4096-token rows while every log and config claims 512. That is
+    an error. A different model_name is only a warning, since models sharing
+    a tokenizer (e.g. Qwen3-14B / Qwen3-30B-A3B) can legitimately share a
+    cache; a genuinely different tokenizer would produce wrong token ids.
+    """
+    meta_path = os.path.join(tokenized_path, "metadata.json")
+    if not os.path.isfile(meta_path):
+        logger.warning(
+            f"{tokenized_path} has no metadata.json, so its seq_len and tokenizer "
+            "cannot be checked against the config (external cache?)."
+        )
+        return
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not read {meta_path} ({e}); skipping cache validation.")
+        return
+
+    cached_len = meta.get("seq_len")
+    wanted_len = getattr(cfg.data, "seq_len", None)
+    if cached_len is not None and wanted_len is not None and int(cached_len) != int(wanted_len):
+        raise ValueError(
+            f"Tokenized cache {tokenized_path} was built with seq_len={cached_len}, "
+            f"but data.seq_len={wanted_len}. The cache is used as-is (rows are never "
+            f"re-padded), so this run would silently train on {cached_len}-token rows. "
+            f"Re-tokenize at seq_len={wanted_len} and point tokenized_path at the new "
+            f"cache, or set data.seq_len={cached_len}."
+        )
+
+    cached_model = meta.get("model_name")
+    wanted_model = getattr(cfg.model, "name", None)
+    if cached_model and wanted_model and (
+        os.path.realpath(str(cached_model)) != os.path.realpath(str(wanted_model))
+    ):
+        logger.warning(
+            f"Tokenized cache {tokenized_path} was built with the tokenizer of "
+            f"{cached_model!r}, but model.name is {wanted_model!r}. Fine if both share "
+            "a tokenizer; otherwise every token id is wrong for this model."
+        )
+
+
 def load_tokenized(tokenized_path: str, cfg, world_size: int) -> ray.data.Dataset:
     if not os.path.isdir(tokenized_path):
         raise FileNotFoundError(
@@ -258,6 +307,7 @@ def load_tokenized(tokenized_path: str, cfg, world_size: int) -> ray.data.Datase
         f"Loading pre-tokenized dataset from {tokenized_path} "
         f"({len(parquet_files)} parquet file(s))"
     )
+    _validate_tokenized_cache(tokenized_path, cfg)
 
     ds = ray.data.read_parquet(tokenized_path)
 

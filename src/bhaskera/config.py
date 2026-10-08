@@ -92,6 +92,12 @@ class DataConfig:
     prefetch_batches: int = 2
     local_shuffle_buffer_multiplier: int = 10
     pack_sequences: bool = False
+    # Runtime packing of a padded cache (data/packing.py): several examples per
+    # seq_len row, boundaries via position_ids. Distinct from pack_sequences
+    # above, which only synthesizes masks for caches that are already packed.
+    # Train split only; requires model.attn_impl: flash_attention_2.
+    runtime_packing: bool = False
+    packing_window_rows: int = 2048   # rows packed together per Ray Data batch
 
     # ── Phase 2: chat-format / local-files plumbing ────────────────────────
     # Name of a registered format renderer (chatml, alpaca, sharegpt, or
@@ -203,6 +209,12 @@ class TrainingConfig:
     deterministic: bool = False
     grad_clip: Optional[float] = 1.0          # Phase 1: used by no_sync loop
     max_grad_skip_steps: int = 100
+    # Seconds a worker may take from start to its first completed
+    # forward+backward (dist init, model load/wrap, first batch). On expiry the
+    # worker dumps every thread's stack and exits (utils/watchdog.py), instead
+    # of hanging silently -- two runs sat 3.5h/1.4h at 0 steps before this.
+    # 0 disables. Raise it for very large models whose load is slow.
+    startup_timeout_s: int = 3600
     distributed: DistributedConfig = field(default_factory=DistributedConfig)
 
     # ── Eval / MLPerf-style convergence early-stop ──────────────────────────
@@ -252,6 +264,11 @@ class MetricsConfig:
     peak_tflops_per_gpu: float = 312.0
     throughput_window: int = 50
     throughput_warmup: int = 5
+    # Per-step data/compute/optimizer breakdown (trainer/step_timing.py) and,
+    # every straggler_every_n_steps, a cross-rank all-gather naming the
+    # slowest rank and host. 0 disables the straggler check.
+    step_timing: bool = True
+    straggler_every_n_steps: int = 10
 
 @dataclass
 class MonitoringConfig:
@@ -345,6 +362,8 @@ def _dict_to_config(raw: dict) -> Config:
                 data_raw.get("local_shuffle_buffer_multiplier", 10)
             ),
             pack_sequences=bool(data_raw.get("pack_sequences", False)),
+            runtime_packing=bool(data_raw.get("runtime_packing", False)),
+            packing_window_rows=int(data_raw.get("packing_window_rows", 2048)),
 
             # Phase 2
             format=data_raw.get("format"),
@@ -385,6 +404,7 @@ def _dict_to_config(raw: dict) -> Config:
             deterministic=bool(train_raw.get("deterministic", False)),
             grad_clip=train_raw.get("grad_clip", 1.0),
             max_grad_skip_steps=int(train_raw.get("max_grad_skip_steps", 100)),
+            startup_timeout_s=int(train_raw.get("startup_timeout_s", 3600) or 0),
             eval_steps=int(train_raw.get("eval_steps", 0)),
             eval_batch_size=int(train_raw.get("eval_batch_size", 0)),
             target_eval_loss=(
@@ -476,6 +496,8 @@ def _dict_to_config(raw: dict) -> Config:
                 peak_tflops_per_gpu=float(metrics_raw.get("peak_tflops_per_gpu", 312.0)),
                 throughput_window=int(metrics_raw.get("throughput_window", 50)),
                 throughput_warmup=int(metrics_raw.get("throughput_warmup", 5)),
+                step_timing=bool(metrics_raw.get("step_timing", True)),
+                straggler_every_n_steps=int(metrics_raw.get("straggler_every_n_steps", 10)),
             ),
         ),
     )

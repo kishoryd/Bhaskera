@@ -122,6 +122,18 @@ Default port is `5000`; default store is `~/mlflow-runs` — the same path the t
 
 `ctx.banner(head_ip=None)` produces the multi-line startup summary printed by `train.py`.
 
+## `preflight.py` — `bhaskera-preflight`
+
+```bash
+bhaskera-preflight --config configs/qwen3_235b_a22b_fsdp_8node_nemotron.yaml [--num-gpus 16] [--gpu-mem-gb 80]
+```
+
+Login-node checks, in seconds and CPU only, before submitting: model directory, tokenizer load (catches missing deps like `sentencepiece`), flash-attn / Liger import against the installed torch, tokenized caches (existence and `seq_len`/model match), config combinations known to fail here (`shard_experts_individually` with >= 64 experts), and a per-GPU memory estimate with the smallest GPU count that fits. The memory model is a planning estimate: sharded weights + two gathered layer units + root + decoder-level activation checkpoints + one layer's recompute + logits (unless Liger) + 3.5 GiB overhead. Exits 1 on any FAIL.
+
+## Node health (`scripts/preflight_nodes.sh`, `scripts/sbatch_x.sh`)
+
+`scripts/submit.sh` runs a ~1 minute GPU smoke test on every node before training (`scripts/node_healthcheck.py`: GPU count, bf16 matmul finiteness, throughput and cross-GPU checksum, local P2P copy). Nodes that error, hang past `PREFLIGHT_TIMEOUT_S`, or run below 70% of the fastest node are appended to `.bad_nodes` and the job exits 3. `scripts/sbatch_x.sh <sbatch args>` resubmits with those nodes (entries newer than `BAD_NODE_TTL_DAYS`, default 7) merged into the script's own `--exclude`. A plain CLI `--exclude` would replace the script's list. `BHASKERA_PREFLIGHT=0` skips the check.
+
 ## Typical end-to-end
 
 ```bash
