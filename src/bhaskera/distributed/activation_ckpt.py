@@ -40,12 +40,13 @@ def apply_activation_checkpointing(
     model: nn.Module,
     profile: ModelProfile,
     decoder_cls: Optional[type],
+    use_megablocks: bool = False,
 ) -> None:
     """Preferred: FSDP2-native composable API; fallback to legacy if missing."""
     # Composable API (torch >= 2.4).
     try:
         from torch.distributed._composable import checkpoint as composable_checkpoint
-        _apply_composable(model, profile, decoder_cls, composable_checkpoint)
+        _apply_composable(model, profile, decoder_cls, composable_checkpoint, use_megablocks)
         return
     except ImportError:
         pass
@@ -62,18 +63,21 @@ def apply_activation_checkpointing(
         logger.warning("No activation checkpointing API available — skipping.")
 
 
-def _moe_context_fn(model, profile):
+def _moe_context_fn(model, profile, use_megablocks=False):
     """For MoE, pin routing across forward/recompute (see moe_routing.py)."""
     if not profile.is_moe:
         return None
-    patched = make_routing_recompute_stable(model)
-    logger.info(f"AC: routing pinned across recompute for {patched} MoE blocks")
+    patched = make_routing_recompute_stable(model, use_megablocks=use_megablocks)
+    logger.info(
+        f"AC: routing pinned across recompute for {patched} MoE blocks "
+        f"(megablocks={use_megablocks})"
+    )
     return recompute_contexts
 
 
-def _apply_composable(model, profile, decoder_cls, composable_checkpoint):
+def _apply_composable(model, profile, decoder_cls, composable_checkpoint, use_megablocks=False):
     if decoder_cls is not None:
-        context_fn = _moe_context_fn(model, profile)
+        context_fn = _moe_context_fn(model, profile, use_megablocks)
         kwargs = {"context_fn": context_fn} if context_fn else {}
         count = 0
         for module in model.modules():

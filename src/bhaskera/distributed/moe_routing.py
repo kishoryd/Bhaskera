@@ -125,6 +125,45 @@ def _grouped_layout(experts: nn.ModuleList):
     return names
 
 
+def _grouped_experts_megablocks(x, selected, weights, experts, names):
+    """Same expert-sorted-slice layout as `_grouped_experts`, but each of the
+    three GEMMs (gate/up/down) runs as ONE grouped-GEMM kernel launch across
+    all experts instead of one `F.linear` call per expert in a Python loop.
+
+    `_grouped_experts` already removed the HF per-expert gather/scatter sync
+    overhead; what's left per micro-step is up to 128 sequential small GEMM
+    *kernel launches* per projection (one per nonzero expert) -- this is
+    exactly what Megablocks' block-sparse / grouped-GEMM kernels (via
+    `grouped_gemm.ops.gmm`) are for: one batched kernel call handles every
+    expert's slice at once. Requires the `megablocks` extra (not a base
+    dependency) -- callers must check `moe.use_megablocks` and fall back to
+    `_grouped_experts` if the import fails.
+    """
+    from grouped_gemm.ops import gmm
+
+    gate_n, up_n, down_n = names
+    top_k = selected.shape[1]
+    flat = selected.reshape(-1)
+    order = torch.argsort(flat, stable=True)
+    counts = torch.bincount(flat, minlength=len(experts))  # the one sync
+    batch_sizes = counts.cpu()
+    token = order // top_k
+    seg = x[token]
+
+    # nn.Linear(in, out).weight is (out, in); gmm(..., trans_b=True) computes
+    # seg @ w_i^T per expert group, matching F.linear(seg, w_i) exactly.
+    gate_w = torch.stack([getattr(e, gate_n).weight for e in experts])
+    up_w = torch.stack([getattr(e, up_n).weight for e in experts])
+    down_w = torch.stack([getattr(e, down_n).weight for e in experts])
+
+    h = F.silu(gmm(seg, gate_w, batch_sizes, trans_b=True)) * gmm(
+        seg, up_w, batch_sizes, trans_b=True)
+    out = gmm(h, down_w, batch_sizes, trans_b=True)
+
+    contrib = out * weights.reshape(-1)[order, None]
+    return torch.zeros_like(x).index_add(0, token, contrib.to(x.dtype))
+
+
 def _grouped_experts(x, selected, weights, experts, names):
     """Run every expert on a contiguous slice of expert-sorted tokens.
 
@@ -181,7 +220,10 @@ def _stable_forward(self, hidden_states: torch.Tensor):
     experts = self._modules[self._bhaskera_experts_attr]
     names = _grouped_layout(experts)
     if names is not None:
-        out = _grouped_experts(x, selected, weights, experts, names)
+        if getattr(self, "_bhaskera_use_megablocks", False):
+            out = _grouped_experts_megablocks(x, selected, weights, experts, names)
+        else:
+            out = _grouped_experts(x, selected, weights, experts, names)
         return out.reshape(batch_size, seq_len, hidden_dim), router_logits
 
     out = torch.zeros((batch_size * seq_len, hidden_dim), dtype=x.dtype, device=x.device)
@@ -195,11 +237,12 @@ def _stable_forward(self, hidden_states: torch.Tensor):
     return out.reshape(batch_size, seq_len, hidden_dim), router_logits
 
 
-def make_routing_recompute_stable(model: nn.Module) -> int:
+def make_routing_recompute_stable(model: nn.Module, use_megablocks: bool = False) -> int:
     """Patch supported MoE blocks in place; returns how many were patched."""
     ok, other = routed_moe_blocks(model)
     for _, block, attr in ok:
         block._bhaskera_experts_attr = attr
+        block._bhaskera_use_megablocks = use_megablocks
         block.forward = types.MethodType(_stable_forward, block)
     if other:
         logger.warning(

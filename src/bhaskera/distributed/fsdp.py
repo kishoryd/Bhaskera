@@ -147,7 +147,10 @@ def wrap_fsdp2(
 
     # Activation checkpointing.
     if fsdp_cfg.activation_checkpointing:
-        apply_activation_checkpointing(model, profile, decoder_cls)
+        apply_activation_checkpointing(
+            model, profile, decoder_cls,
+            use_megablocks=getattr(cfg.moe, "use_megablocks", False),
+        )
 
     # Fill in every rank's shard with rank 0's real values. Composable
     # fully_shard()/checkpoint() preserve the module hierarchy (unlike

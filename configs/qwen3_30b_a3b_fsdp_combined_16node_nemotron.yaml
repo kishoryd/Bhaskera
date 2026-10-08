@@ -1,0 +1,152 @@
+# =============================================================================
+# Bhaskera — Qwen3-30B-A3B-Instruct-2507 | LoRA SFT on nvidia/Nemotron-Cascade-2-SFT-Data (chat)
+# Strategy: FSDP | 16 nodes x 2 GPUs/node = 32 GPUs
+# MoE: 128 experts, top-8 routed, 30B total / 3B active
+#
+# One of a 6-model dense/MoE comparison, all on the same dataset, same LoRA
+# rank (r16/alpha32), same node count — see:
+#   configs/qwen3_14b_ddp_8node_nemotron.yaml         DENSE
+#   configs/llama33_70b_fsdp_8node_nemotron.yaml      DENSE
+#   configs/mistral_large_fsdp_8node_nemotron.yaml    DENSE
+#   configs/qwen3_30b_a3b_fsdp_8node_nemotron.yaml    MOE  (this file — same
+#                                                      family/tokenizer as
+#                                                      qwen3_14b: the controlled
+#                                                      dense-vs-MoE comparison)
+#   configs/gpt_oss_120b_fsdp_8node_nemotron.yaml     MOE
+#   configs/qwen3_235b_a22b_fsdp_8node_nemotron.yaml  MOE
+#
+# shard_experts_individually: false — matches the Param2-17B reference
+# config. Setting this true (128 experts x ~94 layers) creates thousands of
+# tiny FSDP units, each needing its own NCCL collective; all three MoE models
+# then hung in _ALLGATHER_BASE/_REDUCE_SCATTER_BASE until the 30-min watchdog
+# fired (NumelIn as low as 5632 — per-expert, not per-layer), while the three
+# dense models ran fine. Not needed for memory either: even Qwen3-235B is
+# 29.4GB/GPU at 16 GPUs under FULL_SHARD.
+#
+# EVAL-BASELINE RUN: eval_steps on, target_eval_loss unset — first run for
+# each of these 6 models, so no prior cutoff exists to apply yet.
+#
+# Prereq (run once):
+#   bhaskera-tokenize --config configs/tokenize_qwen3_30b_a3b_nemotron.yaml --split both
+#
+# SLURM:
+#   sbatch scripts/submit_qwen3_30b_a3b_fsdp_8_nemotron.sh
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/models/Qwen3-30B-A3B-Instruct-2507"
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  trust_remote_code: false
+  use_liger_kernel: true
+
+data:
+  name: "local"
+  seq_len: 4096
+  runtime_packing: true           # combined-fixes MFU test (requires flash_attention_2)
+  num_workers: 16
+  tokenized_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/local_train_89628922d6856dec"
+  val_tokenized_path: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1/local_val_72376270cfe11d52"
+  prefetch_batches: 2
+  local_shuffle_buffer_multiplier: 10
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["auto"]
+  include_experts: false
+  freeze_router: true
+  modules_to_save: []
+
+moe:
+  aux_loss_weight: 0.01
+  router_z_loss_weight: 0.001
+  freeze_router: true
+  log_expert_utilization: true
+  log_every_n_steps: 10
+  use_megablocks: true   # feature/megablocks-moe test
+
+training:
+  batch_size: 12                 # bumped from 8 -- 32n/64n proved bs=12 safe
+                                  # OOM'd near-identically -- memory here is dominated by
+                                  # fixed cost (EP=2 experts resident + no-AC activations
+                                  # across 48 layers), not batch size. Restored to 8 now
+                                  # that activation_checkpointing is back on below.
+  grad_accum: 1                  # effective batch = 32 GPUs x 12 x 1 = 384 sequences/step
+  lr: 1.0e-4
+  weight_decay: 0.0
+  max_steps: 20                 # throughput comparison, not full training
+  num_epochs: 3
+  warmup_steps: 50
+  max_grad_norm: 1.0
+  grad_clip: 1.0
+  max_grad_skip_steps: 100
+  seed: 42
+  deterministic: false
+
+  eval_steps: 0                  # no held-out eval for a short throughput run
+  eval_batch_size: 1
+  target_eval_loss: null
+
+  distributed:
+    strategy: "fsdp"
+
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      transformer_layer_cls: []
+      param_dtype: "bfloat16"
+      reduce_dtype: "bfloat16"
+      buffer_dtype: "bfloat16"
+      activation_checkpointing: true   # v4 tried EP=4 + AC=false: OOM'd at 79.01 GiB, same as
+                                        # EP=2. Confirms memory here is fixed per-layer packed-
+                                        # sequence activation residency (48 layers x seq_len=4096),
+                                        # which neither batch_size nor expert_parallel_size touches
+                                        # under runtime_packing. AC=true is the only lever that
+                                        # fits; reverted to the v3 working config (MFU=4.2%).
+      cpu_offload: false
+      shard_experts_individually: false
+      expert_parallel_size: 2       # reverted from v4's 4 -- didn't help, not worth the extra
+                                     # all-to-all comm overhead
+      root_reshard_after_forward: false
+      forward_prefetch: true
+      backward_prefetch: true
+
+    ddp:
+      find_unused_parameters: false
+      gradient_as_bucket_view: true
+      broadcast_buffers: false
+      activation_checkpointing: true
+      static_graph: false
+
+checkpoint:
+  enabled: false   # comparison run, no need to checkpoint
+  save_dir: "./checkpoints/qwen3_30b_a3b-nemotron-fsdp-combined-16node"
+  save_interval: 1
+  keep_last_n: 2
+
+logging:
+  tracker: "mlflow"
+  project: "bhaskera"
+  run_name: "qwen3_30b_a3b-nemotron-fsdp-combined-16node"
+  mlflow_tracking_uri: ""
+  log_gpu_every_n_steps: 10
+
+monitoring:
+  dashboard: true
+  dashboard_host: "0.0.0.0"
+  dashboard_port: 8265
+  metrics_export_port: 8080
+
+  metrics:
+    enabled: true
+    system_every_n_steps: 1
+    cuda_every_n_steps: 2
+    gpu: true
+    cpu: true
+    cuda_memory: true
+    throughput: true
+    peak_tflops_per_gpu: 312.0
+    throughput_window: 5
+    throughput_warmup: 5

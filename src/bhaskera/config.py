@@ -44,6 +44,7 @@ class MoEConfig:
     freeze_router: bool = True
     log_expert_utilization: bool = True
     log_every_n_steps: int = 10
+    use_megablocks: bool = False
 
 
 @dataclass
@@ -390,6 +391,7 @@ def _dict_to_config(raw: dict) -> Config:
             freeze_router=bool(moe_raw.get("freeze_router", True)),
             log_expert_utilization=bool(moe_raw.get("log_expert_utilization", True)),
             log_every_n_steps=int(moe_raw.get("log_every_n_steps", 10)),
+            use_megablocks=bool(moe_raw.get("use_megablocks", False)),
         ),
         training=TrainingConfig(
             batch_size=int(train_raw.get("batch_size", 2)),
