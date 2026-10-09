@@ -64,3 +64,23 @@ Tested on 2 A100 GPUs against the unmodified Hugging Face MoE block in fp32, for
 |---|---|
 | Outputs, router logits, input gradients, router gradients | Match within 7e-7 (fp32 rounding) |
 | With activation checkpointing and injected recompute noise | Exact match with the non-checkpointed run |
+
+## Measured communication cost (important before enabling this on PCIe nodes)
+
+Correctness was validated above, but a later `torch.profiler` trace on a real training
+run (Qwen3-30B-A3B, `expert_parallel_size: 2`, 8 nodes × 2 A100 80GB PCIe GPUs, no
+NVLink between the two GPUs on a node) found that **the EP all-to-all consumed 68.7% of
+total GPU time for that step** — dominating over every matmul combined. `nvidia-smi
+topo -m` showed the two GPUs on a node connected as `NODE` class (crossing separate
+PCIe host bridges, no NVLink), which is the likely reason: EP groups here are formed
+from consecutive ranks (`_new_ep_group()`), which land on the same node for
+`expert_parallel_size: 2` matched to 2 GPUs/node — so this all-to-all is intra-node,
+and its cost comes from the lack of a fast GPU-GPU interconnect, not cross-node network
+latency.
+
+**Practical implication:** on nodes without NVLink between GPUs, `expert_parallel_size`
+greater than 1 can cost far more in communication than it saves in memory —
+`expert_parallel_size: 1` (EP disabled) routes experts through the normal
+`fully_shard(layer)` path instead, which shards them across the *entire* world rather
+than replicating a 2-way split per EP group, and may cost less memory too, not just
+less communication. Benchmark both before committing to EP on PCIe-only clusters.
