@@ -1,54 +1,74 @@
-# Branch: `fsdp-moe-fixes`
+# Branch: `perf/grouped-experts`
 
 ## Summary
 
-Fixes that make Mixture-of-Experts (MoE) models train correctly under FSDP2, plus a six-model dense-vs-MoE benchmark suite. Before these fixes, Qwen3-235B-A22B ran out of GPU memory at every node count, and Qwen3-30B-A3B failed on its first step.
+Replaces Hugging Face's per-expert loop in routed MoE blocks with one pass that sorts
+tokens by expert, gathers once, runs each expert's three GEMMs on its own contiguous
+slice, and scatters back once. Output is bitwise identical to HF on deterministic
+backends — this is a kernel-launch optimization, not an algorithm change.
 
-`feature/hsdp`, `feature/expert-parallel` and `feature/robustness` are built on this branch. Merge this branch first.
+Depends on `fsdp-moe-fixes`; merge that branch first.
+
+## The problem
+
+HF's routed MoE block loops over experts and, per expert, calls `nonzero`/`where` (a
+GPU→CPU sync) and gathers/scatters its tokens with about 10 small kernels. Profiling
+Qwen3-30B-A3B under FSDP with decoder-level activation checkpointing (128 experts × 48
+layers, forward + recompute + backward) at batch 8: **~24k syncs and ~342k kernel
+launches per micro-step**, and the step was CPU-bound — NCCL kernels mostly sat waiting
+on the CPU to issue the next one.
+
+## How it works
+
+For each MoE block's forward (`distributed/moe_routing.py::_grouped_experts`):
+
+1. Sort the flattened top-k expert assignments once (`torch.argsort`, stable).
+2. One sync: `torch.bincount` gets each expert's token count.
+3. Gather all tokens once via the sort order, then `.split()` into contiguous
+   per-expert slices — no Python-level gather/scatter per expert.
+4. Run each expert's three GEMMs (gate/up/down) on exactly its own rows. No capacity
+   padding: an earlier padded-batched-GEMM version sized every expert to the busiest
+   one, and since padding tokens all route to the same few experts, that computed
+   ~8x the needed rows.
+5. Scatter results back with a single `index_add`.
+
+Row order matches HF's loop exactly (stable sort keeps token order within an expert,
+experts accumulate in ascending order), so output is bitwise identical to HF on
+deterministic backends. Only applies when every expert is a bias-free SiLU SwiGLU MLP
+of plain `nn.Linear` layers (`_grouped_layout()` checks this and falls back to HF's
+loop otherwise — e.g. when LoRA adapters are on the experts, since PEFT replaces the
+`nn.Linear` with its own wrapper this path would otherwise bypass).
+
+## Usage
+
+No config flag — applies automatically whenever `activation_checkpointing: true` is
+set on a supported MoE model (routing goes through the same recompute-stable path from
+`fsdp-moe-fixes`). No code changes needed to adopt it.
+
+## Measured effect
+
+Factorial comparison, Qwen3-30B-A3B, single step, forward+backward+optimizer, same
+batch size, HF's loop vs. this path:
+
+| Batch size | HF per-expert loop | Grouped (this branch) | Speedup |
+|---|---|---|---|
+| 1 | 24.92s, 19,380 syncs | 10.64s, 484 syncs | 2.3x |
+| 8 | 28.93s, 23,628 syncs | 14.55s, 484 syncs | 2.0x |
+
+**Caveat found later (see `feature/megablocks-moe`):** at production batch sizes
+(batch=8-12/GPU, seq_len 4096, ~2,048 tokens/expert on average), the remaining
+sequential-GEMM-launch cost is small relative to each GEMM's own compute time — this
+fix matters most at low tokens-per-expert (small batch, or many experts relative to
+batch size), not as a multiplier on top of this at every scale. It also does not
+touch expert-parallel communication cost, which can dominate separately — see
+`feature/expert-parallel`'s README.
 
 ## Changes
 
-### MoE training
-
-| Change | Problem solved | Files |
-|---|---|---|
-| **Checkpoint whole decoder layers for MoE models.** Activation checkpointing now wraps each full decoder layer, as it already did for dense models. | Only the expert MLPs were checkpointed, so attention, LoRA, router and token-dispatch activations were kept for every layer. On Qwen3-235B-A22B this used 65–90 GB per GPU, and adding nodes did not reduce it. | `distributed/activation_ckpt.py` |
-| **Reuse the forward pass's expert selection during recompute.** The recompute uses the same top-k experts that the forward pass chose. Routing weights are still recomputed, so gradients are unchanged. | bf16 router scores can differ slightly between the forward pass and the recompute. When two experts score almost equally, the top-k choice can flip, and PyTorch raises `CheckpointError`. | `distributed/moe_routing.py` (new) |
-| **Honour `lora.include_experts: false`.** Expert modules are excluded with PEFT `exclude_modules`. | PEFT matches modules by name. Expert layers share the names `gate_proj`, `up_proj` and `down_proj`, so every expert received adapters (about 36,000 on Qwen3-235B-A22B). | `models/lora.py` |
-| **Load the model once per job.** Under FSDP, rank 0 loads the checkpoint; the other ranks build the model on the `meta` device. | Every GPU process loaded a full copy into host memory: two copies per node, each about 470 GB for Qwen3-235B-A22B. | `models/loader.py` |
-| **Broadcast weights in buckets after sharding.** Rank 0 sends fixed-size buckets, and each rank keeps only its own shard. Peak extra memory is one bucket. | DCP `broadcast_from_rank0` held the full unsharded model on every GPU. | `distributed/fsdp.py` |
-
-### Metrics, data and tooling
-
-| Change | Files |
+| File | Change |
 |---|---|
-| **MFU and tokens/s are no longer divided by `world_size` twice.** Reported MFU was too low by a factor of the GPU count: a 16-GPU run showed 0.18% instead of 2.87%. | `utils/throughput.py` |
-| **Tokenisation spills to scratch instead of the node-local `/tmp`**, which ran out of space. | `launcher/tokenize.py` |
-| **Rows rejected by a strict chat template (Mistral, gpt-oss) fall back to ChatML** instead of aborting the whole corpus. | `data/formats/builtins.py` |
-| **The validation set is sharded only when it has at least as many rows as workers.** | `launcher/train.py` |
-| **`BHASKERA_PROFILE_OOM=1` prints a CUDA allocator breakdown on out-of-memory.** MLflow now honours `log_gpu_every_n_steps`. | `trainer/loop.py`, `utils/loggers/mlflow_logger.py` |
-| **`.gitignore` patterns are anchored to the repository root** (`/models/`, `/data1/`). The old `models/` pattern also excluded `src/bhaskera/models/`. | `.gitignore` |
-
-### Benchmark suite
-
-`configs/*_8node_nemotron.yaml` define six models trained under identical conditions: Nemotron-Cascade-2-SFT-Data (chat), `seq_len` 4096, LoRA r16/α32, 8 nodes × 2 GPUs.
-
-| Model | Parameters | Architecture | Strategy |
-|---|---|---|---|
-| Qwen3-14B | 14.8B | Dense | DDP |
-| Llama-3.3-70B-Instruct | 70B | Dense | FSDP |
-| Mistral-Large-Instruct-2411 | 123B | Dense | FSDP |
-| Qwen3-30B-A3B-Instruct-2507 | 30B (3B active) | MoE | FSDP |
-| gpt-oss-120b | 120B (5.1B active) | MoE | FSDP |
-| Qwen3-235B-A22B-Instruct-2507 | 235B (22B active) | MoE | FSDP |
-
-The three Qwen3 models share a tokenizer, so they form a controlled dense-vs-MoE comparison. Each model has a tokenization config (`configs/tokenize_<model>_nemotron.yaml`) and a submit script (`scripts/submit_<model>_<strategy>_8_nemotron.sh`). `scripts/submit_nemotron_pipeline.sh` runs all six.
-
-## Configuration guidance
-
-- `data.seq_len` is part of the tokenization cache key. If you change it, re-tokenize and update `tokenized_path` and `val_tokenized_path`.
-- Set `seq_len` to fit the data, not the model's maximum context. At 16384, about 80% of each Nemotron sequence was padding.
-- Keep `fsdp.shard_experts_individually: false` for models with 128 experts. Enabling it creates thousands of small FSDP units, and the NCCL collectives hang.
+| `distributed/moe_routing.py` | Adds `_grouped_layout()` (detects a supported SwiGLU expert shape) and `_grouped_experts()` (the sorted-slice forward). `_stable_forward()` dispatches to it when the layout matches. |
+| `distributed/tests/test_moe_routing.py` | Extended with grouped-path coverage. |
 
 ## Validation
 
@@ -56,9 +76,6 @@ The three Qwen3 models share a tokenizer, so they form a controlled dense-vs-MoE
 python -m bhaskera.distributed.tests.test_moe_routing
 ```
 
-CPU, fp32, Qwen3-MoE and Mixtral:
-- With injected recompute noise, the unpatched model raises `CheckpointError` and the patched model trains.
-- Gradients with activation checkpointing exactly match gradients without it.
-- The patched forward pass is bitwise identical to the Hugging Face implementation.
-
-Qwen3-235B-A22B trains at 8, 32 and 64 nodes with these changes.
+Output matches `_grouped_experts` against HF's own loop exactly (bitwise, deterministic
+backends) across random routing assignments, including the capacity-imbalance case
+(all tokens routed to one expert).
