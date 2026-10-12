@@ -61,8 +61,9 @@ Tested on 2 nodes × 2 A100 GPUs, training the same model one step under each st
 ## Measured throughput at scale
 
 A later apples-to-apples comparison on Qwen3-30B-A3B at 64 nodes (128 A100 80GB PCIe
-GPUs) found HSDP's median throughput about **1.9x higher** than `FULL_SHARD` (HSDP
-~6,309 tok/s vs. FULL_SHARD ~3,268 tok/s). This differs from an earlier small-scale
+GPUs) found HSDP's median throughput about **1.67x higher** than `FULL_SHARD` (HSDP
+6,309 tok/s vs. FULL_SHARD 3,767.5 tok/s, medians of 8 logged steps each). This differs
+from an earlier small-scale
 test on the same model, which found no HSDP advantage — the benefit appears to grow
 with scale, likely because `FULL_SHARD`'s weight all-gather spans the whole job at 64
 nodes while HSDP's stays within each node's shard group. Both runs were otherwise
