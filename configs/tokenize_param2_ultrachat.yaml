@@ -1,0 +1,24 @@
+# =============================================================================
+# Tokenize HuggingFaceH4/ultrachat_200k (train_sft) for Param2-17B-A2.4B-Thinking
+#
+# Run once on the login node (CPU-only — no GPU allocation needed):
+#   bhaskera-tokenize --config configs/tokenize_param2_ultrachat.yaml
+#
+# Prints the tokenized_path to paste into the training config's
+# data.tokenized_path. No val split exists for this dataset in the
+# registered "ultrachat" builder (only train_sft), so no val_tokenized_path.
+# =============================================================================
+
+model:
+  name: "/home/nsmapplication/dlapp/vaibhav/Bhaskera/Param2-17B-A2.4B-Thinking"
+  trust_remote_code: true
+
+data:
+  name: "ultrachat"
+  seq_len: 4096                # Param2's max_position_embeddings
+  cache_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/data1"
+
+  num_workers: 46               # login node has 48 CPUs
+  tokenize_batch_size: 64
+  tokenize_compression: "snappy"
+  prefetch_batches: 2

@@ -1,0 +1,101 @@
+# =============================================================================
+# Bhaskera — Llama-3.3-70B-Instruct | LoRA SFT on HuggingFaceH4/ultrachat_200k
+# Strategy: FSDP | 4 nodes x 2 GPUs/node = 8 GPUs
+#
+# Model: 70B dense params, ~140GB in bf16 -- exceeds a single 80GB A100
+
+# SLURM:
+#   sbatch scripts/submit_llama33_70b_fsdp_4.sh
+# =============================================================================
+
+model:
+  name: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/models/Llama-3.3-70B-Instruct"
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  trust_remote_code: false
+  use_liger_kernel: true
+
+data:
+  name: "ultrachat"
+  seq_len: 4096
+  num_workers: 8
+  prefetch_batches: 2
+  local_shuffle_buffer_multiplier: 10
+
+lora:
+  enabled: true
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: ["auto"]
+  include_experts: false
+  freeze_router: true
+  modules_to_save: []
+
+training:
+  batch_size: 1                 # per-GPU micro-batch
+  grad_accum: 16                # effective batch = 8 GPUs x 1 x 16 = 128 sequences/step
+  lr: 1.0e-4
+  weight_decay: 0.0
+  max_steps: 1000
+  num_epochs: 1
+  warmup_steps: 50
+  max_grad_norm: 1.0
+  grad_clip: 1.0
+  max_grad_skip_steps: 100
+  seed: 42
+  deterministic: false
+
+  distributed:
+    strategy: "fsdp"
+
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      transformer_layer_cls: []            # empty -> auto-detect via introspect.py
+      param_dtype: "bfloat16"
+      reduce_dtype: "bfloat16"
+      buffer_dtype: "bfloat16"
+      activation_checkpointing: true
+      cpu_offload: false
+      shard_experts_individually: false
+      root_reshard_after_forward: false
+      forward_prefetch: true
+      backward_prefetch: true
+
+    ddp:
+      find_unused_parameters: false
+      gradient_as_bucket_view: true
+      broadcast_buffers: false
+      activation_checkpointing: true
+      static_graph: false
+
+checkpoint:
+  enabled: true
+  save_dir: "./checkpoints/llama33_70b-ultrachat-fsdp-4node"
+  save_interval: 1
+  keep_last_n: 2
+
+logging:
+  tracker: "mlflow"
+  project: "bhaskera"
+  run_name: "llama33_70b-ultrachat-fsdp-4node"
+  mlflow_tracking_uri: ""
+  log_gpu_every_n_steps: 10
+
+monitoring:
+  dashboard: true
+  dashboard_host: "0.0.0.0"
+  dashboard_port: 8265
+  metrics_export_port: 8080
+
+  metrics:
+    enabled: true
+    system_every_n_steps: 1
+    cuda_every_n_steps: 2
+    gpu: true
+    cpu: true
+    cuda_memory: true
+    throughput: true
+    peak_tflops_per_gpu: 312.0     # A100 bf16 peak
+    throughput_window: 5
+    throughput_warmup: 5

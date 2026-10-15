@@ -19,11 +19,11 @@ import subprocess
 
 import ray
 import ray.data
-from ray.train import ScalingConfig, RunConfig, CheckpointConfig
+from ray.train import DataConfig, ScalingConfig, RunConfig, CheckpointConfig
 from ray.train.torch import TorchTrainer
 
 from bhaskera.config import load_config
-from bhaskera.data import build_ray_dataset
+from bhaskera.data import build_ray_dataset, build_val_ray_dataset
 from bhaskera.launcher.monitoring import setup_monitoring
 from bhaskera.launcher.worker import worker_fn
 
@@ -57,10 +57,46 @@ def main() -> None:
     # fix #10: pass world_size so build_ray_dataset can partition correctly
     ray_dataset = build_ray_dataset(cfg, world_size=num_workers)
 
+    datasets = {"train": ray_dataset}
+    datasets_to_split = ["train"]
+    val_dataset = build_val_ray_dataset(cfg, world_size=num_workers)
+    if val_dataset is not None:
+        # Unlike train_dataset, val_dataset is re-read via iter_torch_batches()
+        # on every _run_eval() call (every eval_steps), not just once per
+        # epoch — without materializing, each eval re-triggers the full lazy
+        # read+repartition pipeline from disk, which can dominate wall-clock
+        # time under filesystem contention. Materialize once so eval calls
+        # read from the object store instead of re-hitting disk every time.
+        val_dataset = val_dataset.materialize()
+        datasets["val"] = val_dataset
+
+        # Splitting "val" equal(world_size) leaves every rank with an empty
+        # shard once world_size exceeds the val set's row count, which
+        # silently produces a bogus eval_loss=0.0 and a false convergence
+        # early-stop (this bit us on the GovReport LoRA configs: a 173-row
+        # val set under 64-128 workers). Only split when every rank is
+        # guaranteed at least one row; otherwise fall back to giving every
+        # worker the full, identical val set (redundant compute, but never
+        # empty). .count() is cheap here since the dataset is already
+        # materialized above.
+        val_rows = val_dataset.count()
+        if val_rows >= num_workers:
+            datasets_to_split.append("val")
+            logger.info(
+                f"val dataset has {val_rows} rows >= {num_workers} workers — "
+                "sharding val across ranks (1/world_size eval cost each)."
+            )
+        else:
+            logger.info(
+                f"val dataset has {val_rows} rows < {num_workers} workers — "
+                "giving every rank the full val set to avoid empty shards."
+            )
+
     trainer = TorchTrainer(
         train_loop_per_worker=worker_fn,
         train_loop_config=cfg.as_dict(),
-        datasets={"train": ray_dataset},
+        datasets=datasets,
+        dataset_config=DataConfig(datasets_to_split=datasets_to_split),
         scaling_config=ScalingConfig(
             num_workers=num_workers,
             use_gpu=True,

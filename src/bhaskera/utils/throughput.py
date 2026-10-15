@@ -13,6 +13,13 @@ base weights (the LoRA update is multiplied into the base path during
 forward+backward), so we use the *full* model parameter count, not the
 trainable count.  Pass ``params_for_flops`` explicitly to override.
 
+Counting convention (the one thing to get right here):
+    ``step()`` takes **per-rank** token and sample counts, because the
+    training loop sums its own ``attention_mask`` and the train dataset is
+    sharded per rank.  ``mfu_pct`` and ``tokens_per_sec_per_gpu`` are
+    therefore that rate as-is; ``tokens_per_sec`` and ``samples_per_sec``
+    scale it up by ``world_size`` to describe the whole job.
+
 Notes:
     * The first ``warmup_steps`` step times are dropped from the
       moving averages — they include compile / cache warmup and would
@@ -101,21 +108,31 @@ class ThroughputTracker:
             ref_dt = dt
 
         # Throughput uses the smoothed dt so the panel doesn't jitter.
+        #
+        # `tokens_in_step` / `samples_in_step` are THIS RANK's counts: the
+        # training loop sums its own attention_mask, and "train" is sharded
+        # per rank, so what arrives here is already a per-GPU quantity.  The
+        # cluster-wide figure is therefore the local rate scaled *up* by
+        # world size — derived rather than all-reduced, because a collective
+        # on every optimizer step would cost more than the metric is worth.
+        tps_per_gpu = tokens_in_step / ref_dt if tokens_in_step > 0 else 0.0
         if tokens_in_step > 0:
-            tps = tokens_in_step / ref_dt
-            out["throughput/tokens_per_sec"] = tps
-            out["throughput/tokens_per_sec_per_gpu"] = tps / self._world
+            out["throughput/tokens_per_sec"] = tps_per_gpu * self._world
+            out["throughput/tokens_per_sec_per_gpu"] = tps_per_gpu
         if samples_in_step > 0:
-            out["throughput/samples_per_sec"] = samples_in_step / ref_dt
+            out["throughput/samples_per_sec"] = samples_in_step / ref_dt * self._world
 
-        # MFU — model FLOPs utilization
+        # MFU — model FLOPs utilization, per GPU.
         # FLOPs/token ≈ 6 * params  (3-pass approximation, fwd 1× + bwd 2×)
         # We deliberately ignore the seq²·d attention term to keep the
         # estimate stable across configs; it adds <5% at typical seq_len.
+        #
+        # `tps_per_gpu` is one GPU's token rate, so it divides straight into
+        # one GPU's peak — no world-size term belongs in this ratio.  It was
+        # previously divided by world a second time, under-reporting MFU by
+        # exactly world_size (a 16-GPU run read 0.18% for a true 2.87%).
         flops_per_token = 6.0 * self._params
         if tokens_in_step > 0:
-            achieved_flops_per_sec = (
-                flops_per_token * tokens_in_step / ref_dt / self._world
-            )
+            achieved_flops_per_sec = flops_per_token * tps_per_gpu
             out["throughput/mfu_pct"] = 100.0 * achieved_flops_per_sec / self._peak
         return out

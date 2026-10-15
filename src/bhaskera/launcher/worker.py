@@ -46,11 +46,20 @@ def worker_fn(cfg_dict: dict) -> None:
     logger.info(f"[rank {rank}/{world_size}] GPU {local_rank} ready")
 
     dataset = ray.train.get_dataset_shard("train")
+    # "val" is only present in the TorchTrainer datasets dict when
+    # data.val_tokenized_path was configured (see launcher/train.py) —
+    # gate on the same condition here rather than probing get_dataset_shard
+    # for a KeyError.
+    val_dataset = (
+        ray.train.get_dataset_shard("val")
+        if getattr(cfg.data, "val_tokenized_path", None)
+        else None
+    )
 
     strategy    = cfg.training.distributed.strategy.lower()
     load_device = torch.device("cpu") if strategy == "fsdp" else device
 
-    model, profile = build_model(cfg, load_device)
+    model, profile = build_model(cfg, load_device, rank=rank)
 
     if rank == 0:
         logger.info(
@@ -70,6 +79,7 @@ def worker_fn(cfg_dict: dict) -> None:
     train(
         model=model,
         dataset=dataset,
+        val_dataset=val_dataset,
         cfg=cfg,
         profile=profile,
         rank=rank,

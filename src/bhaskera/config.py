@@ -198,6 +198,14 @@ class TrainingConfig:
     max_grad_skip_steps: int = 100
     distributed: DistributedConfig = field(default_factory=DistributedConfig)
 
+    # ── Eval / MLPerf-style convergence early-stop ──────────────────────────
+    # eval_steps=0 disables periodic eval entirely (default — no behavior
+    # change for existing configs). Requires data.val_tokenized_path to be
+    # set; a value here with no val cache configured is a no-op.
+    eval_steps: int = 0
+    eval_batch_size: int = 0                  # 0 -> reuse training batch_size
+    target_eval_loss: Optional[float] = None  # stop once eval_loss <= this
+
 
 @dataclass
 class CheckpointConfig:
@@ -370,6 +378,13 @@ def _dict_to_config(raw: dict) -> Config:
             deterministic=bool(train_raw.get("deterministic", False)),
             grad_clip=train_raw.get("grad_clip", 1.0),
             max_grad_skip_steps=int(train_raw.get("max_grad_skip_steps", 100)),
+            eval_steps=int(train_raw.get("eval_steps", 0)),
+            eval_batch_size=int(train_raw.get("eval_batch_size", 0)),
+            target_eval_loss=(
+                float(train_raw["target_eval_loss"])
+                if train_raw.get("target_eval_loss") is not None
+                else None
+            ),
             distributed=DistributedConfig(
                 strategy=str(dist_raw.get("strategy", "fsdp")),
                 fsdp=FSDPConfig(

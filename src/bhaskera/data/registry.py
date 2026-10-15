@@ -137,3 +137,19 @@ def build_ray_dataset(cfg, world_size: int = 1) -> ray.data.Dataset:
         )
     logger.info(f"Building Ray dataset: '{name}' (world_size={world_size})")
     return REGISTRY[name](cfg, world_size=world_size)
+
+
+def build_val_ray_dataset(cfg, world_size: int = 1) -> Optional[ray.data.Dataset]:
+    """
+    Build the validation dataset from cfg.data.val_tokenized_path, or None
+    if not configured. Every worker gets the full val set (not sharded like
+    train) — callers must not split it, see launcher/train.py's DataConfig.
+    """
+    val_path = getattr(cfg.data, "val_tokenized_path", None)
+    if not val_path:
+        return None
+
+    from .tokenize import load_tokenized
+
+    logger.info(f"Building validation dataset from {val_path!r} (world_size={world_size})")
+    return load_tokenized(val_path, cfg, world_size)

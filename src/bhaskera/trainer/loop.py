@@ -10,6 +10,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import os
+import pickle
 from typing import Optional
 
 import torch
@@ -89,6 +91,54 @@ def _set_grad_sync(model: torch.nn.Module, enabled: bool) -> None:
     # ── Non-distributed: nothing to do ──────────────────────────────
 
 
+def _flops_params(model: torch.nn.Module, profile: ModelProfile, total_params: int) -> int:
+    """
+    Effective parameter count for ThroughputTracker's 6*N*D FLOPs estimate.
+
+    For a dense model every parameter runs on every token, so N = total_params.
+    For MoE that overstates FLOPs — and understates MFU — by roughly
+    num_experts / (experts_per_token + num_shared_experts), since only a
+    subset of routed experts (plus any always-on shared experts) actually
+    execute per token. Observed on Qwen3-30B-A3B (128 experts, top-8): using
+    total_params reports MFU ~10x too low, exactly the same class of error as
+    the earlier /world_size double-division bug — a meter that silently
+    reads wrong rather than raising, so it looks trustworthy until compared
+    against a hand computation.
+
+    profile.expert_modules (from introspect.py's _find_moe_components) is a
+    flat list mixing routed *and* shared expert instances — the two aren't
+    tracked separately at the module level — so both the active and total
+    instance counts below include num_shared_experts on top of the routed
+    figures, keeping numerator and denominator on the same basis.
+
+    Falls back to total_params (the old, dense-shaped behaviour) whenever
+    introspection couldn't determine the routing shape, rather than guessing
+    a fraction from incomplete data.
+    """
+    if not profile.is_moe or not profile.expert_modules:
+        return total_params
+
+    num_experts   = int(profile.num_experts)       # routed experts/layer (config-derived)
+    active_routed = int(profile.experts_per_token)  # top-k routed experts/token
+    num_shared    = max(0, int(profile.num_shared_experts))
+
+    if num_experts <= 0 or active_routed <= 0:
+        return total_params
+
+    active_routed = min(active_routed, num_experts)
+    total_instances  = num_experts + num_shared
+    active_instances = active_routed + num_shared
+
+    expert_params = sum(p.numel() for m in profile.expert_modules for p in m.parameters())
+    non_expert_params = total_params - expert_params
+    if non_expert_params < 0:
+        # expert_modules double-counted something (e.g. a module reachable
+        # under two names) — don't propagate a bad estimate.
+        return total_params
+
+    return non_expert_params + expert_params * active_instances // total_instances
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -103,6 +153,7 @@ def train(
     local_rank: int,
     tracker=None,
     world_size: int = 1,
+    val_dataset=None,
 ) -> None:
     """
     Run the training loop.
@@ -116,6 +167,9 @@ def train(
         local_rank:  Local GPU index on this host.
         tracker:     Optional logger (MultiLogger from build_logger).
         world_size:  Total number of training ranks.
+        val_dataset: Optional Ray Dataset shard for periodic eval /
+                     MLPerf-style convergence early-stop (cfg.training.eval_steps,
+                     target_eval_loss). None if data.val_tokenized_path isn't set.
     """
     device    = torch.device(f"cuda:{local_rank}")
     train_cfg = cfg.training
@@ -129,6 +183,7 @@ def train(
         step = maybe_resume(model, optimizer, ckpt_cfg.save_dir)
         model.train()
     best_ckpts: list[tuple[float, str]] = []
+    grad_skip_count = 0  # consecutive non-finite-grad_norm steps; see max_grad_skip_steps
 
     # ── Throughput / MFU tracker ────────────────────────────────────
     metrics_cfg    = getattr(getattr(cfg, "monitoring", None), "metrics", None)
@@ -137,7 +192,7 @@ def train(
 
     total_params     = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    params_for_flops = total_params or trainable_params
+    params_for_flops = _flops_params(model, profile, total_params) or trainable_params
 
     throughput = ThroughputTracker(
         params_for_flops=params_for_flops,
@@ -151,19 +206,21 @@ def train(
         tracker.log({
             "model/total_params":     float(total_params),
             "model/trainable_params": float(trainable_params),
+            "model/active_params":    float(params_for_flops),
             "model/world_size":       float(world_size),
         }, step=0)
 
     for epoch in range(train_cfg.num_epochs):
-        step, best_ckpts = _run_epoch(
-            model=model, dataset=dataset, optimizer=optimizer,
+        step, best_ckpts, stop_early, grad_skip_count = _run_epoch(
+            model=model, dataset=dataset, val_dataset=val_dataset,
+            optimizer=optimizer,
             scheduler=scheduler, cfg=cfg, profile=profile,
             rank=rank, local_rank=local_rank, device=device,
             epoch=epoch, step=step, tracker=tracker,
             best_ckpts=best_ckpts, throughput=throughput,
-            world_size=world_size,
+            world_size=world_size, grad_skip_count=grad_skip_count,
         )
-        if step >= train_cfg.max_steps:
+        if step >= train_cfg.max_steps or stop_early:
             break
 
     if tracker:
@@ -173,13 +230,116 @@ def train(
 
 
 # ---------------------------------------------------------------------------
+# Validation (periodic eval + MLPerf-style convergence early-stop)
+# ---------------------------------------------------------------------------
+
+def _run_eval(
+    *, model, val_dataset, cfg, device, autocast_dtype, use_autocast,
+) -> Optional[float]:
+    """
+    One full pass over this rank's local validation shard, no backward.
+
+    Returns the cross-rank sample-weighted mean loss (identical value on
+    every rank, via all_reduce) so every rank compares against
+    target_eval_loss with the same number and either all stop or all
+    continue — a per-rank-only decision would desync the collectives on
+    the next training step. Returns None if no rank saw any eval batches
+    (e.g. an empty val shard), rather than lying with a 0.0 loss that
+    would trivially — and falsely — satisfy any early-stop target.
+    """
+    train_cfg = cfg.training
+    eval_bs   = train_cfg.eval_batch_size or train_cfg.batch_size
+
+    was_training = model.training
+    model.eval()
+
+    val_loader = val_dataset.iter_torch_batches(
+        batch_size=eval_bs,
+        drop_last=False,
+        dtypes={
+            "input_ids":      torch.long,
+            "attention_mask": torch.long,
+            "labels":         torch.long,
+        },
+        device=device,
+    )
+
+    total_loss = 0.0
+    n_batches  = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            autocast_ctx = (
+                torch.autocast("cuda", dtype=autocast_dtype)
+                if use_autocast
+                else contextlib.nullcontext()
+            )
+            with autocast_ctx:
+                out = model(
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    labels=batch["labels"],
+                    use_cache=False,
+                )
+            total_loss += out.loss.item()
+            n_batches  += 1
+
+    if was_training:
+        model.train()
+
+    if dist.is_available() and dist.is_initialized():
+        sum_and_count = torch.tensor(
+            [total_loss, float(n_batches)], device=device, dtype=torch.float32,
+        )
+        dist.all_reduce(sum_and_count, op=dist.ReduceOp.SUM)
+        total_loss_all, n_batches_all = sum_and_count.tolist()
+    else:
+        total_loss_all, n_batches_all = total_loss, float(n_batches)
+
+    if n_batches_all == 0:
+        return None
+
+    return total_loss_all / n_batches_all
+
+
+def _log_oom_breakdown(snapshot: dict, dump_path: str) -> None:
+    """TEMPORARY diagnostic (see BHASKERA_PROFILE_OOM above). Aggregates
+    live allocated blocks by first non-torch-internal frame in their
+    allocation call stack, largest first -- answers "what line of code is
+    holding the memory", not just "how much is used"."""
+    by_stack: dict = {}
+    total_active = 0
+    for seg in snapshot.get("segments", []):
+        for blk in seg.get("blocks", []):
+            if blk.get("state") != "active_allocated":
+                continue
+            size = blk.get("size", 0)
+            total_active += size
+            site = "unknown"
+            for f in blk.get("frames", []):
+                fname = f.get("filename", "")
+                if any(k in fname for k in ("bhaskera", "transformers", "peft", "liger_kernel")):
+                    site = f"{fname.split('/')[-1]}:{f.get('line', '?')} in {f.get('name', '?')}"
+                    break
+            by_stack.setdefault(site, [0, 0])
+            by_stack[site][0] += size
+            by_stack[site][1] += 1
+
+    ranked = sorted(by_stack.items(), key=lambda kv: -kv[1][0])
+    logger.error(f"OOM allocation breakdown (snapshot: {dump_path}, "
+                 f"total active: {total_active/1e9:.2f}GB):")
+    for site, (size, count) in ranked[:25]:
+        logger.error(f"  {size/1e9:7.3f}GB  ({count:5d} allocs)  {site}")
+
+
+# ---------------------------------------------------------------------------
 # Single epoch
 # ---------------------------------------------------------------------------
 
 def _run_epoch(
-    *, model, dataset, optimizer, scheduler, cfg, profile,
+    *, model, dataset, val_dataset, optimizer, scheduler, cfg, profile,
     rank, local_rank, device, epoch, step, tracker, best_ckpts,
     throughput: Optional[ThroughputTracker], world_size: int,
+    grad_skip_count: int = 0,
 ):
     train_cfg  = cfg.training
     ckpt_cfg   = cfg.checkpoint
@@ -250,8 +410,9 @@ def _run_epoch(
     #   _set_grad_sync() above, which dispatches by wrapper type and
     #   safely falls back when neither applies (single-GPU, static_graph DDP).
     loader_iter = iter(loader)
+    stop_early  = False
 
-    while step < train_cfg.max_steps:
+    while step < train_cfg.max_steps and not stop_early:
         micro_losses:     list[torch.Tensor] = []
         micro_aux_losses: list[torch.Tensor] = []
         window_tokens  = 0
@@ -302,16 +463,38 @@ def _run_epoch(
                 if profile.is_moe and profile.has_aux_loss:
                     forward_kwargs["output_router_logits"] = True
 
-                out       = model(**forward_kwargs)
-                main_loss = out.loss
-                aux_loss  = extract_aux_loss(out, profile)
+                # TEMPORARY diagnostic for the Qwen3-235B-A22B forward+backward
+                # OOM (~78GB, invariant across world_size/expert-sharding/
+                # seq_len -- see engineering report §7.3). Env-gated, no-op
+                # unless BHASKERA_PROFILE_OOM=1; dumps an allocation-site
+                # breakdown on OOM instead of just crashing. Safe to remove
+                # once that issue is resolved.
+                _profile_oom = os.environ.get("BHASKERA_PROFILE_OOM") == "1" and step == 0 and micro_step == 0
+                if _profile_oom:
+                    torch.cuda.memory._record_memory_history(max_entries=200_000)
 
-                if aux_loss is not None:
-                    total_loss = (main_loss + aux_loss_weight * aux_loss) / grad_accum
-                else:
-                    total_loss = main_loss / grad_accum
+                try:
+                    out       = model(**forward_kwargs)
+                    main_loss = out.loss
+                    aux_loss  = extract_aux_loss(out, profile)
 
-                total_loss.backward()
+                    if aux_loss is not None:
+                        total_loss = (main_loss + aux_loss_weight * aux_loss) / grad_accum
+                    else:
+                        total_loss = main_loss / grad_accum
+
+                    total_loss.backward()
+                except torch.OutOfMemoryError:
+                    if _profile_oom:
+                        snap = torch.cuda.memory._snapshot()
+                        path = f"/tmp/oom_snapshot_rank{dist.get_rank() if dist.is_initialized() else 0}.pickle"
+                        with open(path, "wb") as f:
+                            pickle.dump(snap, f)
+                        _log_oom_breakdown(snap, path)
+                    raise
+                finally:
+                    if _profile_oom:
+                        torch.cuda.memory._record_memory_history(enabled=None)
 
             micro_losses.append(main_loss.detach())
             if aux_loss is not None:
@@ -338,14 +521,32 @@ def _run_epoch(
             ).item()
 
         if not math.isfinite(grad_norm):
+            grad_skip_count += 1
+            max_skips = getattr(train_cfg, "max_grad_skip_steps", 100)
             logger.warning(
                 f"[rank {rank}][epoch {epoch}][step {step}] "
-                f"Non-finite grad_norm={grad_norm} — skipping optimizer step"
+                f"Non-finite grad_norm={grad_norm} — skipping optimizer step "
+                f"({grad_skip_count}/{max_skips} consecutive skips)"
             )
             optimizer.zero_grad(set_to_none=True)
             if tracker:
                 tracker.log({"train/non_finite_grad": 1.0}, step=step)
+            if max_skips > 0 and grad_skip_count > max_skips:
+                # Previously this field was parsed from config and never
+                # consulted anywhere — a run could skip every single step
+                # forever, burning the full node allocation while silently
+                # training on nothing. max_grad_skip_steps now bounds how
+                # many *consecutive* non-finite steps are tolerated before
+                # surfacing loudly instead of quietly wasting the rest of
+                # the wall-clock budget.
+                raise RuntimeError(
+                    f"[rank {rank}] {grad_skip_count} consecutive non-finite "
+                    f"grad_norm steps, exceeding max_grad_skip_steps={max_skips}. "
+                    "Training is not making progress — check for a bad LR, a "
+                    "corrupt batch, or numerical instability before resuming."
+                )
             continue
+        grad_skip_count = 0  # any finite step resets the consecutive counter
 
         optimizer.step()
         scheduler.step()
@@ -422,8 +623,36 @@ def _run_epoch(
             if sysm:
                 tracker.log(sysm, step=step)
 
+        # ── Periodic eval / MLPerf-style convergence early-stop ──────
+        eval_steps = train_cfg.eval_steps
+        if val_dataset is not None and eval_steps > 0 and step % eval_steps == 0:
+            eval_loss = _run_eval(
+                model=model, val_dataset=val_dataset, cfg=cfg,
+                device=device, autocast_dtype=autocast_dtype,
+                use_autocast=use_autocast,
+            )
+            if eval_loss is None:
+                if rank == 0:
+                    logger.warning(
+                        f"[epoch {epoch}][step {step}] eval skipped: "
+                        "no rank saw any validation batches"
+                    )
+            else:
+                if rank == 0:
+                    logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f}")
+                    if tracker:
+                        tracker.log({"eval/loss": eval_loss}, step=step)
+                target = train_cfg.target_eval_loss
+                if target is not None and eval_loss <= target:
+                    stop_early = True
+                    if rank == 0:
+                        logger.info(
+                            f"eval_loss {eval_loss:.4f} <= target_eval_loss {target} "
+                            "— stopping early (convergence target reached)"
+                        )
+
     if epoch_steps == 0:
-        return step, best_ckpts
+        return step, best_ckpts, stop_early, grad_skip_count
 
     avg_loss = epoch_loss / epoch_steps
     if rank == 0:
@@ -447,4 +676,4 @@ def _run_epoch(
             rank=rank, best_ckpts=best_ckpts,
         )
 
-    return step, best_ckpts
+    return step, best_ckpts, stop_early, grad_skip_count

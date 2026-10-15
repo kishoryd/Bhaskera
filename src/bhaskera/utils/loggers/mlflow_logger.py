@@ -141,6 +141,11 @@ class MLflowLogger(BaseLogger):
         run_name = getattr(log_cfg, "run_name", "run")
         artifacts_every = int(getattr(log_cfg, "mlflow_log_artifacts_every", 50) or 50)
         self._artifacts_every = max(1, artifacts_every)
+        # log_gpu_every_n_steps previously only affected WandbLogger — MLflow
+        # runs never got this periodic system/GPU snapshot merged in at all,
+        # regardless of what the field was set to. Mirrored from
+        # WandbLogger.log()'s identical pattern for parity across backends.
+        self._gpu_every_n = max(1, int(getattr(log_cfg, "log_gpu_every_n_steps", 10) or 10))
 
         # Ensure file-backed stores exist on disk before MLflow tries to use them.
         if uri.startswith("file://"):
@@ -270,6 +275,12 @@ class MLflowLogger(BaseLogger):
     def log(self, metrics: dict[str, Any], step: int) -> None:
         if not self._available or not metrics:
             return
+        # Same cadence/merge WandbLogger.log() has always applied — MLflow
+        # runs previously never got this, so log_gpu_every_n_steps was a
+        # no-op for any run configured with tracker: "mlflow".
+        if int(step) % self._gpu_every_n == 0:
+            from bhaskera.utils.system_stats import system_stats, cuda_memory_stats
+            metrics = {**metrics, **system_stats(), **cuda_memory_stats()}
         # Local append happens synchronously — it's cheap (one file write)
         # and gives tail -f users instant feedback.
         if self._log_file is not None:

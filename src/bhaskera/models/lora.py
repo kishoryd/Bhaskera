@@ -53,7 +53,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from bhaskera.introspect import ModelProfile
+from bhaskera.introspect import _EXPERT_LEAF_NAMES, ModelProfile
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,19 @@ def apply_lora(model: nn.Module, cfg, profile: ModelProfile) -> nn.Module:
                     target_modules.append(short_name)
             logger.info(f"Added expert LoRA targets: {expert_linears}")
 
+    # ── MoE: keep experts out unless include_experts ────────────────
+    # PEFT matches target_modules by module *name*, so "gate_proj"/"up_proj"/
+    # "down_proj" (auto targets for the attention+MLP of a dense layer) also
+    # hit every expert's linears of the same names. include_experts: false
+    # used to only skip *adding* expert names, so every Qwen3-MoE run silently
+    # trained LoRA on all experts (12,032 x 3 adapters on Qwen3-235B-A22B).
+    # PEFT full-matches a string exclude_modules against each module path.
+    exclude_modules: str | None = None
+    if profile.is_moe and profile.expert_modules and not getattr(cfg.lora, "include_experts", False):
+        containers = "|".join(sorted(_EXPERT_LEAF_NAMES))
+        exclude_modules = rf"(.*\.)?({containers})\.\d+\..*"
+        logger.info(f"LoRA: excluding expert modules (include_experts=false): {exclude_modules}")
+
     # ── Build PEFT config ───────────────────────────────────────────
     peft_kwargs = dict(
         task_type=TaskType.CAUSAL_LM,
@@ -98,6 +111,8 @@ def apply_lora(model: nn.Module, cfg, profile: ModelProfile) -> nn.Module:
     )
     if target_modules is not None:
         peft_kwargs["target_modules"] = target_modules
+    if exclude_modules is not None:
+        peft_kwargs["exclude_modules"] = exclude_modules
 
     modules_to_save = getattr(cfg.lora, "modules_to_save", [])
     if modules_to_save:

@@ -1,105 +1,64 @@
-# Bhaskera
+# Branch: `fsdp-moe-fixes`
 
-Ray-native distributed LLM training and inference framework.
+## Summary
 
-Bhaskera wraps PyTorch's FSDP2 / DDP, HuggingFace `transformers`, PEFT-based LoRA, and a persistent Ray Data tokenisation pipeline behind a YAML-driven CLI. It targets supervised fine-tuning of dense and Mixture-of-Experts (MoE) causal language models on single-node and multi-node SLURM clusters, with built-in MLflow and Ray Dashboard observability.
+Fixes that make Mixture-of-Experts (MoE) models train correctly under FSDP2, plus a six-model dense-vs-MoE benchmark suite. Before these fixes, Qwen3-235B-A22B ran out of GPU memory at every node count, and Qwen3-30B-A3B failed on its first step.
 
-Version: `2.2.0` (Python `>=3.11`).
+`feature/hsdp`, `feature/expert-parallel` and `feature/robustness` are built on this branch. Merge this branch first.
 
-## What it does
+## Changes
 
-- **Distributed training** with FSDP2 (`torch.distributed._composable.fsdp.fully_shard`) or DDP, selected per-run from YAML.
-- **MoE-aware sharding** — per-expert FSDP units, per-expert activation checkpointing, frozen routers, and Switch-Transformer-style auxiliary load-balancing loss computed from `router_logits`.
-- **LoRA fine-tuning** via PEFT, with strategy-gated dtype handling (cast to base dtype under FSDP2 to satisfy uniform-shard-init; fp32 master weights under DDP).
-- **Persistent tokenisation cache** — `bhaskera-tokenize` writes Parquet shards keyed by `(model_name, seq_len, dataset_name, format, format_options)`; training reads the cache directly.
-- **Pluggable chat formats** — built-in renderers for `chatml`, `alpaca`, `sharegpt`; custom formats register via `@register_format`.
-- **DCP-based sharded checkpointing** with atomic `.complete` sentinel, version-aware between PyTorch < 2.5 and ≥ 2.5.
-- **Architecture-agnostic introspection** (`bhaskera.introspect`) — walks the loaded model once to discover decoder layer class, expert containers, routers, LoRA targets, and aux-loss support. No hardcoded class names.
-- **Liger Kernel integration** — Triton-fused RMSNorm / RoPE / SwiGLU / CrossEntropy, applied via `_apply_liger_kernel_to_instance` before LoRA and FSDP wrap.
-- **Observability** — MLflow push-based experiment tracking (file-backed store under `$HOME/mlflow-runs`), W&B (optional), and Ray Dashboard with Prometheus-formatted metrics.
-- **Inference CLI** — `bhaskera-infer` with config-driven generation, optional TurboQuant KV cache and speculative decoding hooks declared in the config schema.
+### MoE training
 
-## Repository layout
+| Change | Problem solved | Files |
+|---|---|---|
+| **Checkpoint whole decoder layers for MoE models.** Activation checkpointing now wraps each full decoder layer, as it already did for dense models. | Only the expert MLPs were checkpointed, so attention, LoRA, router and token-dispatch activations were kept for every layer. On Qwen3-235B-A22B this used 65–90 GB per GPU, and adding nodes did not reduce it. | `distributed/activation_ckpt.py` |
+| **Reuse the forward pass's expert selection during recompute.** The recompute uses the same top-k experts that the forward pass chose. Routing weights are still recomputed, so gradients are unchanged. | bf16 router scores can differ slightly between the forward pass and the recompute. When two experts score almost equally, the top-k choice can flip, and PyTorch raises `CheckpointError`. | `distributed/moe_routing.py` (new) |
+| **Honour `lora.include_experts: false`.** Expert modules are excluded with PEFT `exclude_modules`. | PEFT matches modules by name. Expert layers share the names `gate_proj`, `up_proj` and `down_proj`, so every expert received adapters (about 36,000 on Qwen3-235B-A22B). | `models/lora.py` |
+| **Load the model once per job.** Under FSDP, rank 0 loads the checkpoint; the other ranks build the model on the `meta` device. | Every GPU process loaded a full copy into host memory: two copies per node, each about 470 GB for Qwen3-235B-A22B. | `models/loader.py` |
+| **Broadcast weights in buckets after sharding.** Rank 0 sends fixed-size buckets, and each rank keeps only its own shard. Peak extra memory is one bucket. | DCP `broadcast_from_rank0` held the full unsharded model on every GPU. | `distributed/fsdp.py` |
 
-```
-Bhaskera-dashboard/
-├── configs/                      # YAML run configs (one per scenario)
-├── scripts/
-│   └── submit.sh                 # SLURM submission script
-├── src/bhaskera/
-│   ├── config.py                 # dataclass schema + YAML loader
-│   ├── introspect.py             # ModelProfile auto-detection
-│   ├── data/                     # Ray Data datasets, formats, tokenisation
-│   ├── distributed/              # FSDP2 / DDP wrap + DCP checkpoints
-│   ├── launcher/                 # CLI entry points
-│   ├── models/                   # HF loader + LoRA application
-│   ├── trainer/                  # training loop, MoE, optim, precision
-│   └── utils/                    # telemetry + experiment trackers
-├── bhaskera-activate.sh          # generated by setup.sh — sources venv + CUDA
-├── pyproject.toml
-├── requirements.txt
-└── setup.sh                      # one-shot installer
-```
+### Metrics, data and tooling
 
-## Installation
+| Change | Files |
+|---|---|
+| **MFU and tokens/s are no longer divided by `world_size` twice.** Reported MFU was too low by a factor of the GPU count: a 16-GPU run showed 0.18% instead of 2.87%. | `utils/throughput.py` |
+| **Tokenisation spills to scratch instead of the node-local `/tmp`**, which ran out of space. | `launcher/tokenize.py` |
+| **Rows rejected by a strict chat template (Mistral, gpt-oss) fall back to ChatML** instead of aborting the whole corpus. | `data/formats/builtins.py` |
+| **The validation set is sharded only when it has at least as many rows as workers.** | `launcher/train.py` |
+| **`BHASKERA_PROFILE_OOM=1` prints a CUDA allocator breakdown on out-of-memory.** MLflow now honours `log_gpu_every_n_steps`. | `trainer/loop.py`, `utils/loggers/mlflow_logger.py` |
+| **`.gitignore` patterns are anchored to the repository root** (`/models/`, `/data1/`). The old `models/` pattern also excluded `src/bhaskera/models/`. | `.gitignore` |
 
-`setup.sh` detects CUDA via a layered probe (env vars → `CUDA_HOME` → `nvcc` → `nvidia-smi` → Spack → SLURM probe), maps the version to a PyTorch wheel tag (`cu118` / `cu121` / `cu124`), creates a Python 3.11 venv with `uv`, installs the matched torch wheel first, then installs Bhaskera with `[wandb,mlflow]` extras, and finally builds `flash-attn` out-of-band with `--no-build-isolation` (skipped on CPU-only setups; failure is non-fatal).
+### Benchmark suite
+
+`configs/*_8node_nemotron.yaml` define six models trained under identical conditions: Nemotron-Cascade-2-SFT-Data (chat), `seq_len` 4096, LoRA r16/α32, 8 nodes × 2 GPUs.
+
+| Model | Parameters | Architecture | Strategy |
+|---|---|---|---|
+| Qwen3-14B | 14.8B | Dense | DDP |
+| Llama-3.3-70B-Instruct | 70B | Dense | FSDP |
+| Mistral-Large-Instruct-2411 | 123B | Dense | FSDP |
+| Qwen3-30B-A3B-Instruct-2507 | 30B (3B active) | MoE | FSDP |
+| gpt-oss-120b | 120B (5.1B active) | MoE | FSDP |
+| Qwen3-235B-A22B-Instruct-2507 | 235B (22B active) | MoE | FSDP |
+
+The three Qwen3 models share a tokenizer, so they form a controlled dense-vs-MoE comparison. Each model has a tokenization config (`configs/tokenize_<model>_nemotron.yaml`) and a submit script (`scripts/submit_<model>_<strategy>_8_nemotron.sh`). `scripts/submit_nemotron_pipeline.sh` runs all six.
+
+## Configuration guidance
+
+- `data.seq_len` is part of the tokenization cache key. If you change it, re-tokenize and update `tokenized_path` and `val_tokenized_path`.
+- Set `seq_len` to fit the data, not the model's maximum context. At 16384, about 80% of each Nemotron sequence was padding.
+- Keep `fsdp.shard_experts_individually: false` for models with 128 experts. Enabling it creates thousands of small FSDP units, and the NCCL collectives hang.
+
+## Validation
 
 ```bash
-bash setup.sh
-# overrides:
-BHASKERA_CUDA=12.4 bash setup.sh
-BHASKERA_VENV=/path bash setup.sh
+python -m bhaskera.distributed.tests.test_moe_routing
 ```
 
-The script writes `bhaskera-activate.sh` to the project root — source this at the top of SLURM job scripts to load CUDA and activate the venv in one line.
+CPU, fp32, Qwen3-MoE and Mixtral:
+- With injected recompute noise, the unpatched model raises `CheckpointError` and the patched model trains.
+- Gradients with activation checkpointing exactly match gradients without it.
+- The patched forward pass is bitwise identical to the Hugging Face implementation.
 
-## CLI entry points
-
-Declared in `pyproject.toml` under `[project.scripts]`:
-
-| Command | Module | Purpose |
-|---|---|---|
-| `bhaskera-train` | `bhaskera.launcher.train` | Ray Train driver — submits `TorchTrainer` with `worker_fn` per GPU |
-| `bhaskera-tokenize` | `bhaskera.launcher.tokenize` | Tokenise a dataset once and persist to Parquet cache |
-| `bhaskera-infer` | `bhaskera.launcher.infer` | Single-prompt or batch generation from a checkpoint |
-| `bhaskera-diag` | `bhaskera.launcher.diagnostics` | NCCL all-reduce + bandwidth check |
-| `bhaskera-dashboard` | `bhaskera.launcher.dashboard` | Start / stop the MLflow UI on the login node |
-
-## Configuration
-
-All runs are driven by a single YAML file passed via `--config`. The schema is defined as dataclasses in `src/bhaskera/config.py` and loaded by `load_config(path)`. Top-level sections:
-
-- `model` — name, dtype, attention implementation, `trust_remote_code`, `use_liger_kernel`
-- `data` — dataset name, sequence length, tokenizer cache paths, format renderer, local source paths
-- `lora` — rank, alpha, dropout, target modules (`["auto"]` triggers introspection), MoE knobs
-- `moe` — aux loss weights, router freezing, expert utilisation logging
-- `training` — batch size, gradient accumulation, LR schedule, distributed strategy block
-- `training.distributed` — `strategy: fsdp | ddp` plus an `fsdp` and `ddp` sub-block
-- `checkpoint` — save directory, interval, retention
-- `logging` — tracker selection (`wandb`, `mlflow`, `ray`, list, or `none`), project, run name
-- `monitoring` — Ray Dashboard host/port, metrics export port, per-step metric toggles
-- `inference` — generation params, KV cache mode, TurboQuant and speculative decoding sub-configs
-
-See `configs/` for working examples covering Param2-17B-MoE on 4 GPUs (2 nodes × 2), Qwen2.5-14B dense with FSDP / DDP / hybrid-shard variants, and local ChatML SFT.
-
-## Typical workflow
-
-1. **Tokenise once.** `bhaskera-tokenize --config configs/tokenize.yaml [--split both]` writes a Parquet shard set under `cfg.data.cache_dir` and prints a `tokenized_path:` snippet.
-2. **Paste the path** into the training config's `data.tokenized_path` (and `data.val_tokenized_path` if you tokenised a val split).
-3. **Train.** `bhaskera-train --config configs/your_run.yaml --num-workers <N>`. On SLURM, `scripts/submit.sh` bootstraps the Ray cluster and forwards to the same command.
-4. **Monitor.** Start `bhaskera-dashboard` on the login node for the MLflow UI; Ray Dashboard is exposed on `monitoring.dashboard_port` (default 8265).
-5. **Infer.** `bhaskera-infer --config configs/inference.yaml --prompt "..."`.
-
-## Dependencies
-
-Core runtime (from `pyproject.toml`):
-
-- `torch>=2.4`, `transformers>=4.45,<5.0.0`, `ray[train,data,default]>=2.10`
-- `peft>=0.10`, `accelerate>=0.20`, `datasets>=2.0`, `safetensors>=0.4`
-- `liger-kernel>=0.5`, `nvidia-ml-py>=12.535`
-- `omegaconf>=2.3.0`, `pyyaml>=6.0`, `numpy`, `pandas`, `psutil`, `tqdm`
-
-Optional extras: `wandb`, `mlflow`, `flash` (`flash-attn>=2.5`), `inference` (`scipy`), `dev` (`pytest`, `ruff`).
-
-
+Qwen3-235B-A22B trains at 8, 32 and 64 nodes with these changes.
