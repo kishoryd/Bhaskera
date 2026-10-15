@@ -1,5 +1,8 @@
 # =============================================================================
 # Bhaskera — Llama-2-70B (fused-QKV) | LoRA SFT on SCROLLS GovReport-8k
+# 
+#Sowmya Shree Nagesh
+#
 #
 # Port of the MLPerf Training v4.0 llama2_70b_lora reference benchmark
 # (JuniperNetworks/benchmarks/llama2_70b_lora) onto the Bhaskera/Ray
