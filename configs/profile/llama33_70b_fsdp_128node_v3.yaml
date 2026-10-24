@@ -58,7 +58,7 @@ training:
   grad_accum: 1                  # same sequences per step as the earlier rerun
   lr: 1.0e-4
   weight_decay: 0.0
-  max_steps: 8
+  max_steps: 20
   num_epochs: 3
   warmup_steps: 50
   max_grad_norm: 1.0
