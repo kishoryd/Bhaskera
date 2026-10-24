@@ -154,6 +154,10 @@ class FSDPConfig:
     # compute, leaving every layer blocked on its own gather.
     forward_prefetch: bool = False
     backward_prefetch: bool = False
+    # Each rank reads its own slice of every weight straight from the checkpoint's
+    # safetensors files instead of rank 0 reading everything and broadcasting it
+    # (distributed/fsdp.py). Falls back to the broadcast for anything not in the files.
+    sharded_load: bool = True
 
 
 @dataclass
@@ -409,6 +413,7 @@ def _dict_to_config(raw: dict) -> Config:
                     root_reshard_after_forward=bool(
                         fsdp_raw.get("root_reshard_after_forward", False)
                     ),
+                    sharded_load=bool(fsdp_raw.get("sharded_load", True)),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
                 ),
