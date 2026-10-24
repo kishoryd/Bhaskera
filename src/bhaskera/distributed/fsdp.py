@@ -106,12 +106,42 @@ def wrap_fsdp2(
         )
 
     # Step 2 — per-decoder-layer sharding.
+    #
+    # What each layer keeps between its forward and its backward decides how
+    # expensive the backward all-gather is (measured, Llama-3.3-70B on 128 nodes:
+    # 80% of every step is weight all-gathers, half of them in backward):
+    #   True   -> back to a 1/world shard; backward re-gathers across all ranks.
+    #   int K  -> keep a 1/K shard; backward gathers inside a block of K ranks,
+    #             a much shorter ring (fsdp.reshard_after_forward_group).
+    #   False  -> keep the whole layer; no backward gather at all. Used for the
+    #             last fsdp.keep_gathered_layers layers, which backward needs first.
+    rank_world = dist.get_world_size()
+    group = int(getattr(fsdp_cfg, "reshard_after_forward_group", 0) or 0)
+    if group and not (1 < group < rank_world and rank_world % group == 0):
+        logger.warning(
+            f"fsdp.reshard_after_forward_group={group} must divide world size "
+            f"{rank_world} and lie strictly between 1 and it; using full resharding"
+        )
+        group = 0
+    keep_last = max(0, int(getattr(fsdp_cfg, "keep_gathered_layers", 0) or 0))
+    decoder_layers = (
+        [m for m in model.modules() if isinstance(m, decoder_cls)] if decoder_cls is not None else []
+    )
     layers: list[nn.Module] = []
     if decoder_cls is not None:
-        for module in model.modules():
-            if isinstance(module, decoder_cls):
-                fully_shard(module, mp_policy=mp_policy, offload_policy=offload_policy)
-                layers.append(module)
+        for i, module in enumerate(decoder_layers):
+            if i >= len(decoder_layers) - keep_last:
+                raf = False
+            else:
+                raf = group if group else True
+            fully_shard(module, mp_policy=mp_policy, offload_policy=offload_policy,
+                        reshard_after_forward=raf)
+            layers.append(module)
+        if group or keep_last:
+            logger.info(
+                f"FSDP2: backward all-gather over blocks of {group or rank_world} ranks; "
+                f"last {min(keep_last, len(layers))} layers kept gathered between forward and backward"
+            )
         logger.info(
             f"FSDP2: per-layer sharding applied to {len(layers)} "
             f"{decoder_cls.__name__} layers"

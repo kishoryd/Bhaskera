@@ -62,6 +62,24 @@ The launch script uses `--capture-range-end=stop-shutdown`: when the capture end
 
 Tested once on the cluster (job 96499, Qwen3-14B, 8 nodes) with plain `stop`: the capture opened and closed and six nodes wrote full reports. `stop-shutdown`, the flush delay and the start-up timestamps have not been run yet.
 
+### FSDP communication: findings and fixes (branch `profile/qwen3-14b-nsys`)
+
+Measured on Llama-3.3-70B (LoRA, FSDP2, 2 x A100 80GB PCIe per node):
+
+* **Network:** one 100 Gb/s InfiniBand card per node, attached to the other CPU socket from both GPUs. NCCL uses InfiniBand, but GPUDirect RDMA stays disabled even with `NCCL_NET_GDR_LEVEL=SYS`, so every byte is staged through host memory. Slurm runs `topology/flat`, so `--switches` placement is not available.
+* **Weight all-gathers dominate at scale:** at 128 nodes they take 80% of GPU time (161 per GPU per step, ~308 ms each). Each GPU receives the whole model twice per step whatever the node count, and the per-link rate falls from ~10 GB/s at 16 ranks to ~5.7 GB/s at 256.
+* **NCCL settings do not help:** `Simple` (default) is fastest; `LL`/`LL128` are 1.5-2x slower; more channels, connections per link, buffer size and CPU/memory placement make no measurable difference. Run-to-run variation from shared-fabric load is up to ~1.7x (`scripts/allgather_bench.sbatch`).
+* **Communication did not overlap compute at all** (0% in the 8-node trace): `CUDA_DEVICE_MAX_CONNECTIONS=1`, a Megatron tensor-parallel convention set by every launcher, serializes FSDP's all-gather stream behind compute. DDP was unaffected (51-67% of its all-reduce hidden).
+
+| Change | Files | Measured effect |
+|---|---|---|
+| `CUDA_DEVICE_MAX_CONNECTIONS=32` for FSDP (DDP keeps 1), chosen from the config's strategy; override by exporting it | `scripts/submit.sh`, `scripts/submit_*fsdp*.sh`, profiling launchers | Llama-70B, 8 nodes: 125 s -> 107 s per step (4 seq/GPU); 102 s -> 91 s (8 seq/GPU + packing, 34.6% MFU) |
+| `fsdp.reshard_after_forward_group: K` keeps a 1/K shard after forward so backward gathers inside blocks of K ranks; `fsdp.keep_gathered_layers: N` keeps the last N layers whole (no backward gather) | `distributed/fsdp.py`, `config.py` | 128 nodes, 1 seq/GPU, together with the line above: 62 s -> 53 s per step |
+| One micro-batch per step, as large as fits (8 seq/GPU Llama-70B, 4 Mistral-123B at 8 nodes) plus packing | `configs/profile/*_v2.yaml` | Llama-70B, 8 nodes: 280 s -> 91 s per step; ~1,000 -> 5,760 real tokens/s |
+| Bigger global batch at large scale (4 seq/GPU at 128 nodes = 512 sequences/step) | `configs/profile/llama33_70b_fsdp_128node_bs4*.yaml` | 128 nodes: 62 s -> 90 s per step for 4x the tokens (16,700 -> 46,800 tokens/s). Changes the training recipe. |
+
+What is left is the per-step weight volume over a 100 Gb/s link. Beyond the above, reducing it needs a larger batch per step, fewer bytes per weight, or a parallelism that moves activations instead of weights.
+
 ### Kernel-level profiling with Nsight Compute (branch `profile/qwen3-14b-nsys`)
 
 Nsight Systems (above) shows when each kernel runs. Nsight Compute shows how well each kernel uses the GPU: tensor-core use, memory bandwidth, occupancy and stalls. It re-runs every profiled kernel several times, so it is slow and is limited to a small number of kernels in one step.

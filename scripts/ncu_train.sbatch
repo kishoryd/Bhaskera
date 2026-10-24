@@ -45,7 +45,8 @@ export MLFLOW_ALLOW_FILE_STORE=true
 source "$REPO/bhaskera-activate.sh"
 export PYTHONPATH="$SRC_ROOT/src:${PYTHONPATH:-}"
 export NCCL_ASYNC_ERROR_HANDLING=1 NCCL_DEBUG=WARN NCCL_TIMEOUT=3600 TORCH_NCCL_BLOCKING_WAIT=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_DEVICE_MAX_CONNECTIONS=1
+if grep -qE '^[[:space:]]*strategy:[[:space:]]*"?fsdp' "$CONFIG" 2>/dev/null; then _CDMC=32; else _CDMC=1; fi   # see scripts/submit.sh
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-$_CDMC}
 
 # Capture window: the 13th step only (0-based index 12). NVTX labels come on too.
 export BHASKERA_NSYS=1 BHASKERA_NSYS_START_STEP=12 BHASKERA_NSYS_STOP_STEP=13 BHASKERA_NSYS_FLUSH_SECONDS=5

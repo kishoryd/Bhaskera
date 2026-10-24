@@ -158,6 +158,13 @@ class FSDPConfig:
     # safetensors files instead of rank 0 reading everything and broadcasting it
     # (distributed/fsdp.py). Falls back to the broadcast for anything not in the files.
     sharded_load: bool = True
+    # Backward all-gather cost (distributed/fsdp.py, Step 2). 0 = off (default,
+    # old behaviour). reshard_after_forward_group=K keeps a 1/K weight shard
+    # after forward so backward gathers inside blocks of K ranks; K must divide
+    # the world size. keep_gathered_layers=N keeps the last N layers whole
+    # between forward and backward (no backward gather for them).
+    reshard_after_forward_group: int = 0
+    keep_gathered_layers: int = 0
 
 
 @dataclass
@@ -414,6 +421,8 @@ def _dict_to_config(raw: dict) -> Config:
                         fsdp_raw.get("root_reshard_after_forward", False)
                     ),
                     sharded_load=bool(fsdp_raw.get("sharded_load", True)),
+                    reshard_after_forward_group=int(fsdp_raw.get("reshard_after_forward_group", 0) or 0),
+                    keep_gathered_layers=int(fsdp_raw.get("keep_gathered_layers", 0) or 0),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
                 ),
