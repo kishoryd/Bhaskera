@@ -62,19 +62,23 @@ def _set_grad_sync(model: torch.nn.Module, enabled: bool) -> None:
     exactly once per optimizer step.
     """
     # ── FSDP2 path ──────────────────────────────────────────────────
+    # set_requires_gradient_sync is a METHOD of FSDPModule, not a module-level
+    # function: the old `from ... import set_requires_gradient_sync` raised
+    # ImportError, which the except below swallowed, so FSDP reduce-scattered
+    # gradients on every micro-step instead of once per optimizer step.
     try:
-        from torch.distributed._composable.fsdp import (
-            FSDPModule,
-            set_requires_gradient_sync,
-        )
-        if isinstance(model, FSDPModule) or any(
-            isinstance(m, FSDPModule) for m in model.modules()
-        ):
-            set_requires_gradient_sync(model, enabled)
-            return
+        from torch.distributed._composable.fsdp import FSDPModule
     except ImportError:
         # torch < 2.4 — FSDP2 unavailable, fall through to DDP / no-op.
-        pass
+        FSDPModule = None
+    if FSDPModule is not None:
+        # Every fully_shard()-ed module (root, decoder layers, experts), found
+        # through any PEFT wrapper on top; recurse=False since each is visited.
+        fsdp_modules = [m for m in model.modules() if isinstance(m, FSDPModule)]
+        if fsdp_modules:
+            for m in fsdp_modules:
+                m.set_requires_gradient_sync(enabled, recurse=False)
+            return
 
     # ── DDP path ────────────────────────────────────────────────────
     if isinstance(model, DDP):

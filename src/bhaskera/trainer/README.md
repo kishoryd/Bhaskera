@@ -52,7 +52,7 @@ train(
 
 Used for gradient accumulation. The function dispatches by wrapper type:
 
-- **FSDP2** — `set_requires_gradient_sync(model, enabled)` from `torch.distributed._composable.fsdp`. Walks every sharded submodule directly, bypassing PEFT wrappers' `__getattr__` chains.
+- **FSDP2** — `FSDPModule.set_requires_gradient_sync(enabled, recurse=False)` on every `fully_shard`-ed submodule (it is a method, not an importable function). Walks every sharded submodule directly, bypassing PEFT wrappers' `__getattr__` chains.
 - **DDP** — sets `model.require_backward_grad_sync = enabled` (the underlying flag that `DDP.no_sync()` toggles). Direct attribute write avoids the context-manager dance and works through PEFT wrappers that don't delegate `no_sync`. Skipped when `static_graph=True` — DDP's static_graph mode caches the reduction order on iteration 1 and is incompatible with mid-run toggling. The wrap step records the effective flag as `_bhaskera_static_graph` on the DDP wrapper, which is read here.
 - **Other** (single-GPU / CPU) — no-op.
 
