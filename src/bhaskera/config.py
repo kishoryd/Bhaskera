@@ -154,6 +154,10 @@ class FSDPConfig:
     # compute, leaving every layer blocked on its own gather.
     forward_prefetch: bool = False
     backward_prefetch: bool = False
+    # How many layers ahead each layer prefetches (1 = next layer only). Deeper
+    # lets a slow all-gather start earlier, at the cost of more gathered layers
+    # resident at once.
+    prefetch_depth: int = 1
     # Each rank reads its own slice of every weight straight from the checkpoint's
     # safetensors files instead of rank 0 reading everything and broadcasting it
     # (distributed/fsdp.py). Falls back to the broadcast for anything not in the files.
@@ -434,6 +438,7 @@ def _dict_to_config(raw: dict) -> Config:
                     keep_gathered_layers=int(fsdp_raw.get("keep_gathered_layers", 0) or 0),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
+                    prefetch_depth=max(1, int(fsdp_raw.get("prefetch_depth", 1) or 1)),
                     hsdp_shard_size=int(fsdp_raw.get("hsdp_shard_size", 0) or 0),
                 ),
                 ddp=DDPConfig(

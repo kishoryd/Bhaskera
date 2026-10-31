@@ -467,14 +467,15 @@ def _apply_prefetch_hints(layers: list[nn.Module], fsdp_cfg) -> None:
     """
     if len(layers) < 2:
         return
+    depth = max(1, int(getattr(fsdp_cfg, "prefetch_depth", 1) or 1))
     if fsdp_cfg.forward_prefetch:
         for i, layer in enumerate(layers[:-1]):
-            layer.set_modules_to_forward_prefetch([layers[i + 1]])
+            layer.set_modules_to_forward_prefetch(layers[i + 1:i + 1 + depth])
     if fsdp_cfg.backward_prefetch:
         # Backward runs in reverse layer order, so each layer prefetches
-        # the PREVIOUS layer's params.
+        # the PREVIOUS layer(s)' params.
         for i, layer in enumerate(layers[1:], start=1):
-            layer.set_modules_to_backward_prefetch([layers[i - 1]])
+            layer.set_modules_to_backward_prefetch(layers[max(0, i - depth):i][::-1])
 
 
 def _build_mp_policy(fsdp_cfg, profile: ModelProfile, MixedPrecisionPolicy):
