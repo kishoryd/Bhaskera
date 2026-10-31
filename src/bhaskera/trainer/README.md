@@ -69,6 +69,14 @@ Called with `enabled=False` before every micro-step except the last, then `enabl
 - Expert utilisation metrics via `moe.compute_expert_utilization(out, profile)` when MoE and `cfg.moe.log_expert_utilization`.
 - Periodic checkpointing via `save_and_prune(...)`.
 
+## `step_timing.py` — per-step time breakdown
+
+Each optimizer step is split into `time/data_wait_s` (blocked on the loader), `time/compute_s` (forward+backward, including the FSDP collectives they wait on), `time/optimizer_s` and `time/other_s`. GPU times come from CUDA events read after the loop's existing loss `.item()` sync, so no extra syncs are added. Every `monitoring.metrics.straggler_every_n_steps` (default 10) the per-rank times are all-gathered and rank 0 logs the slowest rank and its host, warning when it exceeds 1.25x the median by more than 1s. Disable with `monitoring.metrics.step_timing: false`.
+
+## Startup watchdog (`utils/watchdog.py`)
+
+`training.startup_timeout_s` (default 3600, 0 disables) bounds the time from worker start to the first completed forward+backward window. Workers log phases (distributed init, build_model, wrap_model, resume checkpoint, first batch). A heartbeat names the phase a rank is stuck in; on expiry the worker dumps every thread's Python stack and exits with code 86. Note: Ray's Data `split(N)` progress bar can sit at 0% while training runs normally, so it is not a stall signal; the first completed step is.
+
 ## `moe.py` — MoE auxiliary loss
 
 Fully architecture-agnostic. All routing decisions are driven by `ModelProfile` (`num_experts`, `num_shared_experts`, `experts_per_token`). No model-name or class-name checks anywhere.

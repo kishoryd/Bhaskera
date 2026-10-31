@@ -23,6 +23,7 @@ from bhaskera.models import build_model
 from bhaskera.trainer import train
 from bhaskera.utils import build_logger
 from bhaskera.utils.startup_timer import mark as startup_mark
+from bhaskera.utils.watchdog import StartupWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,14 @@ def worker_fn(cfg_dict: dict) -> None:
     rank       = ray_ctx.get_world_rank()
     world_size = ray_ctx.get_world_size()
 
+    watchdog = StartupWatchdog(
+        getattr(cfg.training, "startup_timeout_s", 0), rank
+    ).start()
+
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
 
+    watchdog.phase("distributed init")
     _wait_for_dist()
     _verify_all_ranks_live(rank, world_size, device)
 
@@ -61,6 +67,7 @@ def worker_fn(cfg_dict: dict) -> None:
     strategy    = cfg.training.distributed.strategy.lower()
     load_device = torch.device("cpu") if strategy == "fsdp" else device
 
+    watchdog.phase("build_model")
     model, profile = build_model(cfg, load_device, rank=rank)
     startup_mark("model_loaded", rank)
 
@@ -73,6 +80,7 @@ def worker_fn(cfg_dict: dict) -> None:
             f"has_aux_loss={profile.has_aux_loss}"
         )
 
+    watchdog.phase("wrap_model")
     model = wrap_model(model, cfg, local_rank, profile)
     startup_mark("model_wrapped", rank)
 
@@ -90,6 +98,7 @@ def worker_fn(cfg_dict: dict) -> None:
         local_rank=local_rank,
         tracker=tracker,
         world_size=world_size,
+        startup_watchdog=watchdog,
     )
 
 

@@ -94,6 +94,13 @@ echo "[NCCL] NCCL_IB_DISABLE=${NCCL_IB_DISABLE}  NCCL_SOCKET_IFNAME=${NCCL_SOCKE
 echo "[NCCL] NCCL_TIMEOUT=${NCCL_TIMEOUT}  TORCH_DISTRIBUTED_TIMEOUT=${TORCH_DISTRIBUTED_TIMEOUT}"
 
 # =============================================================================
+# Node health preflight: ~1 min GPU smoke test on every node; exits 3 and
+# records bad nodes in .bad_nodes instead of hanging for hours. Resubmit with
+# scripts/sbatch_x.sh to exclude them. BHASKERA_PREFLIGHT=0 skips it.
+# =============================================================================
+source "${SLURM_SUBMIT_DIR}/scripts/preflight_nodes.sh" || exit $?
+
+# =============================================================================
 # Resolve head node address
 # =============================================================================
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")

@@ -1,33 +1,32 @@
-# Branch: `fsdp-moe-fixes`
+# Robustness and profiling additions
 
 ## Summary
 
-Fixes that make Mixture-of-Experts (MoE) models train correctly under FSDP2, plus a six-model dense-vs-MoE benchmark suite. Before these fixes, Qwen3-235B-A22B ran out of GPU memory at every node count, and Qwen3-30B-A3B failed on its first step.
-
-`feature/hsdp`, `feature/expert-parallel` and `feature/robustness` are built on this branch. Merge this branch first.
+Features for large multi-node runs. They catch failures before or early in a job, show where step time is spent, and remove padding waste from training data.
 
 ## Changes
 
-### MoE training
+### Startup watchdog (`utils/watchdog.py`)
 
-| Change | Problem solved | Files |
-|---|---|---|
-| **Checkpoint whole decoder layers for MoE models.** Activation checkpointing now wraps each full decoder layer, as it already did for dense models. | Only the expert MLPs were checkpointed, so attention, LoRA, router and token-dispatch activations were kept for every layer. On Qwen3-235B-A22B this used 65–90 GB per GPU, and adding nodes did not reduce it. | `distributed/activation_ckpt.py` |
-| **Reuse the forward pass's expert selection during recompute.** The recompute uses the same top-k experts that the forward pass chose. Routing weights are still recomputed, so gradients are unchanged. | bf16 router scores can differ slightly between the forward pass and the recompute. When two experts score almost equally, the top-k choice can flip, and PyTorch raises `CheckpointError`. | `distributed/moe_routing.py` (new) |
-| **Honour `lora.include_experts: false`.** Expert modules are excluded with PEFT `exclude_modules`. | PEFT matches modules by name. Expert layers share the names `gate_proj`, `up_proj` and `down_proj`, so every expert received adapters (about 36,000 on Qwen3-235B-A22B). | `models/lora.py` |
-| **Load the model once per job.** Under FSDP, rank 0 loads the checkpoint; the other ranks build the model on the `meta` device. | Every GPU process loaded a full copy into host memory: two copies per node, each about 470 GB for Qwen3-235B-A22B. | `models/loader.py` |
-| **Broadcast weights in buckets after sharding.** Rank 0 sends fixed-size buckets, and each rank keeps only its own shard. Peak extra memory is one bucket. | DCP `broadcast_from_rank0` held the full unsharded model on every GPU. | `distributed/fsdp.py` |
+Stops a job that hangs before training starts, instead of leaving it idle for its full allocation.
 
-### Metrics, data and tooling
+- Each worker logs its startup phase: distributed init, model build, model wrap, checkpoint resume, first batch.
+- If no training step completes within `training.startup_timeout_s` (default 3600 s; `0` disables it), the worker writes the stack trace of every thread and exits with code 86.
 
-| Change | Files |
+### Step time breakdown and straggler detection (`trainer/step_timing.py`)
+
+Splits each optimizer step into four metrics:
+
+| Metric | Measures |
 |---|---|
-| **MFU and tokens/s are no longer divided by `world_size` twice.** Reported MFU was too low by a factor of the GPU count: a 16-GPU run showed 0.18% instead of 2.87%. | `utils/throughput.py` |
-| **Tokenisation spills to scratch instead of the node-local `/tmp`**, which ran out of space. | `launcher/tokenize.py` |
-| **Rows rejected by a strict chat template (Mistral, gpt-oss) fall back to ChatML** instead of aborting the whole corpus. | `data/formats/builtins.py` |
-| **The validation set is sharded only when it has at least as many rows as workers.** | `launcher/train.py` |
-| **`BHASKERA_PROFILE_OOM=1` prints a CUDA allocator breakdown on out-of-memory.** MLflow now honours `log_gpu_every_n_steps`. | `trainer/loop.py`, `utils/loggers/mlflow_logger.py` |
-| **`.gitignore` patterns are anchored to the repository root** (`/models/`, `/data1/`). The old `models/` pattern also excluded `src/bhaskera/models/`. | `.gitignore` |
+| `time/data_wait_s` | Time blocked on the data loader |
+| `time/compute_s` | Forward and backward pass, including FSDP communication |
+| `time/optimizer_s` | Optimizer step |
+| `time/other_s` | Remainder |
+
+- GPU times are measured with CUDA events at an existing synchronization point, so the measurement adds no overhead.
+- Every `monitoring.metrics.straggler_every_n_steps` steps (default 10), all ranks share their timings.
+- Rank 0 logs the slowest rank and its host, and warns when that rank is more than 25% and more than 1 s slower than the median.
 
 ### Profiling with Nsight Systems (branch `profile/qwen3-14b-nsys`)
 
@@ -109,34 +108,70 @@ The attention term uses the full row length, so with packing it slightly oversta
 
 ### Benchmark suite
 
-`configs/*_8node_nemotron.yaml` define six models trained under identical conditions: Nemotron-Cascade-2-SFT-Data (chat), `seq_len` 4096, LoRA r16/α32, 8 nodes × 2 GPUs.
+### Pre-submission checks (`bhaskera-preflight`)
 
-| Model | Parameters | Architecture | Strategy |
-|---|---|---|---|
-| Qwen3-14B | 14.8B | Dense | DDP |
-| Llama-3.3-70B-Instruct | 70B | Dense | FSDP |
-| Mistral-Large-Instruct-2411 | 123B | Dense | FSDP |
-| Qwen3-30B-A3B-Instruct-2507 | 30B (3B active) | MoE | FSDP |
-| gpt-oss-120b | 120B (5.1B active) | MoE | FSDP |
-| Qwen3-235B-A22B-Instruct-2507 | 235B (22B active) | MoE | FSDP |
+```bash
+bhaskera-preflight --config <config.yaml>
+```
 
-The three Qwen3 models share a tokenizer, so they form a controlled dense-vs-MoE comparison. Each model has a tokenization config (`configs/tokenize_<model>_nemotron.yaml`) and a submit script (`scripts/submit_<model>_<strategy>_8_nemotron.sh`). `scripts/submit_nemotron_pipeline.sh` runs all six.
+Runs on the login node in seconds, with no GPU required. It checks:
+- the model directory and tokenizer
+- flash-attention and Liger imports
+- that the tokenized caches exist and match the config
+- for config combinations known to fail
 
-## Configuration guidance
+It also estimates per-GPU memory and reports the smallest GPU count that fits. It exits with code 1 if any check fails.
 
-- `data.seq_len` is part of the tokenization cache key. If you change it, re-tokenize and update `tokenized_path` and `val_tokenized_path`.
-- Set `seq_len` to fit the data, not the model's maximum context. At 16384, about 80% of each Nemotron sequence was padding.
-- Keep `fsdp.shard_experts_individually: false` for models with 128 experts. Enabling it creates thousands of small FSDP units, and the NCCL collectives hang.
+### Node health check (`scripts/node_healthcheck.py`, `scripts/sbatch_x.sh`)
+
+- `scripts/submit.sh` runs a one-minute GPU test on every node before training. The test checks GPU count, bf16 matmul correctness and throughput, a cross-GPU checksum, and peer-to-peer copy.
+- A node that fails, hangs, or runs below 70% of the fastest node is recorded in `.bad_nodes`, and the job exits with code 3.
+- `scripts/sbatch_x.sh` resubmits a job, excluding nodes recorded in the last `BAD_NODE_TTL_DAYS` days (default 7).
+- Set `BHASKERA_PREFLIGHT=0` to skip the check.
+
+### Tokenized cache validation (`data/tokenize.py`)
+
+Training checks the cache metadata against the config:
+- A `seq_len` mismatch is an error.
+- A different model name is a warning, because models that share a tokenizer can share a cache.
+
+### Runtime sequence packing (`data/packing.py`)
+
+`data.runtime_packing: true` packs several training examples into each `seq_len` row.
+
+- **Effect:** on Nemotron at 4096 tokens, padding drops from 42.7% to 0.1%, and the same data needs 1.74× fewer rows.
+- **Isolation:** examples in a row never attend to each other.
+  - `position_ids` restart at each example boundary.
+  - Each micro-batch is flattened to batch size 1, which makes flash-attention treat each example as a separate sequence (variable-length mode).
+  - The first label of each example is masked, so no example is trained to predict across a boundary.
+- **Requirements:** `model.attn_impl: flash_attention_2`. Only the training split is packed; evaluation is unchanged.
+
+## New configuration keys
+
+| Key | Default |
+|---|---|
+| `training.startup_timeout_s` | `3600` |
+| `monitoring.metrics.step_timing` | `true` |
+| `monitoring.metrics.straggler_every_n_steps` | `10` |
+| `data.runtime_packing` | `false` |
+| `data.packing_window_rows` | `2048` |
 
 ## Validation
 
 ```bash
-python -m bhaskera.distributed.tests.test_moe_routing
+python -m bhaskera.data.tests.test_packing
+python -m bhaskera.trainer.tests.test_step_timing
+python -m bhaskera.trainer.tests.test_packing_fa2      # requires GPU and flash-attention 2
 ```
 
-CPU, fp32, Qwen3-MoE and Mixtral:
-- With injected recompute noise, the unpatched model raises `CheckpointError` and the patched model trains.
-- Gradients with activation checkpointing exactly match gradients without it.
-- The patched forward pass is bitwise identical to the Hugging Face implementation.
+Tested on A100:
 
-Qwen3-235B-A22B trains at 8, 32 and 64 nodes with these changes.
+| Check | Result |
+|---|---|
+| Step timing | Pass |
+| Packed example vs. same example alone | Outputs match within bf16 precision (0.0039) |
+| Isolation between packed examples | Changing one example leaves the others exactly unchanged |
+| Loss | Identical packed and unpacked (6.2670) |
+| Negative control (batch size 2, not flattened) | Leak detected, confirming the test catches it |
+
+More detail is in the READMEs under `src/bhaskera/data/`, `launcher/` and `trainer/`.
