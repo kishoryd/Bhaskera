@@ -74,19 +74,10 @@ def wrap_fsdp2(
     rank = dist.get_rank()
     _pretrained_state_dict = model.state_dict() if rank == 0 else None
 
-    # fsdp_cfg.sharding_strategy has no FSDP2 equivalent: fully_shard() always
-    # fully shards by construction, unlike FSDP1's ShardingStrategy enum
-    # (FULL_SHARD / SHARD_GRAD_OP / NO_SHARD / HYBRID_SHARD), which this field
-    # appears to be a carry-over from. Rather than silently ignore a non-default
-    # value (previously the case — configs/qwen_hybrid_shard.yaml sets
-    # "HYBRID_SHARD" and got plain FULL_SHARD with no indication), surface it.
-    _strategy = getattr(fsdp_cfg, "sharding_strategy", "FULL_SHARD")
-    if _strategy and _strategy.upper() != "FULL_SHARD":
-        logger.warning(
-            f"fsdp.sharding_strategy={_strategy!r} has no effect under FSDP2 — "
-            "fully_shard() always fully shards. This field is a no-op; remove "
-            "it or set it to \"FULL_SHARD\" to reflect actual behaviour."
-        )
+    # None for FULL_SHARD (fully_shard's default 1D mesh over the whole
+    # world); a 2D (replicate, shard) mesh for HYBRID_SHARD. Passed to every
+    # fully_shard() below -- mixing meshes across units is not allowed.
+    mesh = _build_device_mesh(fsdp_cfg)
 
     # fsdp_cfg.cpu_offload: offloads sharded params/grads/optimizer state to
     # host RAM between uses, trading step time for a lower GPU memory floor.
@@ -98,7 +89,7 @@ def wrap_fsdp2(
     # Step 1 — per-expert sharding (MoE only).
     if profile.is_moe and fsdp_cfg.shard_experts_individually and profile.expert_modules:
         for expert in profile.expert_modules:
-            fully_shard(expert, mp_policy=mp_policy, offload_policy=offload_policy)
+            fully_shard(expert, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy)
         logger.info(
             "FSDP2: per-expert sharding applied to "
             f"{len(profile.expert_modules)} expert modules "
@@ -123,6 +114,12 @@ def wrap_fsdp2(
             f"{rank_world} and lie strictly between 1 and it; using full resharding"
         )
         group = 0
+    if group and mesh is not None:
+        logger.warning(
+            "fsdp.reshard_after_forward_group has no effect with HYBRID_SHARD "
+            "(the shard group is already the small group); ignoring it"
+        )
+        group = 0
     keep_last = max(0, int(getattr(fsdp_cfg, "keep_gathered_layers", 0) or 0))
     decoder_layers = (
         [m for m in model.modules() if isinstance(m, decoder_cls)] if decoder_cls is not None else []
@@ -134,7 +131,7 @@ def wrap_fsdp2(
                 raf = False
             else:
                 raf = group if group else True
-            fully_shard(module, mp_policy=mp_policy, offload_policy=offload_policy,
+            fully_shard(module, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy,
                         reshard_after_forward=raf)
             layers.append(module)
         if group or keep_last:
@@ -158,7 +155,7 @@ def wrap_fsdp2(
     # after forward just to re-gather microseconds later in backward is
     # pure wasted communication.
     fully_shard(
-        model, mp_policy=mp_policy, offload_policy=offload_policy,
+        model, mesh=mesh, mp_policy=mp_policy, offload_policy=offload_policy,
         reshard_after_forward=fsdp_cfg.root_reshard_after_forward,
     )
 
@@ -179,7 +176,8 @@ def wrap_fsdp2(
     logger.info(
         f"FSDP2 wrap complete | param_dtype={mp_policy.param_dtype} | "
         f"reduce_dtype={mp_policy.reduce_dtype} | moe={profile.is_moe} | "
-        f"ac={fsdp_cfg.activation_checkpointing} | cpu_offload={fsdp_cfg.cpu_offload}"
+        f"ac={fsdp_cfg.activation_checkpointing} | cpu_offload={fsdp_cfg.cpu_offload} | "
+        f"mesh={'1D world (FULL_SHARD)' if mesh is None else tuple(mesh.shape)}"
     )
     return model
 
@@ -229,6 +227,78 @@ def _sharded_load_plan(named: list, ckpt_dir: Optional[str]) -> dict:
         if key in weight_map and shapes.get(key) == tuple(tensor.shape):
             plan[name] = (os.path.join(ckpt_dir, weight_map[key]), key)
     return plan
+
+
+def _build_device_mesh(fsdp_cfg):
+    """
+    Resolve fsdp.sharding_strategy to the mesh fully_shard() should use.
+
+    FSDP2 has no ShardingStrategy enum -- the strategy is the mesh. A 1D mesh
+    is ZeRO-3 over every rank; a 2D (replicate, shard) mesh is HSDP: params
+    are sharded along "shard" and replicated along "replicate", so per-layer
+    all-gathers span only one shard group and the only cross-group collective
+    is the gradient all-reduce. SHARD_GRAD_OP / NO_SHARD have no mesh form
+    and stay no-ops (warned) as before.
+    """
+    import os
+
+    strategy = (getattr(fsdp_cfg, "sharding_strategy", None) or "FULL_SHARD").upper()
+    if strategy == "FULL_SHARD":
+        return None
+    if strategy != "HYBRID_SHARD":
+        logger.warning(
+            f"fsdp.sharding_strategy={strategy!r} has no FSDP2 equivalent and is "
+            "ignored -- running FULL_SHARD. Supported: FULL_SHARD, HYBRID_SHARD."
+        )
+        return None
+
+    world = dist.get_world_size()
+    shard = int(getattr(fsdp_cfg, "hsdp_shard_size", 0) or 0)
+    if shard <= 0:
+        shard = int(os.environ.get("LOCAL_WORLD_SIZE", torch.cuda.device_count()))
+    if shard <= 0 or world % shard != 0:
+        raise ValueError(
+            f"HYBRID_SHARD: hsdp_shard_size={shard} must be > 0 and divide "
+            f"world_size={world}."
+        )
+    if shard == world:
+        logger.warning(
+            f"HYBRID_SHARD with shard size == world_size ({world}) is FULL_SHARD; "
+            "using the default 1D mesh."
+        )
+        return None
+
+    from torch.distributed.device_mesh import init_device_mesh
+
+    mesh = init_device_mesh(
+        "cuda", (world // shard, shard), mesh_dim_names=("replicate", "shard")
+    )
+    _log_shard_group_placement(mesh)
+    return mesh
+
+
+def _log_shard_group_placement(mesh) -> None:
+    """
+    Log how many nodes each shard group spans. HSDP's benefit depends on it:
+    a group inside one node keeps weight all-gathers off the network
+    entirely; a group spanning nodes still pays InfiniBand for them. Rank
+    ordering comes from Ray Train, so this is checked rather than assumed.
+    Collective -- every rank must call it.
+    """
+    import socket
+
+    hosts: list = [None] * dist.get_world_size()
+    dist.all_gather_object(hosts, socket.gethostname())
+    if dist.get_rank() != 0:
+        return
+    spans = [
+        len({hosts[r] for r in group})
+        for group in mesh.mesh.tolist()  # rows = shard groups
+    ]
+    logger.info(
+        f"HSDP mesh: {mesh.shape[0]} replica groups x {mesh.shape[1]} GPUs/shard group; "
+        f"nodes spanned per shard group: min={min(spans)} max={max(spans)}"
+    )
 
 
 def _broadcast_pretrained_weights(
@@ -397,14 +467,15 @@ def _apply_prefetch_hints(layers: list[nn.Module], fsdp_cfg) -> None:
     """
     if len(layers) < 2:
         return
+    depth = max(1, int(getattr(fsdp_cfg, "prefetch_depth", 1) or 1))
     if fsdp_cfg.forward_prefetch:
         for i, layer in enumerate(layers[:-1]):
-            layer.set_modules_to_forward_prefetch([layers[i + 1]])
+            layer.set_modules_to_forward_prefetch(layers[i + 1:i + 1 + depth])
     if fsdp_cfg.backward_prefetch:
         # Backward runs in reverse layer order, so each layer prefetches
-        # the PREVIOUS layer's params.
+        # the PREVIOUS layer(s)' params.
         for i, layer in enumerate(layers[1:], start=1):
-            layer.set_modules_to_backward_prefetch([layers[i - 1]])
+            layer.set_modules_to_backward_prefetch(layers[max(0, i - depth):i][::-1])
 
 
 def _build_mp_policy(fsdp_cfg, profile: ModelProfile, MixedPrecisionPolicy):

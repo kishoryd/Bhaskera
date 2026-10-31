@@ -154,6 +154,10 @@ class FSDPConfig:
     # compute, leaving every layer blocked on its own gather.
     forward_prefetch: bool = False
     backward_prefetch: bool = False
+    # How many layers ahead each layer prefetches (1 = next layer only). Deeper
+    # lets a slow all-gather start earlier, at the cost of more gathered layers
+    # resident at once.
+    prefetch_depth: int = 1
     # Each rank reads its own slice of every weight straight from the checkpoint's
     # safetensors files instead of rank 0 reading everything and broadcasting it
     # (distributed/fsdp.py). Falls back to the broadcast for anything not in the files.
@@ -165,6 +169,15 @@ class FSDPConfig:
     # between forward and backward (no backward gather for them).
     reshard_after_forward_group: int = 0
     keep_gathered_layers: int = 0
+
+    # ── HSDP (sharding_strategy: "HYBRID_SHARD") ────────────────────────────
+    # GPUs per shard group. Weights are sharded within a group and replicated
+    # across groups, so the per-layer all-gathers only span the group while
+    # the cross-group traffic is one gradient all-reduce per step (tiny under
+    # LoRA, where only adapter params have grads). 0 = one node's worth
+    # (LOCAL_WORLD_SIZE). Must divide world_size, and the model's weights /
+    # group_size must still leave activation headroom on each GPU.
+    hsdp_shard_size: int = 0
 
 
 @dataclass
@@ -437,6 +450,8 @@ def _dict_to_config(raw: dict) -> Config:
                     keep_gathered_layers=int(fsdp_raw.get("keep_gathered_layers", 0) or 0),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
+                    prefetch_depth=max(1, int(fsdp_raw.get("prefetch_depth", 1) or 1)),
+                    hsdp_shard_size=int(fsdp_raw.get("hsdp_shard_size", 0) or 0),
                 ),
                 ddp=DDPConfig(
                     find_unused_parameters=bool(ddp_raw.get("find_unused_parameters", False)),
