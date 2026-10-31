@@ -43,6 +43,18 @@ Uses the composable `torch.distributed._composable.fsdp.fully_shard` API (requir
 
 `decoder_cls` is resolved by `_resolve_decoder_cls()`: explicit `fsdp.transformer_layer_cls` names win (back-compat); otherwise the class from the introspection profile is used.
 
+### Sharding strategy → device mesh (HSDP)
+
+FSDP2 has no `ShardingStrategy` enum; the strategy is the mesh passed to every `fully_shard()` call. `_build_device_mesh()` resolves `fsdp.sharding_strategy`:
+
+| `sharding_strategy` | Mesh | Behaviour |
+|---|---|---|
+| `FULL_SHARD` (default) | 1D over all ranks | ZeRO-3: every per-layer all-gather spans every rank |
+| `HYBRID_SHARD` | 2D `(replicate, shard)` | HSDP: shard within a group of `fsdp.hsdp_shard_size` GPUs, replicate across groups |
+| anything else | 1D (warned) | no FSDP2 form, runs as `FULL_SHARD` |
+
+`hsdp_shard_size: 0` (default) means one node (`LOCAL_WORLD_SIZE`). It must divide `world_size`, and `model_bytes / hsdp_shard_size` must leave activation headroom. At startup rank 0 logs how many nodes each shard group spans: a group inside one node keeps weight all-gathers off the network entirely. Under LoRA the only cross-group collective, the gradient all-reduce, covers adapter params only.
+
 ### Mixed precision
 
 `_build_mp_policy()` constructs a `MixedPrecisionPolicy(param_dtype, reduce_dtype, output_dtype)`:

@@ -92,6 +92,12 @@ class DataConfig:
     prefetch_batches: int = 2
     local_shuffle_buffer_multiplier: int = 10
     pack_sequences: bool = False
+    # Runtime packing of a padded cache (data/packing.py): several examples per
+    # seq_len row, boundaries via position_ids. Distinct from pack_sequences
+    # above, which only synthesizes masks for caches that are already packed.
+    # Train split only; requires model.attn_impl: flash_attention_2.
+    runtime_packing: bool = False
+    packing_window_rows: int = 2048   # rows packed together per Ray Data batch
 
     # ── Phase 2: chat-format / local-files plumbing ────────────────────────
     # Name of a registered format renderer (chatml, alpaca, sharegpt, or
@@ -148,6 +154,30 @@ class FSDPConfig:
     # compute, leaving every layer blocked on its own gather.
     forward_prefetch: bool = False
     backward_prefetch: bool = False
+    # How many layers ahead each layer prefetches (1 = next layer only). Deeper
+    # lets a slow all-gather start earlier, at the cost of more gathered layers
+    # resident at once.
+    prefetch_depth: int = 1
+    # Each rank reads its own slice of every weight straight from the checkpoint's
+    # safetensors files instead of rank 0 reading everything and broadcasting it
+    # (distributed/fsdp.py). Falls back to the broadcast for anything not in the files.
+    sharded_load: bool = True
+    # Backward all-gather cost (distributed/fsdp.py, Step 2). 0 = off (default,
+    # old behaviour). reshard_after_forward_group=K keeps a 1/K weight shard
+    # after forward so backward gathers inside blocks of K ranks; K must divide
+    # the world size. keep_gathered_layers=N keeps the last N layers whole
+    # between forward and backward (no backward gather for them).
+    reshard_after_forward_group: int = 0
+    keep_gathered_layers: int = 0
+
+    # ── HSDP (sharding_strategy: "HYBRID_SHARD") ────────────────────────────
+    # GPUs per shard group. Weights are sharded within a group and replicated
+    # across groups, so the per-layer all-gathers only span the group while
+    # the cross-group traffic is one gradient all-reduce per step (tiny under
+    # LoRA, where only adapter params have grads). 0 = one node's worth
+    # (LOCAL_WORLD_SIZE). Must divide world_size, and the model's weights /
+    # group_size must still leave activation headroom on each GPU.
+    hsdp_shard_size: int = 0
 
 
 @dataclass
@@ -338,6 +368,8 @@ def _dict_to_config(raw: dict) -> Config:
                 data_raw.get("local_shuffle_buffer_multiplier", 10)
             ),
             pack_sequences=bool(data_raw.get("pack_sequences", False)),
+            runtime_packing=bool(data_raw.get("runtime_packing", False)),
+            packing_window_rows=int(data_raw.get("packing_window_rows", 2048)),
 
             # Phase 2
             format=data_raw.get("format"),
@@ -401,8 +433,13 @@ def _dict_to_config(raw: dict) -> Config:
                     root_reshard_after_forward=bool(
                         fsdp_raw.get("root_reshard_after_forward", False)
                     ),
+                    sharded_load=bool(fsdp_raw.get("sharded_load", True)),
+                    reshard_after_forward_group=int(fsdp_raw.get("reshard_after_forward_group", 0) or 0),
+                    keep_gathered_layers=int(fsdp_raw.get("keep_gathered_layers", 0) or 0),
                     forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
                     backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
+                    prefetch_depth=max(1, int(fsdp_raw.get("prefetch_depth", 1) or 1)),
+                    hsdp_shard_size=int(fsdp_raw.get("hsdp_shard_size", 0) or 0),
                 ),
                 ddp=DDPConfig(
                     find_unused_parameters=bool(ddp_raw.get("find_unused_parameters", False)),
