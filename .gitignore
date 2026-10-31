@@ -28,3 +28,7 @@ env/
 .ray_tmp/
 .ray_spill/
 tmp*/
+
+# Profiler output (Nsight Systems / Nsight Compute reports, ~30-80 MB per node)
+/nsys_reports/
+/ncu_reports/

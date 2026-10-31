@@ -34,7 +34,7 @@ export TORCH_DISTRIBUTED_TIMEOUT="${TORCH_DISTRIBUTED_TIMEOUT:-3600}"
 export NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_P2P_DISABLE=0
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
-export CUDA_DEVICE_MAX_CONNECTIONS=1
+export CUDA_DEVICE_MAX_CONNECTIONS=32   # FSDP: 1 serializes the all-gather stream behind compute (see scripts/submit.sh)
 
 if ls /sys/class/infiniband/*/ports/*/state 2>/dev/null | grep -q "4: ACTIVE"; then
     echo "[NCCL] InfiniBand ACTIVE port detected — enabling IB transport"

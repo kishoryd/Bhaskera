@@ -56,6 +56,14 @@ def main() -> None:
 
     # fix #10: pass world_size so build_ray_dataset can partition correctly
     ray_dataset = build_ray_dataset(cfg, world_size=num_workers)
+    if getattr(cfg.data, "runtime_packing", False):
+        from bhaskera.data.packing import pack_dataset
+
+        ray_dataset = pack_dataset(ray_dataset, cfg)
+        logger.info(
+            f"runtime_packing on: train rows packed to seq_len={cfg.data.seq_len} "
+            f"within windows of {cfg.data.packing_window_rows} rows"
+        )
 
     datasets = {"train": ray_dataset}
     datasets_to_split = ["train"]

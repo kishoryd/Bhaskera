@@ -22,6 +22,7 @@ from bhaskera.distributed.wrap import _verify_all_ranks_live, _wait_for_dist
 from bhaskera.models import build_model
 from bhaskera.trainer import train
 from bhaskera.utils import build_logger
+from bhaskera.utils.startup_timer import mark as startup_mark
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ def worker_fn(cfg_dict: dict) -> None:
     _seed_everything(cfg.training.seed, rank, cfg.training.deterministic)
 
     logger.info(f"[rank {rank}/{world_size}] GPU {local_rank} ready")
+    startup_mark("dist_ready", rank)
 
     dataset = ray.train.get_dataset_shard("train")
     # "val" is only present in the TorchTrainer datasets dict when
@@ -60,6 +62,7 @@ def worker_fn(cfg_dict: dict) -> None:
     load_device = torch.device("cpu") if strategy == "fsdp" else device
 
     model, profile = build_model(cfg, load_device, rank=rank)
+    startup_mark("model_loaded", rank)
 
     if rank == 0:
         logger.info(
@@ -71,6 +74,7 @@ def worker_fn(cfg_dict: dict) -> None:
         )
 
     model = wrap_model(model, cfg, local_rank, profile)
+    startup_mark("model_wrapped", rank)
 
     # Every rank builds a logger.  build_logger() decides internally
     # which backends to enable for non-rank-0 (Ray-only).

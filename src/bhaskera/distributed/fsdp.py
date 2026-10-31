@@ -13,7 +13,9 @@ Design notes:
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Optional
 
 import torch
@@ -104,12 +106,42 @@ def wrap_fsdp2(
         )
 
     # Step 2 — per-decoder-layer sharding.
+    #
+    # What each layer keeps between its forward and its backward decides how
+    # expensive the backward all-gather is (measured, Llama-3.3-70B on 128 nodes:
+    # 80% of every step is weight all-gathers, half of them in backward):
+    #   True   -> back to a 1/world shard; backward re-gathers across all ranks.
+    #   int K  -> keep a 1/K shard; backward gathers inside a block of K ranks,
+    #             a much shorter ring (fsdp.reshard_after_forward_group).
+    #   False  -> keep the whole layer; no backward gather at all. Used for the
+    #             last fsdp.keep_gathered_layers layers, which backward needs first.
+    rank_world = dist.get_world_size()
+    group = int(getattr(fsdp_cfg, "reshard_after_forward_group", 0) or 0)
+    if group and not (1 < group < rank_world and rank_world % group == 0):
+        logger.warning(
+            f"fsdp.reshard_after_forward_group={group} must divide world size "
+            f"{rank_world} and lie strictly between 1 and it; using full resharding"
+        )
+        group = 0
+    keep_last = max(0, int(getattr(fsdp_cfg, "keep_gathered_layers", 0) or 0))
+    decoder_layers = (
+        [m for m in model.modules() if isinstance(m, decoder_cls)] if decoder_cls is not None else []
+    )
     layers: list[nn.Module] = []
     if decoder_cls is not None:
-        for module in model.modules():
-            if isinstance(module, decoder_cls):
-                fully_shard(module, mp_policy=mp_policy, offload_policy=offload_policy)
-                layers.append(module)
+        for i, module in enumerate(decoder_layers):
+            if i >= len(decoder_layers) - keep_last:
+                raf = False
+            else:
+                raf = group if group else True
+            fully_shard(module, mp_policy=mp_policy, offload_policy=offload_policy,
+                        reshard_after_forward=raf)
+            layers.append(module)
+        if group or keep_last:
+            logger.info(
+                f"FSDP2: backward all-gather over blocks of {group or rank_world} ranks; "
+                f"last {min(keep_last, len(layers))} layers kept gathered between forward and backward"
+            )
         logger.info(
             f"FSDP2: per-layer sharding applied to {len(layers)} "
             f"{decoder_cls.__name__} layers"
@@ -140,7 +172,8 @@ def wrap_fsdp2(
     # (captured pre-shard) still match this now-sharded model exactly.
     # This is a collective call -- every rank must reach it.
     _broadcast_pretrained_weights(
-        model, _pretrained_state_dict, torch.device(f"cuda:{local_rank}")
+        model, _pretrained_state_dict, torch.device(f"cuda:{local_rank}"),
+        ckpt_dir=cfg.model.name if getattr(fsdp_cfg, "sharded_load", True) else None,
     )
 
     logger.info(
@@ -151,8 +184,56 @@ def wrap_fsdp2(
     return model
 
 
+def _checkpoint_key(name: str) -> str:
+    """Model FQN -> safetensors key: drop the PEFT and activation-checkpoint wrappers."""
+    if name.startswith("base_model.model."):
+        name = name[len("base_model.model."):]
+    for seg in (".base_layer.", "._checkpoint_wrapped_module.", "._fsdp_wrapped_module."):
+        name = name.replace(seg, ".")
+    return name
+
+
+def _sharded_load_plan(named: list, ckpt_dir: Optional[str]) -> dict:
+    """
+    Map tensor FQN -> (safetensors file, key) for every tensor that can be read
+    straight from the checkpoint with a matching shape. Every rank computes the
+    same plan from the same files, so the remaining broadcasts stay in lockstep.
+    Returns {} (all-broadcast, the old behaviour) whenever the checkpoint is not
+    a local safetensors directory.
+    """
+    if not ckpt_dir or not os.path.isdir(ckpt_dir):
+        return {}
+    index = os.path.join(ckpt_dir, "model.safetensors.index.json")
+    single = os.path.join(ckpt_dir, "model.safetensors")
+    try:
+        from safetensors import safe_open
+        if os.path.exists(index):
+            with open(index) as f:
+                weight_map = json.load(f)["weight_map"]
+        elif os.path.exists(single):
+            with safe_open(single, framework="pt") as f:
+                weight_map = {k: "model.safetensors" for k in f.keys()}
+        else:
+            return {}
+        shapes: dict[str, tuple] = {}
+        for fname in sorted(set(weight_map.values())):
+            with safe_open(os.path.join(ckpt_dir, fname), framework="pt") as f:
+                for k in f.keys():
+                    shapes[k] = tuple(f.get_slice(k).get_shape())
+    except Exception as e:  # noqa: BLE001 — same files on every rank, so same outcome
+        logger.warning(f"sharded load disabled ({e}); falling back to rank-0 broadcast")
+        return {}
+    plan = {}
+    for name, tensor in named:
+        key = _checkpoint_key(name)
+        if key in weight_map and shapes.get(key) == tuple(tensor.shape):
+            plan[name] = (os.path.join(ckpt_dir, weight_map[key]), key)
+    return plan
+
+
 def _broadcast_pretrained_weights(
-    model: nn.Module, rank0_state_dict: Optional[dict], device: torch.device
+    model: nn.Module, rank0_state_dict: Optional[dict], device: torch.device,
+    ckpt_dir: Optional[str] = None,
 ) -> None:
     """
     Fill every rank's sharded (DTensor) parameters from rank 0's real values,
@@ -174,6 +255,14 @@ def _broadcast_pretrained_weights(
     owns its own storage, and the full tensor is dropped immediately. Peak
     GPU is therefore (this rank's shard) + (the single largest tensor),
     not the whole model.
+
+    Sharded load (fsdp.sharded_load, default on): tensors present in the
+    checkpoint's safetensors files are not broadcast at all -- every rank reads
+    only its own slice straight from disk, in parallel. The broadcast made rank 0
+    read the whole checkpoint alone and push it through one GPU: 600 s of wrap
+    time for Llama-3.3-70B on 8 nodes. Only tensors with no checkpoint entry
+    (LoRA adapters, non-persistent buffers such as RoPE inv_freq, tied weights)
+    still come from rank 0.
     """
     from torch.distributed.tensor import DTensor
     from torch.distributed.tensor._utils import compute_local_shape_and_global_offset
@@ -230,7 +319,28 @@ def _broadcast_pretrained_weights(
                     tensor.detach().copy_(full)
         bucket.clear()
 
+    plan = _sharded_load_plan(named, ckpt_dir)
+    open_files: dict = {}
+    if plan:
+        from safetensors import safe_open
+
     for name, tensor in named:
+        if name in plan:
+            fname, key = plan[name]
+            if fname not in open_files:
+                open_files[fname] = safe_open(fname, framework="pt", device="cpu")
+            if isinstance(tensor, DTensor):
+                shape, offset = compute_local_shape_and_global_offset(
+                    tensor.shape, tensor.device_mesh, tensor.placements
+                )
+                slices = tuple(slice(o, o + s) for s, o in zip(shape, offset))
+                dst = tensor.to_local().detach()
+            else:
+                slices, dst = tuple(slice(None) for _ in tensor.shape), tensor.detach()
+            if dst.numel():
+                with torch.no_grad():
+                    dst.copy_(open_files[fname].get_slice(key)[slices].to(device=device, dtype=dst.dtype))
+            continue
         if rank == 0:
             src = sd.get(name)
             # Non-persistent buffers (e.g. rotary_emb.inv_freq) are absent
@@ -255,7 +365,13 @@ def _broadcast_pretrained_weights(
             bucket_size = 0
 
     _flush(bucket)
+    open_files.clear()
 
+    if rank == 0 and plan:
+        logger.info(
+            f"FSDP2 sharded load: {len(plan)} of {len(named)} tensors read per rank "
+            f"from {ckpt_dir}; {len(named) - len(plan)} broadcast from rank 0"
+        )
     if rank == 0 and missing:
         logger.warning(
             f"{len(missing)} model tensors had no entry in the pretrained "

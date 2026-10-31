@@ -21,6 +21,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from bhaskera.introspect import ModelProfile
 from bhaskera.utils import ThroughputTracker
 from bhaskera.utils.system_stats import system_stats, cuda_memory_stats
+from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
+from bhaskera.utils.startup_timer import mark as startup_mark
 
 from .checkpointing import maybe_resume, save_and_prune
 from .moe import compute_expert_utilization, extract_aux_loss
@@ -93,6 +95,25 @@ def _set_grad_sync(model: torch.nn.Module, enabled: bool) -> None:
         return
 
     # ── Non-distributed: nothing to do ──────────────────────────────
+
+
+def _model_dim(model: torch.nn.Module, name: str) -> int:
+    """num_hidden_layers / hidden_size from the HF config, through DDP/FSDP/PEFT wrappers."""
+    m = model
+    for _ in range(4):
+        mc = getattr(m, "config", None)
+        if mc is not None and getattr(mc, name, None):
+            return int(getattr(mc, name))
+        m = getattr(m, "module", None) or getattr(m, "base_model", None) or getattr(m, "model", None)
+        if m is None:
+            break
+    return 0
+
+
+def _uses_activation_checkpointing(cfg) -> bool:
+    dist_cfg = cfg.training.distributed
+    block = getattr(dist_cfg, str(dist_cfg.strategy).lower(), None)
+    return bool(getattr(block, "activation_checkpointing", False))
 
 
 def _flops_params(model: torch.nn.Module, profile: ModelProfile, total_params: int) -> int:
@@ -204,6 +225,10 @@ def train(
         peak_flops_per_gpu=peak_tflops * 1e12,
         window=int(getattr(metrics_cfg, "throughput_window", 50)) if metrics_cfg else 50,
         warmup_steps=int(getattr(metrics_cfg, "throughput_warmup", 5)) if metrics_cfg else 5,
+        trainable_params=trainable_params,
+        num_layers=_model_dim(model, "num_hidden_layers"),
+        hidden_size=_model_dim(model, "hidden_size"),
+        recompute=_uses_activation_checkpointing(cfg),
     ) if throughput_on else None
 
     if tracker:
@@ -366,6 +391,9 @@ def _run_epoch(
     cuda_every  = int(getattr(metrics_cfg, "cuda_every_n_steps", 10))   if metrics_cfg else 10
     sys_on      = bool(getattr(metrics_cfg, "enabled", True))           if metrics_cfg else True
 
+    # Packed rows (data/packing.py) carry per-example position_ids.
+    packed = bool(getattr(cfg.data, "runtime_packing", False))
+
     # ── Data loader ─────────────────────────────────────────────────
     # fix #16: use prefetch_batches from config
     # fix loop: drop_last=True prevents shape mismatches in the last batch
@@ -382,6 +410,7 @@ def _run_epoch(
             "input_ids":      torch.long,
             "attention_mask": torch.long,
             "labels":         torch.long,
+            **({"position_ids": torch.long} if packed else {}),
         },
         device=device,
     )
@@ -417,15 +446,18 @@ def _run_epoch(
     stop_early  = False
 
     while step < train_cfg.max_steps and not stop_early:
+        capture_window(step)   # no-op unless BHASKERA_NSYS=1
         micro_losses:     list[torch.Tensor] = []
         micro_aux_losses: list[torch.Tensor] = []
         window_tokens  = 0
         window_samples = 0
+        window_processed = 0
 
         # ── Gradient accumulation loop ───────────────────────────────
         for micro_step in range(grad_accum):
             try:
-                batch = next(loader_iter)
+                with nvtx_range("data_wait"):
+                    batch = next(loader_iter)
             except StopIteration:
                 # Epoch exhausted mid-accumulation window — stop cleanly
                 loader_iter = None  # type: ignore[assignment]
@@ -437,6 +469,7 @@ def _run_epoch(
 
             try:
                 window_tokens  += int(attention_mask.sum().item())
+                window_processed += int(input_ids.numel())   # rows x seq_len, padding included
                 window_samples += int(input_ids.size(0))
                 window_seq_len  = int(input_ids.size(1))
             except Exception:
@@ -458,12 +491,24 @@ def _run_epoch(
             )
 
             with autocast_ctx:
-                forward_kwargs = dict(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    use_cache=False,
-                )
+                if packed:
+                    # Flatten to [1, B*S] and drop the mask: flash-attention only
+                    # switches to per-example (varlen) attention from position_ids
+                    # at batch size 1; otherwise packed examples attend to each
+                    # other. attention_mask stays above for token counting only.
+                    forward_kwargs = {
+                        "input_ids": input_ids.reshape(1, -1),
+                        "position_ids": batch["position_ids"].reshape(1, -1),
+                        "labels": labels.reshape(1, -1),
+                        "use_cache": False,
+                    }
+                else:
+                    forward_kwargs = dict(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        use_cache=False,
+                    )
                 if profile.is_moe and profile.has_aux_loss:
                     forward_kwargs["output_router_logits"] = True
 
@@ -478,16 +523,18 @@ def _run_epoch(
                     torch.cuda.memory._record_memory_history(max_entries=200_000)
 
                 try:
-                    out       = model(**forward_kwargs)
-                    main_loss = out.loss
-                    aux_loss  = extract_aux_loss(out, profile)
+                    with nvtx_range("forward_loss"):
+                        out       = model(**forward_kwargs)
+                        main_loss = out.loss
+                        aux_loss  = extract_aux_loss(out, profile)
 
-                    if aux_loss is not None:
-                        total_loss = (main_loss + aux_loss_weight * aux_loss) / grad_accum
-                    else:
-                        total_loss = main_loss / grad_accum
+                        if aux_loss is not None:
+                            total_loss = (main_loss + aux_loss_weight * aux_loss) / grad_accum
+                        else:
+                            total_loss = main_loss / grad_accum
 
-                    total_loss.backward()
+                    with nvtx_range("backward"):   # DDP/FSDP gradient comms overlap here
+                        total_loss.backward()
                 except torch.OutOfMemoryError:
                     if _profile_oom:
                         snap = torch.cuda.memory._snapshot()
@@ -516,13 +563,14 @@ def _run_epoch(
         # Use model.clip_grad_norm_ for FSDP2 if available (handles sharded grads).
         # DDP doesn't expose clip_grad_norm_; falls through to the manual clip.
         grad_clip = getattr(train_cfg, "grad_clip", None) or getattr(train_cfg, "max_grad_norm", 1.0)
-        if hasattr(model, "clip_grad_norm_"):
-            grad_norm = model.clip_grad_norm_(grad_clip).item()
-        else:
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                (p for p in model.parameters() if p.requires_grad),
-                grad_clip,
-            ).item()
+        with nvtx_range("grad_clip"):
+            if hasattr(model, "clip_grad_norm_"):
+                grad_norm = model.clip_grad_norm_(grad_clip).item()
+            else:
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    (p for p in model.parameters() if p.requires_grad),
+                    grad_clip,
+                ).item()
 
         if not math.isfinite(grad_norm):
             grad_skip_count += 1
@@ -552,16 +600,18 @@ def _run_epoch(
             continue
         grad_skip_count = 0  # any finite step resets the consecutive counter
 
-        optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad(set_to_none=True)
+        with nvtx_range("optimizer_step"):
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
 
         # ── Loss aggregation ────────────────────────────────────────
-        window_loss = torch.stack(micro_losses).mean().item()
-        window_aux  = (
-            torch.stack(micro_aux_losses).mean().item()
-            if micro_aux_losses else 0.0
-        )
+        with nvtx_range("loss_sync"):
+            window_loss = torch.stack(micro_losses).mean().item()
+            window_aux  = (
+                torch.stack(micro_aux_losses).mean().item()
+                if micro_aux_losses else 0.0
+            )
 
         # Loss EMA + spike ratio
         if loss_ema is None:
@@ -575,57 +625,70 @@ def _run_epoch(
         epoch_aux_loss += window_aux
         epoch_steps    += 1
         step           += 1
+        startup_mark("first_step_done", rank)   # logs once, on the first completed step
 
         # ── Throughput ──────────────────────────────────────────────
-        throughput_metrics: dict[str, float] = {}
-        if throughput is not None:
-            throughput_metrics = throughput.step(
-                tokens_in_step=window_tokens,
-                samples_in_step=window_samples,
-                seq_len=window_seq_len,
-            )
+        with nvtx_range("throughput_tracker"):
+            throughput_metrics: dict[str, float] = {}
+            if throughput is not None:
+                throughput_metrics = throughput.step(
+                    tokens_in_step=window_tokens,
+                    samples_in_step=window_samples,
+                    seq_len=window_seq_len,
+                    processed_tokens_in_step=window_processed,
+                )
 
         # ── Logging ────────────────────────────────────────────────
-        if rank == 0:
-            msg = (
-                f"[epoch {epoch}][step {step}] loss={window_loss:.4f} "
-                f"lr={lr:.2e} grad_norm={grad_norm:.4f}"
-            )
-            if "throughput/tokens_per_sec" in throughput_metrics:
-                msg += f" tok/s={throughput_metrics['throughput/tokens_per_sec']:.0f}"
-            if "throughput/mfu_pct" in throughput_metrics:
-                msg += f" MFU={throughput_metrics['throughput/mfu_pct']:.1f}%"
-            logger.info(msg)
+        with nvtx_range("metrics_logging"):
+            if rank == 0:
+                msg = (
+                    f"[epoch {epoch}][step {step}] loss={window_loss:.4f} "
+                    f"lr={lr:.2e} grad_norm={grad_norm:.4f}"
+                )
+                if "throughput/tokens_per_sec" in throughput_metrics:
+                    msg += f" tok/s={throughput_metrics['throughput/tokens_per_sec']:.0f}"
+                if "throughput/mfu_pct" in throughput_metrics:
+                    msg += f" MFU={throughput_metrics['throughput/mfu_pct']:.1f}%"
+                if "throughput/hfu_pct" in throughput_metrics:
+                    msg += f" HFU={throughput_metrics['throughput/hfu_pct']:.1f}%"
+                if "throughput/padding_pct" in throughput_metrics:
+                    msg += f" pad={throughput_metrics['throughput/padding_pct']:.0f}%"
+                if "throughput/step_time_s" in throughput_metrics:
+                    msg += f" step_s={throughput_metrics['throughput/step_time_s']:.2f}"
+                if "throughput/mfu_step_pct" in throughput_metrics:
+                    msg += f" MFU_step={throughput_metrics['throughput/mfu_step_pct']:.1f}%"
+                logger.info(msg)
 
-            metrics: dict[str, float] = {
-                "loss":             window_loss,
-                "lr":               lr,
-                "grad_norm":        grad_norm,
-                "epoch":            float(epoch),
-                "loss_running_avg": loss_ema,
-                "loss_spike_ratio": loss_spike,
-            }
-            if profile.is_moe:
-                metrics["aux_loss"]   = window_aux
-                metrics["total_loss"] = window_loss + aux_loss_weight * window_aux
-            metrics.update(throughput_metrics)
+                metrics: dict[str, float] = {
+                    "loss":             window_loss,
+                    "lr":               lr,
+                    "grad_norm":        grad_norm,
+                    "epoch":            float(epoch),
+                    "loss_running_avg": loss_ema,
+                    "loss_spike_ratio": loss_spike,
+                }
+                if profile.is_moe:
+                    metrics["aux_loss"]   = window_aux
+                    metrics["total_loss"] = window_loss + aux_loss_weight * window_aux
+                metrics.update(throughput_metrics)
 
-            if tracker:
-                if log_expert_util and step % expert_log_every == 0:
-                    metrics.update(compute_expert_utilization(out, profile))
-                tracker.log(metrics, step=step)
+                if tracker:
+                    if log_expert_util and step % expert_log_every == 0:
+                        metrics.update(compute_expert_utilization(out, profile))
+                    tracker.log(metrics, step=step)
 
-        if tracker and sys_on and sys_every > 0 and step % sys_every == 0:
-            sysm: dict[str, float] = {}
-            sysm.update(system_stats(
-                gpu=bool(getattr(metrics_cfg, "gpu", True)) if metrics_cfg else True,
-                cpu=bool(getattr(metrics_cfg, "cpu", True)) if metrics_cfg else True,
-            ))
-            if cuda_every > 0 and step % cuda_every == 0:
-                if not metrics_cfg or getattr(metrics_cfg, "cuda_memory", True):
-                    sysm.update(cuda_memory_stats(device))
-            if sysm:
-                tracker.log(sysm, step=step)
+        with nvtx_range("system_stats"):
+            if tracker and sys_on and sys_every > 0 and step % sys_every == 0:
+                sysm: dict[str, float] = {}
+                sysm.update(system_stats(
+                    gpu=bool(getattr(metrics_cfg, "gpu", True)) if metrics_cfg else True,
+                    cpu=bool(getattr(metrics_cfg, "cpu", True)) if metrics_cfg else True,
+                ))
+                if cuda_every > 0 and step % cuda_every == 0:
+                    if not metrics_cfg or getattr(metrics_cfg, "cuda_memory", True):
+                        sysm.update(cuda_memory_stats(device))
+                if sysm:
+                    tracker.log(sysm, step=step)
 
         # ── Periodic eval / MLPerf-style convergence early-stop ──────
         eval_steps = train_cfg.eval_steps
@@ -655,6 +718,7 @@ def _run_epoch(
                             "— stopping early (convergence target reached)"
                         )
 
+    capture_end()   # close the Nsight Systems window if training ended early
     if epoch_steps == 0:
         return step, best_ckpts, stop_early, grad_skip_count
 
