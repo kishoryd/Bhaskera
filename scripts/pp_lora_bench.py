@@ -28,6 +28,7 @@ import os
 import statistics
 import time
 import zlib
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -61,6 +62,7 @@ def parse():
     p.add_argument("--no-ac", action="store_true", help="disable activation checkpointing")
     p.add_argument("--check", action="store_true", help="tiny-model correctness test")
     p.add_argument("--peak-tflops", type=float, default=312.0)
+    p.add_argument("--nccl-timeout-min", type=float, default=10.0)
     return p.parse_args()
 
 
@@ -169,7 +171,10 @@ def main() -> None:
     local = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(local)
     dev = torch.device("cuda", local)
-    dist.init_process_group("nccl", device_id=dev)
+    # No device_id: binding it makes new_group() split the default communicator, and the
+    # pipeline's lazily created 2-rank send/recv communicators then collided across
+    # pipeline copies ("rank 1 of 2 ranks has already checked in"); pp > 1 with dp > 1 hung.
+    dist.init_process_group("nccl", timeout=timedelta(minutes=args.nccl_timeout_min))
     pp = args.pp
     assert world % pp == 0, f"world {world} not divisible by pp {pp}"
     dp = world // pp
