@@ -206,10 +206,23 @@ class DDPConfig:
 
 
 @dataclass
+class PipelineConfig:
+    """strategy: pipeline. The frozen model is split by layers across `stages` GPUs and
+    stays there; only activations cross stages and only LoRA grads cross pipeline copies.
+    A step runs `microbatches` micro-batches of training.batch_size sequences through
+    each pipeline copy (grad_accum is not used). See distributed/pipeline.py."""
+    stages: int = 4
+    microbatches: int = 16
+    schedule: str = "1f1b"              # "1f1b" | "gpipe"
+    activation_checkpointing: bool = True
+
+
+@dataclass
 class DistributedConfig:
     strategy: str = "fsdp"
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)
     ddp: DDPConfig = field(default_factory=DDPConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
 
 
 @dataclass
@@ -338,6 +351,7 @@ def _get(d: Any, *keys, default=None):
 def _dict_to_config(raw: dict) -> Config:
     fsdp_raw    = _get(raw, "training", "distributed", "fsdp", default={}) or {}
     ddp_raw     = _get(raw, "training", "distributed", "ddp",  default={}) or {}
+    pp_raw      = _get(raw, "training", "distributed", "pipeline", default={}) or {}
     dist_raw    = _get(raw, "training", "distributed", default={}) or {}
     train_raw   = _get(raw, "training", default={}) or {}
     log_raw     = _get(raw, "logging",  default={}) or {}
@@ -460,6 +474,12 @@ def _dict_to_config(raw: dict) -> Config:
                     # ── DDP-parity additions ──
                     activation_checkpointing=bool(ddp_raw.get("activation_checkpointing", False)),
                     static_graph=bool(ddp_raw.get("static_graph", False)),
+                ),
+                pipeline=PipelineConfig(
+                    stages=int(pp_raw.get("stages", 4)),
+                    microbatches=int(pp_raw.get("microbatches", 16)),
+                    schedule=str(pp_raw.get("schedule", "1f1b")).lower(),
+                    activation_checkpointing=bool(pp_raw.get("activation_checkpointing", True)),
                 ),
             ),
         ),
