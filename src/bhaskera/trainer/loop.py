@@ -28,6 +28,7 @@ from .checkpointing import maybe_resume, save_and_prune
 from .moe import compute_expert_utilization, extract_aux_loss
 from .optim import build_optimizer, build_scheduler
 from .precision import resolve_autocast_dtype
+from bhaskera.models.quantization import param_numel
 from .step_timing import StepTimer
 
 logger = logging.getLogger(__name__)
@@ -155,7 +156,7 @@ def _flops_params(model: torch.nn.Module, profile: ModelProfile, total_params: i
     total_instances  = num_experts + num_shared
     active_instances = active_routed + num_shared
 
-    expert_params = sum(p.numel() for m in profile.expert_modules for p in m.parameters())
+    expert_params = sum(param_numel(p) for m in profile.expert_modules for p in m.parameters())
     non_expert_params = total_params - expert_params
     if non_expert_params < 0:
         # expert_modules double-counted something (e.g. a module reachable
@@ -219,7 +220,7 @@ def train(
     throughput_on  = bool(getattr(metrics_cfg, "throughput", True)) if metrics_cfg else True
     peak_tflops    = float(getattr(metrics_cfg, "peak_tflops_per_gpu", 312.0)) if metrics_cfg else 312.0
 
-    total_params     = sum(p.numel() for p in model.parameters())
+    total_params     = sum(param_numel(p) for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     params_for_flops = _flops_params(model, profile, total_params) or trainable_params
 

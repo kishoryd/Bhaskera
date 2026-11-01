@@ -15,6 +15,7 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from bhaskera.introspect import ModelProfile, introspect_model
+from bhaskera.models.quantization import build_quantization_config, param_numel
 
 logger = logging.getLogger(__name__)
 
@@ -213,10 +214,17 @@ def build_model(
             with init_empty_weights():
                 model = AutoModelForCausalLM.from_config(model_config, **meta_kwargs)
         else:
+            quant_cfg = build_quantization_config(cfg)   # raises under FSDP
+            if quant_cfg is not None:
+                # Quantize shard by shard straight onto this rank's GPU. Loading to
+                # CPU first (the bf16 DDP path) would need the whole bf16 model in
+                # host RAM per rank: ~141 GB for a 70B model, two ranks per node.
+                kwargs["quantization_config"] = quant_cfg
+                kwargs["device_map"] = {"": device}
             model = AutoModelForCausalLM.from_pretrained(
                 name, config=model_config, **kwargs
             )
-        if device.type != "cpu":
+        if device.type != "cpu" and "quantization_config" not in kwargs:
             model = model.to(device)
 
     # ── Introspect (never hardcode layer classes) ───────────────────
@@ -224,7 +232,7 @@ def build_model(
     if raw_dtype != "auto":
         profile.model_dtype = _DTYPE_MAP.get(raw_dtype, torch.bfloat16)
 
-    param_count = sum(p.numel() for p in model.parameters())
+    param_count = sum(param_numel(p) for p in model.parameters())
     logger.info(
         f"Loaded {name} | params={param_count:,} | "
         f"dtype={profile.model_dtype} | moe={profile.is_moe}"

@@ -23,6 +23,9 @@ class ModelConfig:
     attn_impl: Optional[str] = None
     trust_remote_code: bool = False
     use_liger_kernel: bool = True
+    # "qlora": load the frozen base in 4-bit NF4 (bitsandbytes), DDP only.
+    # See models/quantization.py.
+    quantization: str = "none"
 
 
 @dataclass
@@ -362,6 +365,7 @@ def _dict_to_config(raw: dict) -> Config:
             attn_impl=model_raw.get("attn_impl"),
             trust_remote_code=model_raw.get("trust_remote_code", False),
             use_liger_kernel=bool(model_raw.get("use_liger_kernel", True)),
+            quantization=str(model_raw.get("quantization", "none") or "none").lower(),
         ),
         data=DataConfig(
             name=data_raw.get("name", "ultrachat"),
