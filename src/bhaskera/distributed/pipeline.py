@@ -99,8 +99,14 @@ class Stage(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.embed_tokens is not None:
             x = self.embed_tokens(x.reshape(1, -1))      # [mb, S] ids -> [1, mb*S, H]
-        pos = self._positions[self._next]
-        self._next += 1
+        if torch.is_grad_enabled():
+            pos = self._positions[self._next]
+            self._next += 1
+        else:
+            # PipelineStage runs one no-grad forward before the first step to learn tensor
+            # shapes; it must not consume a micro-batch's position ids (every micro-batch has
+            # the same shape, so the first entry serves).
+            pos = self._positions[0]
         pe = self.rotary(x, pos)
         for layer in self.layers:
             x = layer(x, position_ids=pos, position_embeddings=pe)
