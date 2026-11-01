@@ -273,10 +273,9 @@ def main() -> None:
             print(json.dumps(rec), flush=True)
 
     if args.check:
-        _check(args, cfg, rank, s, replica, first, last, losses, stage, lora, layer_ids,
-               dp, m, rows, seq, dev, pp_group)
-        dist.destroy_process_group()
-        return
+        ok = _check(args, cfg, rank, s, replica, first, last, losses, stage, lora, layer_ids,
+                    dp, m, rows, seq, dev, pp_group)
+        _finish(0 if ok else 1)
 
     mem = torch.tensor(torch.cuda.max_memory_allocated() / 2**30, device=dev)
     dist.all_reduce(mem, op=dist.ReduceOp.MAX)
@@ -288,12 +287,20 @@ def main() -> None:
                           "microbatches": m, "global_batch_seqs": dp * rows,
                           "steps_in_median": len(keep), **med,
                           "max_mem_gib": round(mem.item(), 1)}), flush=True)
-    dist.destroy_process_group()
+    _finish(0)
+
+
+def _finish(code: int) -> None:
+    """Every rank waits for the others (rank 0 may still be running the reference), then
+    exits without NCCL teardown, which hung the first check run until its time limit."""
+    dist.barrier()
+    os._exit(code)
 
 
 def _check(args, cfg, rank, s, replica, first, last, losses, stage, lora, layer_ids,
-           dp, m, rows, seq, dev, pp_group) -> None:
-    """Pipeline (+ data-parallel average) vs one unsplit model over the same global batch."""
+           dp, m, rows, seq, dev, pp_group) -> bool:
+    """Pipeline (+ data-parallel average) vs one unsplit model over the same global batch.
+    Returns the verdict on rank 0, True elsewhere."""
     mine = {}
     if replica == 0:
         mine = {canon(n, layer_ids): p.grad.detach().float().cpu()
@@ -303,7 +310,7 @@ def _check(args, cfg, rank, s, replica, first, last, losses, stage, lora, layer_
     dist.all_gather_object(grads, mine)
     dist.all_gather_object(loss_vals, loss_here)
     if rank != 0:
-        return
+        return True
     pipe_grads = {k: v for d in grads for k, v in d.items()}
     pipe_loss = sum(v for v in loss_vals if v is not None) / dp
 
@@ -334,8 +341,7 @@ def _check(args, cfg, rank, s, replica, first, last, losses, stage, lora, layer_
                       "loss_pipeline": pipe_loss, "loss_reference": total, "loss_rel_err": loss_rel,
                       "lora_tensors": len(ref_grads), "unmatched_names": missing[:5],
                       "max_grad_rel_err": worst, "worst_tensor": worst_name}), flush=True)
-    if not ok:
-        os._exit(1)
+    return ok
 
 
 if __name__ == "__main__":
