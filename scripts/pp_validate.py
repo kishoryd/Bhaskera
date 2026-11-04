@@ -42,14 +42,22 @@ class FakeData:
     """Stands in for a Ray dataset shard. Batch k is a pure function of (seed, salt, k), so the
     reference and a resumed run can regenerate exactly what the pipeline saw."""
 
-    def __init__(self, seed=0, salt=0, n_rows=None, skip=0, packed=False, crash_at=None):
+    def __init__(self, seed=0, salt=0, n_rows=None, skip=0, packed=False, crash_at=None, pad=None):
         self.seed, self.salt, self.n_rows, self.skip, self.packed = seed, salt, n_rows, skip, packed
         self.crash_at = crash_at          # simulate a crash when asked for this batch index
+        self.pad = pad                    # None | "left" | "right": pad each row by a random length
 
     def batch(self, k, rows, device):
         g = torch.Generator().manual_seed(self.seed * 100003 + self.salt * 1009 + k)
         ids = torch.randint(0, VOCAB, (rows, SEQ), generator=g)
         out = {"input_ids": ids, "labels": ids.clone(), "attention_mask": torch.ones_like(ids)}
+        if self.pad:
+            n = torch.randint(0, SEQ // 2, (rows,), generator=g)
+            cols = torch.arange(SEQ).expand(rows, -1)
+            is_pad = cols < n[:, None] if self.pad == "left" else cols >= (SEQ - n[:, None])
+            out["attention_mask"] = (~is_pad).long()
+            out["input_ids"] = torch.where(is_pad, torch.zeros_like(ids), ids)
+            out["labels"] = torch.where(is_pad, torch.full_like(ids, -100), ids)
         if self.packed:   # two packed sequences per row
             out["position_ids"] = (torch.arange(SEQ) % (SEQ // 2)).expand(rows, -1).clone()
         return {k_: v.to(device) for k_, v in out.items()}
@@ -402,6 +410,29 @@ def functional(base, mdir_bf16, device):
         note(f"bf16 flash-attn packed={packed} rows_per_microbatch={rows_mb} finite", _agree(ok), detail)
 
 
+def padding(base, mdir16, device):
+    """Left- and right-padded rows (the attention mask must be honoured): bf16 + FlashAttention-2
+    pipeline step-1 loss against an unsplit bf16 model that is given the attention mask. At step
+    1 the LoRA B matrices are zero, so the loss does not depend on the LoRA start."""
+    from transformers import AutoModelForCausalLM
+    m = 8
+    for side in ("left", "right"):
+        cfg = make_cfg(base, mdir16, dtype="bfloat16", attn="flash_attention_2", stages=4, m=m, steps=1)
+        stage, info, tr, _ = run_pipeline(cfg, lambda i: FakeData(seed=9, salt=0, pad=side), device=device)
+        ok, detail = True, ""
+        if dist.get_rank() == 0:
+            ref = AutoModelForCausalLM.from_pretrained(mdir16, dtype=torch.bfloat16,
+                                                       attn_implementation="flash_attention_2").to(device)
+            b = FakeData(seed=9, salt=0, pad=side).batch(0, m, device)
+            with torch.no_grad():
+                want = sum(float(ref(input_ids=b["input_ids"][i:i + 1], attention_mask=b["attention_mask"][i:i + 1],
+                                     labels=b["labels"][i:i + 1], use_cache=False).loss) for i in range(m)) / m
+            got = tr.rows[1]["loss"]
+            ok = abs(got - want) < 0.02
+            detail = f"pipeline={got:.4f} masked_reference={want:.4f}"
+        note(f"{side}-padded rows: step-1 loss equals the masked reference (bf16 FlashAttention-2)", _agree(ok), detail)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="configs/profile/llama33_70b_pipeline_4node.yaml")
@@ -436,7 +467,8 @@ def main():
     for fn, a in ((eval_scenarios, (args.base, mdir, device)),
                   (resume_scenarios, (args.base, mdir, device, os.path.join(args.work, "ckpt"))),
                   (robustness, (args.base, mdir, device)),
-                  (functional, (args.base, mdir16, device))):
+                  (functional, (args.base, mdir16, device)),
+                  (padding, (args.base, mdir16, device))):
         try:
             fn(*a)
         except Exception:                                                     # noqa: BLE001

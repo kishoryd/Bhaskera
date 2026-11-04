@@ -46,6 +46,21 @@ logger = logging.getLogger(__name__)
 _SCHEDULES = {"1f1b": Schedule1F1B, "gpipe": ScheduleGPipe}
 
 
+def positions_from_mask(mask: torch.Tensor) -> torch.Tensor:
+    """[rows, S] attention mask -> position ids that restart wherever the mask changes.
+
+    FlashAttention keeps tokens apart when position ids restart, so real tokens never attend
+    to padding, whichever side the data is padded on (Mistral's tokenizer pads on the left).
+    Padding becomes a sequence of its own; its labels are -100, so it adds no loss. An
+    all-ones mask gives plain 0..S-1, as before.
+    """
+    idx = torch.arange(mask.shape[1], device=mask.device).expand_as(mask)
+    change = torch.ones_like(mask, dtype=torch.bool)
+    change[:, 1:] = mask[:, 1:] != mask[:, :-1]
+    start = torch.where(change, idx, torch.zeros_like(idx)).cummax(dim=1).values
+    return (idx - start).contiguous()
+
+
 def _make_loss(stage: Stage, microbatches: int):
     try:
         from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
@@ -164,7 +179,6 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
     loss_fn = _make_loss(stage, 1)
     was_training = stage.training
     stage.eval()
-    pos_row = torch.arange(seq_len, device=device).expand(rows_mb, -1).reshape(1, -1).contiguous()
     loader = iter(val_dataset.iter_torch_batches(
         batch_size=rows_mb, drop_last=True, device=device,
         dtypes={"input_ids": torch.long, "attention_mask": torch.long, "labels": torch.long}))
@@ -188,11 +202,12 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
             exhausted[src_stage] = True
             continue
         ids = torch.empty(rows_mb, seq_len, device=device, dtype=torch.long)
-        lab = torch.empty_like(ids)
+        lab, msk = torch.empty_like(ids), torch.ones_like(ids)
         if batch is not None:
-            ids.copy_(batch["input_ids"]); lab.copy_(batch["labels"])
-        dist.broadcast(ids, src=src, group=info.pp_group)
-        dist.broadcast(lab, src=src, group=info.pp_group)
+            ids.copy_(batch["input_ids"]); lab.copy_(batch["labels"]); msk.copy_(batch["attention_mask"])
+        for t in (ids, lab, msk):
+            dist.broadcast(t, src=src, group=info.pp_group)
+        pos_row = positions_from_mask(msk).reshape(1, -1)
         if info.first:
             x = ids
         else:
@@ -228,6 +243,9 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
     rows = m * rows_mb
     seq_len = int(cfg.data.seq_len)
     packed = bool(getattr(cfg.data, "runtime_packing", False))
+    if (cfg.model.attn_impl or "flash_attention_2") != "flash_attention_2" and rank == 0:
+        logger.warning("pipeline: padding is kept apart from real tokens through position ids, which "
+                       "only flash_attention_2 honours; with another attention the padding is attended")
     if rows_mb > 1 and (cfg.model.attn_impl or "flash_attention_2") != "flash_attention_2":
         raise ValueError("pipeline with batch_size > 1 flattens each micro-batch into one row and "
                          "needs flash_attention_2 to keep its sequences apart")
@@ -287,7 +305,7 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
             if packed:
                 pos = batch["position_ids"].contiguous()
             else:
-                pos = torch.arange(seq_len, device=device).expand(rows, -1).contiguous()
+                pos = positions_from_mask(batch["attention_mask"])
             mask_tokens = batch["attention_mask"].sum().to(torch.long).reshape(1)
             for t in (ids, labels, pos, mask_tokens):
                 dist.broadcast(t, src=info.stage0_rank, group=info.pp_group)
@@ -303,6 +321,13 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                 sched.step()
             t1 = time.perf_counter()
             # 4. average LoRA grads across copies, clip over all stages, step
+            unused = [p for p in lora if p.grad is None]
+            if unused:     # e.g. MoE: LoRA weights on modules no token reached this step
+                for p in unused:
+                    p.grad = torch.zeros_like(p)
+                if step == 0:
+                    logger.warning(f"[rank {rank}] {len(unused)} of {len(lora)} LoRA tensors got no "
+                                   "gradient this step; treated as zero")
             if info.copies > 1:
                 flat = torch._utils._flatten_dense_tensors([p.grad for p in lora])
                 dist.all_reduce(flat, group=info.dp_group)
