@@ -103,14 +103,14 @@ training:
 
 checkpoint:
   enabled: true
-  save_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/.claude_tmp/ckpt_pipeline_eval2"
+  save_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/.claude_tmp/ckpt_pipeline_eval3"
   save_interval: 1000
   keep_last_n: 2
 
 logging:
   tracker: "mlflow"
   project: "bhaskera"
-  run_name: "llama33_70b-pipeline-eval2"
+  run_name: "llama33_70b-pipeline-eval3"
   mlflow_tracking_uri: ""
   log_gpu_every_n_steps: 10
 
