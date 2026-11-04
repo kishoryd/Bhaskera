@@ -245,6 +245,9 @@ def build_stage(cfg, rank: int, world_size: int, device: torch.device) -> tuple[
     from transformers import AutoConfig, AutoModelForCausalLM
 
     pcfg = cfg.training.distributed.pipeline
+    if str(getattr(cfg.model, "quantization", "none") or "none").lower() != "none":
+        raise ValueError("strategy: pipeline keeps the base model in bf16 and does not support "
+                         "model.quantization; use strategy: ddp for 4-bit QLoRA")
     stages = int(pcfg.stages)
     if stages < 2 or world_size % stages:
         raise ValueError(f"pipeline.stages={stages} must be >= 2 and divide world size {world_size}")
