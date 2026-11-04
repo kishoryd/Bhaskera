@@ -37,7 +37,7 @@ export PYTHONPATH="$SRC_ROOT/src:${PYTHONPATH:-}"
 
 export NCCL_TIMEOUT=3600 TORCH_NCCL_BLOCKING_WAIT=1 TORCH_DISTRIBUTED_TIMEOUT=3600
 export NCCL_ASYNC_ERROR_HANDLING=1 NCCL_DEBUG=WARN
-if grep -qE '^[[:space:]]*strategy:[[:space:]]*"?fsdp' "$CONFIG" 2>/dev/null; then _CDMC=32; else _CDMC=1; fi   # see scripts/submit.sh
+if grep -qE '^[[:space:]]*strategy:[[:space:]]*"?ddp' "$CONFIG" 2>/dev/null; then _CDMC=1; else _CDMC=32; fi   # see scripts/submit.sh
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-$_CDMC}
 export NCCL_SOCKET_IFNAME=ib0
 

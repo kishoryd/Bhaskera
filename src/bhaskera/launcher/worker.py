@@ -65,6 +65,19 @@ def worker_fn(cfg_dict: dict) -> None:
     )
 
     strategy    = cfg.training.distributed.strategy.lower()
+    if strategy == "pipeline":
+        # Each GPU builds and keeps only its slice of the frozen model (distributed/pipeline.py).
+        from bhaskera.distributed.pipeline import build_stage
+        from bhaskera.trainer.pipeline_loop import train_pipeline
+
+        watchdog.phase("build_model")
+        stage, info = build_stage(cfg, rank, world_size, device)
+        startup_mark("model_loaded", rank)
+        tracker = build_logger(cfg, rank=rank, world_size=world_size)
+        train_pipeline(stage=stage, info=info, dataset=dataset, val_dataset=val_dataset, cfg=cfg, rank=rank,
+                       local_rank=local_rank, tracker=tracker, world_size=world_size,
+                       startup_watchdog=watchdog)
+        return
     load_device = torch.device("cpu") if strategy == "fsdp" else device
 
     watchdog.phase("build_model")

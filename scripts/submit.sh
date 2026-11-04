@@ -47,12 +47,13 @@ export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 # CUDA stream on one hardware queue. Under FSDP that serializes the weight
 # all-gather stream behind compute: measured on Llama-3.3-70B, 8 nodes, 0% of
 # communication overlapped compute, and steps were 11-14% slower than with 32.
-# DDP keeps 1 (unchanged, overlaps fine). Override by exporting it before sbatch.
+# DDP keeps 1 (unchanged, overlaps fine); FSDP and pipeline (stage send/recv) get 32.
+# Override by exporting it before sbatch.
 _CFG="${SLURM_SUBMIT_DIR}/configs/config.yaml"
 set -- $EXTRA_ARGS
 while [ $# -gt 0 ]; do [ "$1" = "--config" ] && _CFG="$2"; shift; done
 [ -f "$_CFG" ] || _CFG="${SLURM_SUBMIT_DIR}/${_CFG}"
-if grep -qE '^[[:space:]]*strategy:[[:space:]]*"?fsdp' "$_CFG" 2>/dev/null; then _CDMC=32; else _CDMC=1; fi
+if grep -qE '^[[:space:]]*strategy:[[:space:]]*"?ddp' "$_CFG" 2>/dev/null; then _CDMC=1; else _CDMC=32; fi
 export CUDA_DEVICE_MAX_CONNECTIONS="${CUDA_DEVICE_MAX_CONNECTIONS:-$_CDMC}"
 
 # =============================================================================
