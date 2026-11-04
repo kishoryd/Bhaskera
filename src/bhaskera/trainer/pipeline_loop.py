@@ -15,8 +15,10 @@ One optimizer step:
   4. LoRA grads are averaged across pipeline copies, clipped by the norm over all stages,
      then the optimizer and scheduler step.
 
-Logs the same line and metric names as trainer/loop.py. Not supported yet: periodic eval,
-resume from checkpoint, MoE aux loss. Saving LoRA weights is supported.
+Logs the same line and metric names as trainer/loop.py. Periodic eval (training.eval_steps,
+forward-only through the pipeline on the validation shard), checkpoint save and resume are
+supported; MoE aux loss is not. Resume restores the LoRA weights, optimizer, scheduler and
+step; the data stream restarts (it is shuffled, as in the other strategies).
 
 Data note: every rank reads its own shard but only the first stage's is trained on, so an
 epoch covers 1/stages of the dataset; set max_steps rather than num_epochs.
@@ -26,6 +28,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import time
 
 import torch
@@ -33,7 +36,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.distributed.pipelining import PipelineStage, Schedule1F1B, ScheduleGPipe
 
-from bhaskera.distributed.pipeline import PipelineInfo, Stage, canonical_name
+from bhaskera.distributed.pipeline import _DTYPES, PipelineInfo, Stage, canonical_name
 from bhaskera.utils.throughput import ThroughputTracker
 
 from .optim import build_optimizer, build_scheduler
@@ -64,22 +67,137 @@ def _make_loss(stage: Stage, microbatches: int):
     return loss_fn
 
 
-def _save_lora(stage: Stage, info: PipelineInfo, save_dir: str, step: int, rank: int) -> None:
-    """Copy 0 of every stage writes its LoRA tensors under unsplit-model names; rank 0
-    writes the .complete sentinel last (same convention as the FSDP/DDP checkpoints)."""
+def _save_lora(stage: Stage, info: PipelineInfo, save_dir: str, step: int, rank: int,
+               optimizer=None, scheduler=None) -> None:
+    """Copy 0 of every stage writes its LoRA tensors (under unsplit-model names) and, when
+    given, its optimizer/scheduler state; rank 0 writes the .complete sentinel last (same
+    convention as the FSDP/DDP checkpoints). Copies hold identical weights and optimizer
+    state (gradients are averaged), so copy 0 speaks for all."""
     out = os.path.join(save_dir, f"step_{step}")
     if info.copy == 0:
         os.makedirs(out, exist_ok=True)
         sd = {canonical_name(n, info.layer_ids): p.detach().float().cpu()
               for n, p in stage.named_parameters() if p.requires_grad}
         torch.save(sd, os.path.join(out, f"lora_stage{info.stage}.pt"))
+        if optimizer is not None:
+            torch.save({"optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict() if scheduler is not None else None,
+                        "step": step},
+                       os.path.join(out, f"opt_stage{info.stage}.pt"))
     dist.barrier()
     if rank == 0:
         open(os.path.join(out, ".complete"), "w").close()
         logger.info(f"saved LoRA weights for {info.stages} stages to {out}")
 
 
-def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, rank: int, local_rank: int,
+def _latest_checkpoint(save_dir: str) -> tuple[int, str] | None:
+    if not os.path.isdir(save_dir):
+        return None
+    best = None
+    for d in os.listdir(save_dir):
+        m = re.fullmatch(r"step_(\d+)", d)
+        if m and os.path.exists(os.path.join(save_dir, d, ".complete")):
+            if best is None or int(m.group(1)) > best[0]:
+                best = (int(m.group(1)), os.path.join(save_dir, d))
+    return best
+
+
+def _resume(stage: Stage, info: PipelineInfo, optimizer, scheduler, save_dir: str,
+            rank: int, device) -> int:
+    """Load the newest complete checkpoint into every rank's stage. Returns its step (0 = none).
+    A checkpoint without optimizer state (older runs) restores the weights only."""
+    found = _latest_checkpoint(save_dir)
+    if found is None:
+        return 0
+    step, path = found
+    sd = torch.load(os.path.join(path, f"lora_stage{info.stage}.pt"), map_location="cpu")
+    params = {canonical_name(n, info.layer_ids): p for n, p in stage.named_parameters() if p.requires_grad}
+    if set(params) != set(sd):
+        raise RuntimeError(f"pipeline resume: checkpoint {path} does not match this stage layout "
+                           f"({len(sd)} saved tensors vs {len(params)}); same stages/model/LoRA needed")
+    with torch.no_grad():
+        for k, p in params.items():
+            p.copy_(sd[k].to(device=p.device, dtype=p.dtype))
+    opt_path = os.path.join(path, f"opt_stage{info.stage}.pt")
+    if os.path.exists(opt_path):
+        st = torch.load(opt_path, map_location=device)
+        optimizer.load_state_dict(st["optimizer"])
+        if st.get("scheduler") is not None:
+            scheduler.load_state_dict(st["scheduler"])
+    elif rank == 0:
+        logger.warning(f"pipeline resume: no optimizer state in {path}; weights only")
+    if rank == 0:
+        logger.info(f"pipeline: resumed from {path} (step {step})")
+    return step
+
+
+@torch.no_grad()
+def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, device, rank: int,
+                       dtype: torch.dtype) -> float | None:
+    """Forward-only pass of up to eval_micro_batches micro-batches per pipeline copy.
+
+    Micro-batches go through the stages one at a time (send/recv between neighbours): eval is
+    short, so the pipeline bubble does not matter and no schedule/backward machinery is used.
+    Every rank pulls from its validation shard in lockstep (as in training, so the shared
+    stream never waits on a stopped consumer); the first stage's batch is the pipeline's and
+    its "more data" flag is broadcast. Returns the mean loss per micro-batch over all copies
+    (same value on every rank), or None if nothing was evaluated.
+    """
+    rows_mb = int(cfg.training.batch_size)
+    seq_len = int(cfg.data.seq_len)
+    limit = int(cfg.training.distributed.pipeline.eval_micro_batches)
+    s0 = info.stage0_rank
+    prev_r = rank - 1 if not info.first else None
+    next_r = rank + 1 if not info.last else None
+    loss_fn = _make_loss(stage, 1)
+    was_training = stage.training
+    stage.eval()
+    pos_row = torch.arange(seq_len, device=device).expand(rows_mb, -1).reshape(1, -1).contiguous()
+    loader = iter(val_dataset.iter_torch_batches(
+        batch_size=rows_mb, drop_last=True, device=device,
+        dtypes={"input_ids": torch.long, "attention_mask": torch.long, "labels": torch.long}))
+    total, n = 0.0, 0
+    while n < limit:
+        try:
+            batch = next(loader)
+            flag = torch.ones(1, device=device, dtype=torch.long)
+        except StopIteration:
+            batch, flag = None, torch.zeros(1, device=device, dtype=torch.long)
+        dist.broadcast(flag, src=s0, group=info.pp_group)
+        if not flag.item():
+            break
+        ids = torch.empty(rows_mb, seq_len, device=device, dtype=torch.long)
+        lab = torch.empty_like(ids)
+        if info.first:
+            ids.copy_(batch["input_ids"]); lab.copy_(batch["labels"])
+        dist.broadcast(ids, src=s0, group=info.pp_group)
+        dist.broadcast(lab, src=s0, group=info.pp_group)
+        if info.first:
+            x = ids
+        else:
+            x = torch.empty(1, rows_mb * seq_len, info.hidden_size, device=device, dtype=dtype)
+            dist.recv(x, src=prev_r, group=info.pp_group)
+        h = stage(x, pos_row)
+        if info.last:
+            total += float(loss_fn(h, lab))
+        else:
+            dist.send(h.contiguous(), dst=next_r, group=info.pp_group)
+        n += 1
+    stage.train(was_training)
+    agg = torch.tensor([total, float(n) if info.last else 0.0], device=device)
+    dist.all_reduce(agg)
+    return None if agg[1].item() == 0 else float(agg[0] / agg[1])
+
+
+def _sync_lora_init(lora: list, info: PipelineInfo) -> None:
+    """LoRA-A matrices start random, and each rank seeds differently: without this the pipeline
+    copies would train different adapters while averaging their gradients."""
+    if info.copies > 1:
+        for p in lora:
+            dist.broadcast(p.data, src=info.stage, group=info.dp_group)
+
+
+def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_dataset=None, rank: int, local_rank: int,
                    tracker=None, world_size: int = 1, startup_watchdog=None) -> None:
     device = torch.device(f"cuda:{local_rank}")
     train_cfg, pcfg = cfg.training, cfg.training.distributed.pipeline
@@ -90,12 +208,15 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, rank: int,
     if rows_mb > 1 and (cfg.model.attn_impl or "flash_attention_2") != "flash_attention_2":
         raise ValueError("pipeline with batch_size > 1 flattens each micro-batch into one row and "
                          "needs flash_attention_2 to keep its sequences apart")
-    if int(getattr(train_cfg, "eval_steps", 0) or 0) > 0 and rank == 0:
-        logger.warning("pipeline strategy: periodic eval is not supported yet; eval_steps ignored")
+    eval_steps = int(getattr(train_cfg, "eval_steps", 0) or 0)
+    if eval_steps > 0 and val_dataset is None and rank == 0:
+        logger.warning("pipeline: eval_steps set but data.val_tokenized_path is not; eval skipped")
+    act_dtype = _DTYPES.get(getattr(cfg.model, "dtype", "bfloat16"), torch.bfloat16)
 
     optimizer = build_optimizer(stage, train_cfg)
     scheduler = build_scheduler(optimizer, train_cfg)
     lora = [p for p in stage.parameters() if p.requires_grad]
+    _sync_lora_init(lora, info)
     n_train = torch.tensor(sum(p.numel() for p in lora), device=device)
     dist.all_reduce(n_train, group=info.pp_group)
 
@@ -123,6 +244,8 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, rank: int,
     grad_clip = getattr(train_cfg, "grad_clip", None) or getattr(train_cfg, "max_grad_norm", 1.0)
     ckpt = cfg.checkpoint
     step, epoch = 0, 0
+    if ckpt.enabled:
+        step = _resume(stage, info, optimizer, scheduler, ckpt.save_dir, rank, device)
     if startup_watchdog is not None:
         startup_watchdog.phase("first batch + first step")
     throughput.reset_step_clock()
@@ -209,11 +332,24 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, rank: int,
                                  "time/pipeline_s": t1 - t0, "time/dp_sync_s": t2 - t1,
                                  "cuda/max_allocated_mib": torch.cuda.max_memory_allocated() / 2**20,
                                  **tm}, step=step)
+            if val_dataset is not None and eval_steps > 0 and step % eval_steps == 0:
+                te = time.perf_counter()
+                eval_loss = _run_eval_pipeline(stage, info, val_dataset, cfg, device, rank, act_dtype)
+                if rank == 0:
+                    if eval_loss is None:
+                        logger.warning(f"[epoch {epoch}][step {step}] eval skipped: no validation batches")
+                    else:
+                        logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f} "
+                                    f"({time.perf_counter() - te:.1f}s)")
+                        if tracker:
+                            tracker.log({"eval/loss": eval_loss}, step=step)
+                throughput.reset_step_clock()
             if ckpt.enabled and ckpt.save_interval > 0 and step % ckpt.save_interval == 0:
-                _save_lora(stage, info, ckpt.save_dir, step, rank)
+                _save_lora(stage, info, ckpt.save_dir, step, rank, optimizer, scheduler)
+                throughput.reset_step_clock()
             if step >= train_cfg.max_steps:
                 break
         epoch += 1
     if ckpt.enabled:
-        _save_lora(stage, info, ckpt.save_dir, step, rank)
+        _save_lora(stage, info, ckpt.save_dir, step, rank, optimizer, scheduler)
     dist.barrier()

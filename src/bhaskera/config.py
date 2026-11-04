@@ -139,6 +139,7 @@ class FSDPConfig:
     reduce_dtype: str = "bfloat16"
     buffer_dtype: str = "bfloat16"
     activation_checkpointing: bool = True
+    eval_micro_batches: int = 16        # per pipeline copy, per periodic eval (bounds eval time)
     cpu_offload: bool = False
     shard_experts_individually: bool = True
 
@@ -480,6 +481,7 @@ def _dict_to_config(raw: dict) -> Config:
                     microbatches=int(pp_raw.get("microbatches", 16)),
                     schedule=str(pp_raw.get("schedule", "1f1b")).lower(),
                     activation_checkpointing=bool(pp_raw.get("activation_checkpointing", True)),
+                    eval_micro_batches=int(pp_raw.get("eval_micro_batches", 16)),
                 ),
             ),
         ),

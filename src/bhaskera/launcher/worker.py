@@ -74,7 +74,7 @@ def worker_fn(cfg_dict: dict) -> None:
         stage, info = build_stage(cfg, rank, world_size, device)
         startup_mark("model_loaded", rank)
         tracker = build_logger(cfg, rank=rank, world_size=world_size)
-        train_pipeline(stage=stage, info=info, dataset=dataset, cfg=cfg, rank=rank,
+        train_pipeline(stage=stage, info=info, dataset=dataset, val_dataset=val_dataset, cfg=cfg, rank=rank,
                        local_rank=local_rank, tracker=tracker, world_size=world_size,
                        startup_watchdog=watchdog)
         return

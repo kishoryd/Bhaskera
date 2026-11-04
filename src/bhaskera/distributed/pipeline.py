@@ -96,10 +96,12 @@ class Stage(nn.Module):
     def set_positions(self, chunks: list[torch.Tensor]) -> None:
         self._positions, self._next = chunks, 0
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos: torch.Tensor | None = None) -> torch.Tensor:
         if self.embed_tokens is not None:
             x = self.embed_tokens(x.reshape(1, -1))      # [mb, S] ids -> [1, mb*S, H]
-        if torch.is_grad_enabled():
+        if pos is not None:                              # eval path: caller supplies positions
+            pass
+        elif torch.is_grad_enabled():
             pos = self._positions[self._next]
             self._next += 1
         else:
