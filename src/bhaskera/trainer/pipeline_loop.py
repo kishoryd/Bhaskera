@@ -17,7 +17,7 @@ One optimizer step:
 
 Logs the same line and metric names as trainer/loop.py. Periodic eval (training.eval_steps,
 forward-only through the pipeline on the validation shard), checkpoint save and resume are
-supported; MoE aux loss is not. Resume restores the LoRA weights, optimizer, scheduler and
+supported, and MoE models (Qwen3-MoE/Mixtral-style blocks) get the per-layer load-balancing loss. Resume restores the LoRA weights, optimizer, scheduler and
 step; the data stream restarts (it is shuffled, as in the other strategies).
 
 Data note: every rank reads its own shard but only the first stage's is trained on, so an
@@ -263,7 +263,7 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
 
     metrics_cfg = getattr(getattr(cfg, "monitoring", None), "metrics", None)
     throughput = ThroughputTracker(
-        params_for_flops=info.total_params,
+        params_for_flops=info.flops_params or info.total_params,
         world_size=world_size,
         peak_flops_per_gpu=float(getattr(metrics_cfg, "peak_tflops_per_gpu", 312.0)) * 1e12,
         window=int(getattr(metrics_cfg, "throughput_window", 50)),
@@ -306,11 +306,14 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                 pos = batch["position_ids"].contiguous()
             else:
                 pos = positions_from_mask(batch["attention_mask"])
-            mask_tokens = batch["attention_mask"].sum().to(torch.long).reshape(1)
-            for t in (ids, labels, pos, mask_tokens):
+            amask = batch["attention_mask"].contiguous()
+            mask_tokens = amask.sum().to(torch.long).reshape(1)
+            for t in (ids, labels, pos, amask, mask_tokens):
                 dist.broadcast(t, src=info.stage0_rank, group=info.pp_group)
-            # 2. per-micro-batch positions for every stage, flattened like the packed DDP path
-            stage.set_positions([c.reshape(1, -1) for c in pos.chunk(m)])
+            # 2. per-micro-batch positions (and padding masks, for the MoE aux loss) for every
+            #    stage, flattened like the packed DDP path
+            stage.set_positions([c.reshape(1, -1) for c in pos.chunk(m)],
+                                [c.reshape(1, -1) for c in amask.chunk(m)])
             # 3. pipeline forward/backward
             losses: list = []
             if info.first:
@@ -351,6 +354,14 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
             dist.all_reduce(loss, group=info.pp_group)
             dist.all_reduce(loss, group=info.dp_group)
             loss_val = loss.item() / info.copies
+            aux_val = None
+            if info.is_moe and stage._aux is not None:
+                # mean per-layer load-balancing loss over micro-batches, all stages and copies
+                aux = stage.aux_acc.clone()
+                stage.aux_acc.zero_()
+                dist.all_reduce(aux, group=info.pp_group)
+                dist.all_reduce(aux, group=info.dp_group)
+                aux_val = aux.item() / (info.copies * m * max(1, info.moe_layers))
             step += 1
             # Throughput counts per GPU: a pipeline's tokens are shared by its `stages` GPUs.
             tm = throughput.step(
@@ -373,10 +384,13 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                     if key in tm:
                         unit = "%" if label in ("MFU", "HFU", "pad", "MFU_step") else ""
                         msg += f" {label}={tm[key]:{fmt}}{unit}"
+                if aux_val is not None:
+                    msg += f" aux_loss={aux_val:.4f}"
                 msg += f" | pipeline={t1 - t0:.2f}s dp_sync={t2 - t1:.2f}s"
                 logger.info(msg)
                 if tracker:
                     tracker.log({"loss": loss_val, "lr": lr, "grad_norm": grad_norm, "epoch": float(epoch),
+                                 **({"aux_loss": aux_val} if aux_val is not None else {}),
                                  "time/pipeline_s": t1 - t0, "time/dp_sync_s": t2 - t1,
                                  "cuda/max_allocated_mib": torch.cuda.max_memory_allocated() / 2**20,
                                  **tm}, step=step)

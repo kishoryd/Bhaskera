@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch import nn
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     CheckpointImpl,
@@ -38,7 +39,8 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 )
 from torch.distributed.device_mesh import init_device_mesh
 
-from bhaskera.introspect import introspect_model
+from bhaskera.distributed.moe_routing import make_routing_recompute_stable, recompute_contexts
+from bhaskera.introspect import _EXPERT_LEAF_NAMES, introspect_model
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,38 @@ def canonical_name(name: str, layer_ids: list[int] | None = None) -> str:
     return n
 
 
+def switch_aux_loss(logits: torch.Tensor, top_k: int, mask: torch.Tensor | None = None) -> torch.Tensor:
+    """Load-balancing loss of ONE MoE layer, E * sum_e f_e * P_e (Switch Transformer; the same
+    quantity as transformers' load_balancing_loss_func on a single layer's router logits).
+    f_e is the share of top-k assignments that went to expert e (no gradient) and P_e the mean
+    router probability of e; `mask` (1 = real token) leaves padding out of both."""
+    num_experts = logits.shape[-1]
+    probs = F.softmax(logits.float(), dim=-1)
+    picked = F.one_hot(probs.topk(top_k, dim=-1).indices, num_experts).sum(dim=1).float()
+    if mask is None:
+        f, p = picked.mean(0), probs.mean(0)
+    else:
+        m = mask.reshape(-1, 1).float()
+        denom = m.sum().clamp(min=1.0)
+        f, p = (picked * m).sum(0) / denom, (probs * m).sum(0) / denom
+    return num_experts * (f * p).sum()
+
+
+class _AuxGrad(torch.autograd.Function):
+    """Identity on the stage output whose backward also hands a gradient of 1 to `aux`, so a
+    stage-local loss term trains through the pipeline schedule (which only differentiates the
+    last stage's loss). `aux` must already be scaled by its loss weight."""
+
+    @staticmethod
+    def forward(ctx, x, aux):
+        ctx.aux_shape, ctx.aux_dtype = aux.shape, aux.dtype
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad):
+        return grad, torch.ones(ctx.aux_shape, dtype=ctx.aux_dtype, device=grad.device)
+
+
 class Stage(nn.Module):
     """A contiguous slice of the decoder: [embed] layers [norm]. The LM head lives here on
     the last stage but is applied inside the loss (fused with cross-entropy).
@@ -91,18 +125,38 @@ class Stage(nn.Module):
         self.lm_head = full.lm_head if last else None
         self.rotary = None                   # built on the GPU (inv_freq is a buffer, not a weight)
         self._positions: list[torch.Tensor] = []
+        self._masks: list[torch.Tensor] | None = None
         self._next = 0
+        self._aux: dict | None = None         # MoE load-balancing loss settings (enable_aux)
+        self._logits: list[torch.Tensor] = []
+        self._collecting = False
+        self.aux_acc = torch.zeros(())        # sum over the step's micro-batches of per-layer aux (no weight)
 
-    def set_positions(self, chunks: list[torch.Tensor]) -> None:
-        self._positions, self._next = chunks, 0
+    def set_positions(self, chunks: list[torch.Tensor], masks: list[torch.Tensor] | None = None) -> None:
+        self._positions, self._masks, self._next = chunks, masks, 0
+
+    def enable_aux(self, gates: list[nn.Module], top_k: int, scale: float, device) -> None:
+        """MoE: add the load-balancing loss of this stage's layers to training. `scale` is
+        aux_loss_weight / (micro-batches * MoE layers in the whole model), so the sum over all
+        stages, micro-batches and layers is weight * the mean per-layer aux loss."""
+        self._aux = {"top_k": int(top_k), "scale": float(scale)}
+        self.aux_acc = torch.zeros((), device=device)
+        for g in gates:
+            g.register_forward_hook(self._collect_logits)
+
+    def _collect_logits(self, module, args, out) -> None:
+        if self._collecting:          # not during activation-checkpoint recompute
+            self._logits.append(out)
 
     def forward(self, x: torch.Tensor, pos: torch.Tensor | None = None) -> torch.Tensor:
         if self.embed_tokens is not None:
             x = self.embed_tokens(x.reshape(1, -1))      # [mb, S] ids -> [1, mb*S, H]
+        mask = None
         if pos is not None:                              # eval path: caller supplies positions
             pass
         elif torch.is_grad_enabled():
             pos = self._positions[self._next]
+            mask = self._masks[self._next] if self._masks else None
             self._next += 1
         else:
             # PipelineStage runs one no-grad forward before the first step to learn tensor
@@ -110,9 +164,19 @@ class Stage(nn.Module):
             # the same shape, so the first entry serves).
             pos = self._positions[0]
         pe = self.rotary(x, pos)
+        train_aux = self._aux is not None and torch.is_grad_enabled()
+        if train_aux:
+            self._logits, self._collecting = [], True
         for layer in self.layers:
             x = layer(x, position_ids=pos, position_embeddings=pe)
-        return self.norm(x) if self.norm is not None else x
+        self._collecting = False
+        x = self.norm(x) if self.norm is not None else x
+        if train_aux and self._logits:
+            aux = sum(switch_aux_loss(l, self._aux["top_k"], mask) for l in self._logits)
+            self.aux_acc += aux.detach()
+            x = _AuxGrad.apply(x, aux * self._aux["scale"])
+        self._logits = []
+        return x
 
 
 @dataclass
@@ -131,6 +195,9 @@ class PipelineInfo:
     num_layers: int
     hidden_size: int
     lora_targets: list[str]
+    flops_params: int = 0     # parameters that run per token (active experts only), for MFU
+    is_moe: bool = False
+    moe_layers: int = 0       # MoE layers in the whole model
 
 
 def _load_stage_weights(stage: Stage, ckpt_dir: str, layer_ids: list[int], tie: bool) -> None:
@@ -200,28 +267,49 @@ def build_stage(cfg, rank: int, world_size: int, device: torch.device) -> tuple[
             raise ValueError(f"pipeline strategy supports Llama/Mistral-style decoders; "
                              f"{type(full).__name__}.model has no '{attr}'")
     total = sum(p.numel() for p in full.parameters())
+    prof = introspect_model(full)
+    from bhaskera.trainer.loop import _flops_params
+    flops_params = _flops_params(full, prof, total)
     targets = list(cfg.lora.target_modules or ["auto"])
     if targets == ["auto"]:
-        targets = list(introspect_model(full).lora_targets)
+        targets = list(prof.lora_targets)
+    is_moe = bool(prof.is_moe and prof.num_experts > 0)
+    is_gate = lambda n, m: (isinstance(m, nn.Linear) and n.endswith("gate") and m.out_features == prof.num_experts)
+    moe_layers = sum(1 for n, m in full.named_modules() if is_gate(n, m)) if is_moe else 0
     layer_ids = split_layers(mcfg.num_hidden_layers, stages)[stage_idx]
     rotary_cls = type(full.model.rotary_emb)
 
     stage = Stage(full, layer_ids, first, last)
     del full
+    if is_moe:   # recompute under activation checkpointing must reuse the forward's routing
+        make_routing_recompute_stable(stage)
     stage.to_empty(device=device)
     _load_stage_weights(stage, name, layer_ids, bool(getattr(mcfg, "tie_word_embeddings", False)))
     stage.rotary = rotary_cls(config=mcfg, device=device)
 
     if not cfg.lora.enabled:
         raise ValueError("pipeline strategy is LoRA-only (it keeps the base frozen and resident)")
+    lkw = {}
+    if is_moe and not getattr(cfg.lora, "include_experts", False):
+        # PEFT matches by module name, so gate_proj/up_proj/down_proj would also hit every
+        # expert; keep experts frozen like the FSDP path (models/lora.py).
+        lkw["exclude_modules"] = rf"(.*\.)?({'|'.join(sorted(_EXPERT_LEAF_NAMES))})\.\d+\..*"
     lcfg = LoraConfig(r=cfg.lora.r, lora_alpha=cfg.lora.alpha, lora_dropout=cfg.lora.dropout,
-                      target_modules=targets, bias="none")
+                      target_modules=targets, bias="none", **lkw)
     stage = inject_adapter_in_model(lcfg, stage)
     for n, p in stage.named_parameters():
         p.requires_grad = "lora_" in n
+    if is_moe and int(getattr(prof, "experts_per_token", 0)) > 0:
+        moe_cfg = getattr(cfg, "moe", None)
+        weight = float(getattr(moe_cfg, "aux_loss_weight", 0.01)) if moe_cfg else 0.01
+        gates = [m for n, m in stage.named_modules() if is_gate(n, m)]
+        if weight > 0:      # on every stage, even one without MoE layers: the loop all-reduces the metric
+            stage.enable_aux(gates, prof.experts_per_token,
+                             weight / (int(pcfg.microbatches) * max(1, moe_layers)), device)
     if pcfg.activation_checkpointing:
+        ckw = {"context_fn": recompute_contexts} if is_moe else {}
         for j in range(len(stage.layers)):
-            stage.layers[j] = checkpoint_wrapper(stage.layers[j], checkpoint_impl=CheckpointImpl.NO_REENTRANT)
+            stage.layers[j] = checkpoint_wrapper(stage.layers[j], checkpoint_impl=CheckpointImpl.NO_REENTRANT, **ckw)
 
     pp_group, dp_group = mesh["pp"].get_group(), mesh["dp"].get_group()
     _log_placement(pp_group, rank, stages)
@@ -234,5 +322,6 @@ def build_stage(cfg, rank: int, world_size: int, device: torch.device) -> tuple[
                         last=last, pp_group=pp_group, dp_group=dp_group,
                         stage0_rank=copy_idx * stages, layer_ids=layer_ids, total_params=total,
                         num_layers=mcfg.num_hidden_layers, hidden_size=mcfg.hidden_size,
-                        lora_targets=targets)
+                        lora_targets=targets, flops_params=flops_params, is_moe=is_moe,
+                        moe_layers=moe_layers)
     return stage, info

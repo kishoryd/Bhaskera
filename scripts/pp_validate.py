@@ -86,15 +86,26 @@ def note(name, ok, detail=""):
 
 
 # ---------------------------------------------------------------- config / model
-def make_model_dir(path, dtype=torch.float32):
-    from transformers import LlamaConfig, LlamaForCausalLM
+MOE_E, MOE_K = 8, 2
+
+
+def make_model_dir(path, dtype=torch.float32, moe=False):
+    from transformers import LlamaConfig, LlamaForCausalLM, Qwen3MoeConfig, Qwen3MoeForCausalLM
     if dist.get_rank() == 0:
         shutil.rmtree(path, ignore_errors=True)
         torch.manual_seed(1234)
-        cfg = LlamaConfig(hidden_size=128, intermediate_size=256, num_hidden_layers=LAYERS,
-                          num_attention_heads=4, num_key_value_heads=2, vocab_size=VOCAB,
-                          max_position_embeddings=512, tie_word_embeddings=False)
-        LlamaForCausalLM(cfg).to(dtype).save_pretrained(path, safe_serialization=True)
+        if moe:
+            cfg = Qwen3MoeConfig(hidden_size=128, intermediate_size=256, moe_intermediate_size=64,
+                                 num_hidden_layers=LAYERS, num_attention_heads=4, num_key_value_heads=2,
+                                 head_dim=32, vocab_size=VOCAB, max_position_embeddings=512,
+                                 num_experts=MOE_E, num_experts_per_tok=MOE_K, decoder_sparse_step=1,
+                                 mlp_only_layers=[], norm_topk_prob=True, tie_word_embeddings=False)
+            Qwen3MoeForCausalLM(cfg).to(dtype).save_pretrained(path, safe_serialization=True)
+        else:
+            cfg = LlamaConfig(hidden_size=128, intermediate_size=256, num_hidden_layers=LAYERS,
+                              num_attention_heads=4, num_key_value_heads=2, vocab_size=VOCAB,
+                              max_position_embeddings=512, tie_word_embeddings=False)
+            LlamaForCausalLM(cfg).to(dtype).save_pretrained(path, safe_serialization=True)
     dist.barrier()
 
 
@@ -113,6 +124,7 @@ def make_cfg(base, model_dir, **kw):
     p.stages, p.microbatches = kw.get("stages", 4), kw.get("m", 8)
     p.schedule, p.activation_checkpointing = kw.get("schedule", "1f1b"), kw.get("ckpt_act", True)
     p.eval_micro_batches = kw.get("eval_mb", 16)
+    cfg.moe.aux_loss_weight = kw.get("aux_w", 0.01)
     cfg.checkpoint.enabled = bool(kw.get("save_dir"))
     cfg.checkpoint.save_dir = kw.get("save_dir") or ""
     cfg.checkpoint.save_interval = kw.get("save_interval", 0)
@@ -149,13 +161,14 @@ def max_rel(a, b):
 
 
 # ---------------------------------------------------------------- reference
-def ref_model(cfg, init, device):
+def ref_model(cfg, init, device, moe=False):
     from peft import LoraConfig, inject_adapter_in_model
     from transformers import AutoModelForCausalLM
     m = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.float32,
                                              attn_implementation="sdpa").to(device)
+    kw = {"exclude_modules": r"(.*\.)?(experts|local_experts|routed_experts)\.\d+\..*"} if moe else {}
     m = inject_adapter_in_model(LoraConfig(r=cfg.lora.r, lora_alpha=cfg.lora.alpha, lora_dropout=0.0,
-                                           target_modules=list(TARGETS), bias="none"), m)
+                                           target_modules=list(TARGETS), bias="none", **kw), m)
     for n, p in m.named_parameters():
         p.requires_grad = "lora_" in n
         if p.requires_grad:
@@ -163,32 +176,42 @@ def ref_model(cfg, init, device):
     return m
 
 
-def ref_train(cfg, init, data, steps, device, start=0, state=None):
+def ref_train(cfg, init, data, steps, device, start=0, state=None, moe=False):
     """Unsplit single-GPU training with the pipeline's exact recipe. Returns losses, grad norms,
     final LoRA, and (model, opt, sched) for continuing."""
     t, m = cfg.training, int(cfg.training.distributed.pipeline.microbatches)
-    model = ref_model(cfg, init, device)
+    model = ref_model(cfg, init, device, moe)
+    aux_w = float(cfg.moe.aux_loss_weight)
+    if moe:
+        from transformers.models.qwen3_moe.modeling_qwen3_moe import load_balancing_loss_func
     opt = build_optimizer(model, t)
     sched = build_scheduler(opt, t)
     for _ in range(start):
         sched.step()
-    losses, norms = [], []
+    losses, norms, auxes = [], [], []
     clip = getattr(t, "grad_clip", None) or getattr(t, "max_grad_norm", 1.0)
     it = data.iter_torch_batches(batch_size=m)
     for _ in range(steps):
         b = next(it)
-        tot = 0.0
+        tot, aux_tot = 0.0, 0.0
         for i in range(m):
             row = b["input_ids"][i:i + 1]
-            loss = model(input_ids=row, labels=row, use_cache=False).loss / m
-            loss.backward()
+            out = model(input_ids=row, labels=row, use_cache=False, output_router_logits=moe)
+            loss = out.loss / m
+            if moe:    # per-layer load-balancing loss, averaged over layers (what the pipeline adds)
+                aux = sum(load_balancing_loss_func((lg,), MOE_E, MOE_K) for lg in out.router_logits) / len(out.router_logits)
+                aux_tot += float(aux) / m
+                (loss + aux_w * aux / m).backward()
+            else:
+                loss.backward()
             tot += float(loss)
         params = [p for p in model.parameters() if p.requires_grad]
         gn = float(torch.stack([p.grad.pow(2).sum() for p in params]).sum().sqrt())
         if gn > clip:
             torch._foreach_mul_([p.grad for p in params], clip / (gn + 1e-6))
         opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
-        losses.append(tot); norms.append(gn)
+        losses.append(tot); norms.append(gn); auxes.append(aux_tot)
+    ref_train.last_aux = auxes
     final = {n: p.detach().float().cpu() for n, p in model.named_parameters() if p.requires_grad}
     return losses, norms, final, model
 
@@ -218,8 +241,9 @@ def run_pipeline(cfg, data, val=None, device=None, init=None, rank=None):
     return stage, info, tr, init_snapshot
 
 
-def numeric(name, base, mdir, device, stages, m, schedule="1f1b", act=True, shared=True, steps=3):
-    cfg = make_cfg(base, mdir, stages=stages, m=m, schedule=schedule, ckpt_act=act, steps=steps)
+def numeric(name, base, mdir, device, stages, m, schedule="1f1b", act=True, shared=True, steps=3, moe=False):
+    cfg = make_cfg(base, mdir, stages=stages, m=m, schedule=schedule, ckpt_act=act, steps=steps,
+                   aux_w=0.5 if moe else 0.01)
     copies = dist.get_world_size() // stages
     data = (lambda info: FakeData(seed=3, salt=0 if shared else info.copy))
     stage, info, tr, init = run_pipeline(cfg, data, device=device)
@@ -233,7 +257,7 @@ def numeric(name, base, mdir, device, stages, m, schedule="1f1b", act=True, shar
         detail += f"copies={copies} start_diff_before_sync={same_init:.1e} end_diff={same_end:.1e}"
         if shared:
             losses, norms, rfinal, _ = ref_train(cfg, {k: v for k, v in _full_names(init[0]).items()},
-                                                 FakeData(seed=3, salt=0), steps, device)
+                                                 FakeData(seed=3, salt=0), steps, device, moe=moe)
             pl = [tr.rows[s + 1]["loss"] for s in range(steps)]
             pn = [tr.rows[s + 1]["grad_norm"] for s in range(steps)]
             dl = max(abs(a - b) for a, b in zip(pl, losses))
@@ -241,6 +265,10 @@ def numeric(name, base, mdir, device, stages, m, schedule="1f1b", act=True, shar
             dw = max_rel(delta(final[0], init[0]), delta(rfinal, init[0]))
             ok &= dl < 2e-4 and dn < 2e-3 and dw < 2e-3
             detail += f" loss_maxdiff={dl:.1e} gradnorm_maxrel={dn:.1e} update_rel={dw:.1e}"
+            if moe:
+                da = max(abs(tr.rows[s + 1]["aux_loss"] - ref_train.last_aux[s]) for s in range(steps))
+                ok &= da < 2e-4
+                detail += f" aux_maxdiff={da:.1e} (aux={ref_train.last_aux[0]:.4f}, weight 0.5)"
     note(name, _agree(ok), detail)
     return stage, info, tr, init, final
 
@@ -448,6 +476,8 @@ def main():
     mdir, mdir16 = os.path.join(args.work, "model_fp32"), os.path.join(args.work, "model_bf16")
     make_model_dir(mdir, torch.float32)
     make_model_dir(mdir16, torch.bfloat16)
+    mdir_moe = os.path.join(args.work, "model_moe_fp32")
+    make_model_dir(mdir_moe, torch.float32, moe=True)
 
     plans = [
         ("4 stages x2 copies, 1F1B, act-ckpt", dict(stages=4, m=8)),
@@ -457,6 +487,12 @@ def main():
     for name, kw in plans:
         try:
             numeric(f"numeric: {name}", args.base, mdir, device, **kw)
+        except Exception:                                                     # noqa: BLE001
+            note(f"numeric: {name}", False, traceback.format_exc().splitlines()[-1])
+    for name, kw in (("MoE (Qwen3-MoE, 8 experts top-2): 4 stages x2 copies, aux loss weight 0.5", dict(stages=4, m=8)),
+                     ("MoE: 2 stages x4 copies, GPipe, no act-ckpt", dict(stages=2, m=4, schedule="gpipe", act=False))):
+        try:
+            numeric(f"numeric: {name}", args.base, mdir_moe, device, moe=True, **kw)
         except Exception:                                                     # noqa: BLE001
             note(f"numeric: {name}", False, traceback.format_exc().splitlines()[-1])
     try:
