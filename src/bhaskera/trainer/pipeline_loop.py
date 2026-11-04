@@ -168,6 +168,10 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
     loader = iter(val_dataset.iter_torch_batches(
         batch_size=rows_mb, drop_last=True, device=device,
         dtypes={"input_ids": torch.long, "attention_mask": torch.long, "labels": torch.long}))
+    # Every rank must start reading its shard at once (Ray's split reader waits for all of them
+    # before delivering anything), so each pulls its first batch up front and then only again
+    # after its own batch has been used.
+    pending = next(loader, None)
     exhausted = [False] * info.stages
     total, n, j = 0.0, 0, 0
     while n < limit and not all(exhausted):
@@ -176,12 +180,9 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
             continue
         src = base + src_stage
         batch, flag = None, torch.zeros(1, device=device, dtype=torch.long)
-        if info.stage == src_stage:
-            try:
-                batch = next(loader)
-                flag.fill_(1)
-            except StopIteration:
-                pass
+        if info.stage == src_stage and pending is not None:
+            batch, pending = pending, None
+            flag.fill_(1)
         dist.broadcast(flag, src=src, group=info.pp_group)
         if not flag.item():
             exhausted[src_stage] = True
@@ -203,6 +204,8 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
         else:
             dist.send(h.contiguous(), dst=next_r, group=info.pp_group)
         n += 1
+        if batch is not None:
+            pending = next(loader, None)
     stage.train(was_training)
     agg = torch.tensor([total, float(n) if info.last else 0.0], device=device)
     dist.all_reduce(agg)
