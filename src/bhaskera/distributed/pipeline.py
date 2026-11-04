@@ -44,6 +44,12 @@ from bhaskera.introspect import _EXPERT_LEAF_NAMES, introspect_model
 
 logger = logging.getLogger(__name__)
 
+# Checkpoint layouts the per-stage loader cannot read; failing early beats a KeyError mid-load.
+_UNSUPPORTED_TYPES = {
+    "gpt_oss": "its experts are stored fused and MXFP4-quantized (mlp.experts.gate_up_proj_blocks/_scales), "
+               "not as one tensor per expert",
+}
+
 _DTYPES = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
 
 
@@ -254,12 +260,15 @@ def build_stage(cfg, rank: int, world_size: int, device: torch.device) -> tuple[
     if int(pcfg.microbatches) < stages:
         raise ValueError(f"pipeline.microbatches={pcfg.microbatches} must be >= stages={stages}")
     copies = world_size // stages
-    mesh = init_device_mesh("cuda", (copies, stages), mesh_dim_names=("dp", "pp"))
     stage_idx, copy_idx = rank % stages, rank // stages
     first, last = stage_idx == 0, stage_idx == stages - 1
 
     name = cfg.model.name
     mcfg = AutoConfig.from_pretrained(name, trust_remote_code=cfg.model.trust_remote_code)
+    if getattr(mcfg, "model_type", "") in _UNSUPPORTED_TYPES:
+        raise ValueError(f"strategy: pipeline does not support model_type={mcfg.model_type!r}: "
+                         f"{_UNSUPPORTED_TYPES[mcfg.model_type]}; use strategy: fsdp")
+    mesh = init_device_mesh("cuda", (copies, stages), mesh_dim_names=("dp", "pp"))
     dtype = _DTYPES.get(getattr(cfg.model, "dtype", "bfloat16"), torch.bfloat16)
     attn = cfg.model.attn_impl or "flash_attention_2"
     with torch.device("meta"):

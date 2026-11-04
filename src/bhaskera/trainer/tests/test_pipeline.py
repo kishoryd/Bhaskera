@@ -96,3 +96,12 @@ def test_every_config_loads_and_pipeline_configs_are_consistent():
             assert str(getattr(cfg.model, "quantization", "none")).lower() == "none", f
         if str(getattr(cfg.model, "quantization", "none")).lower() != "none":
             assert d.strategy != "fsdp", f
+
+
+def test_pipeline_rejects_gpt_oss_with_a_clear_message(tmp_path):
+    import json
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "gpt_oss", "architectures": ["GptOssForCausalLM"]}))
+    cfg = load_config(os.path.join(REPO, "configs/profile/llama33_70b_pipeline_4node.yaml"))
+    cfg.model.name = str(tmp_path)
+    with pytest.raises(ValueError, match="gpt_oss"):
+        build_stage(cfg, 0, 8, torch.device("cpu"))
