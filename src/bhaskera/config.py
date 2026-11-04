@@ -139,7 +139,6 @@ class FSDPConfig:
     reduce_dtype: str = "bfloat16"
     buffer_dtype: str = "bfloat16"
     activation_checkpointing: bool = True
-    eval_micro_batches: int = 16        # per pipeline copy, per periodic eval (bounds eval time)
     cpu_offload: bool = False
     shard_experts_individually: bool = True
 
@@ -216,6 +215,7 @@ class PipelineConfig:
     microbatches: int = 16
     schedule: str = "1f1b"              # "1f1b" | "gpipe"
     activation_checkpointing: bool = True
+    eval_micro_batches: int = 16        # per pipeline copy, per periodic eval (bounds eval time)
 
 
 @dataclass
