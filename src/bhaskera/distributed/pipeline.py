@@ -104,7 +104,7 @@ class _AuxGrad(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, aux):
         ctx.aux_shape, ctx.aux_dtype = aux.shape, aux.dtype
-        return x.view_as(x)
+        return x.clone()  # not a view: torch pipelining detach_()es the last stage output in place
 
     @staticmethod
     def backward(ctx, grad):

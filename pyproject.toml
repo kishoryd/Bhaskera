@@ -37,6 +37,7 @@ mlflow    = ["mlflow>=2.10"]
 flash     = ["flash-attn>=2.5"]
 dev       = ["pytest>=7", "ruff>=0.4"]
 inference = ["scipy>=1.10"]
+qlora     = ["bitsandbytes>=0.43"]
 
 # Convenience meta-extra: install everything needed for the full
 # observability stack (Ray Dashboard already comes with default).
