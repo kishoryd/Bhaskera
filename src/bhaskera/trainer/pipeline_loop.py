@@ -110,21 +110,32 @@ def _resume(stage: Stage, info: PipelineInfo, optimizer, scheduler, save_dir: st
     if found is None:
         return 0
     step, path = found
-    sd = torch.load(os.path.join(path, f"lora_stage{info.stage}.pt"), map_location="cpu")
-    params = {canonical_name(n, info.layer_ids): p for n, p in stage.named_parameters() if p.requires_grad}
-    if set(params) != set(sd):
-        raise RuntimeError(f"pipeline resume: checkpoint {path} does not match this stage layout "
-                           f"({len(sd)} saved tensors vs {len(params)}); same stages/model/LoRA needed")
-    with torch.no_grad():
-        for k, p in params.items():
-            p.copy_(sd[k].to(device=p.device, dtype=p.dtype))
-    opt_path = os.path.join(path, f"opt_stage{info.stage}.pt")
-    if os.path.exists(opt_path):
-        st = torch.load(opt_path, map_location=device)
-        optimizer.load_state_dict(st["optimizer"])
-        if st.get("scheduler") is not None:
-            scheduler.load_state_dict(st["scheduler"])
-    elif rank == 0:
+    have_opt, err = False, ""
+    try:
+        sd = torch.load(os.path.join(path, f"lora_stage{info.stage}.pt"), map_location="cpu")
+        params = {canonical_name(n, info.layer_ids): p
+                  for n, p in stage.named_parameters() if p.requires_grad}
+        if set(params) != set(sd):
+            raise RuntimeError(f"{len(sd)} saved tensors vs {len(params)} in this stage; "
+                               "same stages/model/LoRA settings needed")
+        with torch.no_grad():
+            for k, p in params.items():
+                p.copy_(sd[k].to(device=p.device, dtype=p.dtype))
+        opt_path = os.path.join(path, f"opt_stage{info.stage}.pt")
+        if os.path.exists(opt_path):
+            st = torch.load(opt_path, map_location=device)
+            optimizer.load_state_dict(st["optimizer"])
+            if st.get("scheduler") is not None:
+                scheduler.load_state_dict(st["scheduler"])
+            have_opt = True
+    except Exception as e:      # noqa: BLE001 -- agreed on below so no rank is left waiting
+        err = f"{type(e).__name__}: {e}"
+    bad = torch.tensor([1 if err else 0], device=device)
+    dist.all_reduce(bad)        # every rank raises together instead of hanging the others
+    if bad.item():
+        raise RuntimeError(f"pipeline resume from {path} failed on {int(bad.item())} rank(s)"
+                           + (f" (this rank: {err})" if err else ""))
+    if not have_opt and rank == 0:
         logger.warning(f"pipeline resume: no optimizer state in {path}; weights only")
     if rank == 0:
         logger.info(f"pipeline: resumed from {path} (step {step})")
@@ -138,15 +149,16 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
 
     Micro-batches go through the stages one at a time (send/recv between neighbours): eval is
     short, so the pipeline bubble does not matter and no schedule/backward machinery is used.
-    Every rank pulls from its validation shard in lockstep (as in training, so the shared
-    stream never waits on a stopped consumer); the first stage's batch is the pipeline's and
-    its "more data" flag is broadcast. Returns the mean loss per micro-batch over all copies
-    (same value on every rank), or None if nothing was evaluated.
+    Every rank of a pipeline owns a validation shard, so the pipeline takes its micro-batches
+    from its `stages` ranks in turn (the source broadcasts the batch; the first stage feeds
+    it in), which covers the whole validation set. Every rank pulls from its own shard in
+    lockstep, so no shard's stream is left unread. Returns the mean loss per micro-batch over
+    all copies (same value on every rank), or None if nothing was evaluated.
     """
     rows_mb = int(cfg.training.batch_size)
     seq_len = int(cfg.data.seq_len)
     limit = int(cfg.training.distributed.pipeline.eval_micro_batches)
-    s0 = info.stage0_rank
+    base = info.stage0_rank
     prev_r = rank - 1 if not info.first else None
     next_r = rank + 1 if not info.last else None
     loss_fn = _make_loss(stage, 1)
@@ -156,22 +168,30 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
     loader = iter(val_dataset.iter_torch_batches(
         batch_size=rows_mb, drop_last=True, device=device,
         dtypes={"input_ids": torch.long, "attention_mask": torch.long, "labels": torch.long}))
-    total, n = 0.0, 0
-    while n < limit:
-        try:
-            batch = next(loader)
-            flag = torch.ones(1, device=device, dtype=torch.long)
-        except StopIteration:
-            batch, flag = None, torch.zeros(1, device=device, dtype=torch.long)
-        dist.broadcast(flag, src=s0, group=info.pp_group)
+    exhausted = [False] * info.stages
+    total, n, j = 0.0, 0, 0
+    while n < limit and not all(exhausted):
+        src_stage, j = j % info.stages, j + 1
+        if exhausted[src_stage]:
+            continue
+        src = base + src_stage
+        batch, flag = None, torch.zeros(1, device=device, dtype=torch.long)
+        if info.stage == src_stage:
+            try:
+                batch = next(loader)
+                flag.fill_(1)
+            except StopIteration:
+                pass
+        dist.broadcast(flag, src=src, group=info.pp_group)
         if not flag.item():
-            break
+            exhausted[src_stage] = True
+            continue
         ids = torch.empty(rows_mb, seq_len, device=device, dtype=torch.long)
         lab = torch.empty_like(ids)
-        if info.first:
+        if batch is not None:
             ids.copy_(batch["input_ids"]); lab.copy_(batch["labels"])
-        dist.broadcast(ids, src=s0, group=info.pp_group)
-        dist.broadcast(lab, src=s0, group=info.pp_group)
+        dist.broadcast(ids, src=src, group=info.pp_group)
+        dist.broadcast(lab, src=src, group=info.pp_group)
         if info.first:
             x = ids
         else:

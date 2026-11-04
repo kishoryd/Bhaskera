@@ -59,7 +59,7 @@ training:
   grad_accum: 1                  # unused by the pipeline; micro-batches below
   lr: 1.0e-4
   weight_decay: 0.0
-  max_steps: 6
+  max_steps: 3
   num_epochs: 3
   warmup_steps: 50
   max_grad_norm: 1.0
@@ -103,14 +103,14 @@ training:
 
 checkpoint:
   enabled: true
-  save_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/.claude_tmp/ckpt_pipeline_resume"
-  save_interval: 3
+  save_dir: "/scratch/nsmapplication/dlapp/wk-kishor/Bhaskera/.claude_tmp/ckpt_pipeline_eval2"
+  save_interval: 1000
   keep_last_n: 2
 
 logging:
   tracker: "mlflow"
   project: "bhaskera"
-  run_name: "llama33_70b-pipeline-resume-a"
+  run_name: "llama33_70b-pipeline-eval2"
   mlflow_tracking_uri: ""
   log_gpu_every_n_steps: 10
 
