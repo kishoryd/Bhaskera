@@ -40,24 +40,32 @@ _state = threading.local()
 
 
 @contextlib.contextmanager
-def _phase(name: str):
-    prev = getattr(_state, "phase", None)
-    _state.phase = name
+def _phase(name: str, store: dict | None = None):
+    prev, prev_store = getattr(_state, "phase", None), getattr(_state, "store", None)
+    _state.phase, _state.store = name, store
     try:
         yield
     finally:
-        _state.phase = prev
+        _state.phase, _state.store = prev, prev_store
 
 
 def recompute_contexts():
-    """context_fn for torch checkpoint: (forward ctx, recompute ctx)."""
-    return _phase("forward"), _phase("recompute")
+    """context_fn for torch checkpoint: (forward ctx, recompute ctx).
+
+    torch calls this once per checkpointed call, so each call gets its own routing store
+    shared by its forward and its recompute. That keeps routing correct when several calls
+    are in flight before any backward (pipeline schedules run many micro-batch forwards
+    first, and GPipe runs the backwards in reverse order): a store per block would let a
+    later forward overwrite an earlier one's routing."""
+    store: dict = {}
+    return _phase("forward", store), _phase("recompute", store)
 
 
 def select_experts(block: nn.Module, probs: torch.Tensor, top_k: int) -> torch.Tensor:
     """top-k expert indices for this block, reused verbatim on recompute."""
     phase = getattr(_state, "phase", None)
-    cache = block.__dict__.setdefault("_bhaskera_route_cache", collections.deque())
+    store = getattr(_state, "store", None)
+    cache = store.setdefault(id(block), collections.deque()) if store is not None else collections.deque()
     if phase == "recompute" and cache:
         return cache.popleft()
     # Detached: only the indices are needed (weights come from a gather that
@@ -66,7 +74,6 @@ def select_experts(block: nn.Module, probs: torch.Tensor, top_k: int) -> torch.T
     # tensor counts would then differ, the very error this module prevents.
     _, selected = torch.topk(probs.detach(), top_k, dim=-1)
     if phase == "forward" and torch.is_grad_enabled():
-        cache.clear()  # anything left belongs to a backward that never ran
         cache.append(selected)
     return selected
 

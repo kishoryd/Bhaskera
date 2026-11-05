@@ -80,10 +80,28 @@ def check(name, make) -> bool:
     for layer in _layers(m):
         checkpoint(layer, context_fn=mr.recompute_contexts)
     _step(m, ids)
-    stale = sum(len(b.__dict__.get("_bhaskera_route_cache", ())) for _, b, _ in mr.routed_moe_blocks(m)[0])
-    print(f"[{name}] B. pinned + recompute noise: trained, stale cache entries={stale}  "
-          f"{'OK' if stale == 0 else 'FAIL'}")
-    ok &= stale == 0
+    print(f"[{name}] B. pinned + recompute noise: trained  OK")
+
+    # E. pipeline-style: two micro-batches forwarded before either backward, first one back first (1F1B);
+    # routing of the first must survive the second's forward.
+    ids2 = torch.randint(0, 128, (2, 24))
+    refm = copy.deepcopy(base)
+    refm.zero_grad(set_to_none=True)
+    (refm(input_ids=ids, labels=ids, use_cache=False).loss + refm(input_ids=ids2, labels=ids2, use_cache=False).loss).backward()
+    ref2 = {n: p.grad.clone() for n, p in refm.named_parameters() if p.grad is not None}
+    m = copy.deepcopy(base)
+    mr.make_routing_recompute_stable(m)
+    for layer in _layers(m):
+        checkpoint(layer, context_fn=mr.recompute_contexts)
+    m.zero_grad(set_to_none=True)
+    l1 = m(input_ids=ids, labels=ids, use_cache=False).loss
+    l2 = m(input_ids=ids2, labels=ids2, use_cache=False).loss
+    l1.backward()
+    l2.backward()
+    err2 = max((p.grad - ref2[n]).abs().max().item() for n, p in m.named_parameters() if p.grad is not None)
+    ok2 = err2 < 1e-4
+    print(f"[{name}] E. two micro-batches in flight, 1F1B-order backward: max |diff| = {err2:.2e}  {'OK' if ok2 else 'FAIL'}")
+    ok &= ok2
 
     ref = _step(copy.deepcopy(base), ids)   # C
     m = copy.deepcopy(base)
