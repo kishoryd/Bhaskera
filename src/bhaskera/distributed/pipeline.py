@@ -42,6 +42,8 @@ from torch.distributed.device_mesh import init_device_mesh
 from bhaskera.distributed.moe_experts import stack_frozen_experts
 from bhaskera.distributed.moe_routing import make_routing_recompute_stable, recompute_contexts, routed_moe_blocks
 from bhaskera.introspect import _EXPERT_LEAF_NAMES, introspect_model
+from bhaskera.models.lora import is_router_param, router_frozen
+from bhaskera.trainer.moe import router_z_loss
 
 logger = logging.getLogger(__name__)
 
@@ -138,16 +140,20 @@ class Stage(nn.Module):
         self._logits: list[torch.Tensor] = []
         self._collecting = False
         self.aux_acc = torch.zeros(())        # sum over the step's micro-batches of per-layer aux (no weight)
+        self.z_acc = torch.zeros(())          # same for the router z-loss
 
     def set_positions(self, chunks: list[torch.Tensor], masks: list[torch.Tensor] | None = None) -> None:
         self._positions, self._masks, self._next = chunks, masks, 0
 
-    def enable_aux(self, gates: list[nn.Module], top_k: int, scale: float, device) -> None:
-        """MoE: add the load-balancing loss of this stage's layers to training. `scale` is
-        aux_loss_weight / (micro-batches * MoE layers in the whole model), so the sum over all
-        stages, micro-batches and layers is weight * the mean per-layer aux loss."""
-        self._aux = {"top_k": int(top_k), "scale": float(scale)}
+    def enable_aux(self, gates: list[nn.Module], top_k: int, scale: float, device,
+                   z_scale: float = 0.0) -> None:
+        """MoE: add the load-balancing loss (and router z-loss) of this stage's layers to
+        training. `scale` is aux_loss_weight / (micro-batches * MoE layers in the whole model),
+        so the sum over all stages, micro-batches and layers is weight * the mean per-layer aux
+        loss; `z_scale` is the same for router_z_loss_weight."""
+        self._aux = {"top_k": int(top_k), "scale": float(scale), "z_scale": float(z_scale)}
         self.aux_acc = torch.zeros((), device=device)
+        self.z_acc = torch.zeros((), device=device)
         for g in gates:
             g.register_forward_hook(self._collect_logits)
 
@@ -181,7 +187,12 @@ class Stage(nn.Module):
         if train_aux and self._logits:
             aux = sum(switch_aux_loss(l, self._aux["top_k"], mask) for l in self._logits)
             self.aux_acc += aux.detach()
-            x = _AuxGrad.apply(x, aux * self._aux["scale"])
+            term = aux * self._aux["scale"]
+            if self._aux["z_scale"] > 0:
+                z = sum(router_z_loss(l, mask) for l in self._logits)
+                self.z_acc += z.detach()
+                term = term + z * self._aux["z_scale"]
+            x = _AuxGrad.apply(x, term)
         self._logits = []
         return x
 
@@ -321,15 +332,19 @@ def build_stage(cfg, rank: int, world_size: int, device: torch.device) -> tuple[
     lcfg = LoraConfig(r=cfg.lora.r, lora_alpha=cfg.lora.alpha, lora_dropout=cfg.lora.dropout,
                       target_modules=targets, bias="none", **lkw)
     stage = inject_adapter_in_model(lcfg, stage)
+    train_router = is_moe and not router_frozen(cfg)
     for n, p in stage.named_parameters():
-        p.requires_grad = "lora_" in n
+        p.requires_grad = "lora_" in n or (train_router and is_router_param(n, prof))
+    if train_router and rank == 0:
+        logger.info("pipeline: router weights are trained (freeze_router: false)")
     if is_moe and int(getattr(prof, "experts_per_token", 0)) > 0:
         moe_cfg = getattr(cfg, "moe", None)
         weight = float(getattr(moe_cfg, "aux_loss_weight", 0.01)) if moe_cfg else 0.01
+        zw = float(getattr(moe_cfg, "router_z_loss_weight", 0.0) or 0.0) if moe_cfg else 0.0
         gates = [m for n, m in stage.named_modules() if is_gate(n, m)]
-        if weight > 0:      # on every stage, even one without MoE layers: the loop all-reduces the metric
-            stage.enable_aux(gates, prof.experts_per_token,
-                             weight / (int(pcfg.microbatches) * max(1, moe_layers)), device)
+        if weight > 0 or zw > 0:   # on every stage, even one without MoE layers: the loop all-reduces the metric
+            per = int(pcfg.microbatches) * max(1, moe_layers)
+            stage.enable_aux(gates, prof.experts_per_token, weight / per, device, z_scale=zw / per)
     if pcfg.activation_checkpointing:
         ckw = {"context_fn": recompute_contexts} if is_moe else {}
         for j in range(len(stage.layers)):

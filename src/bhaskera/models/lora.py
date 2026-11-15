@@ -151,7 +151,7 @@ def apply_lora(model: nn.Module, cfg, profile: ModelProfile) -> nn.Module:
         )
 
     # ── Freeze router / gate weights (critical for MoE stability) ───
-    if profile.is_moe and getattr(cfg.lora, "freeze_router", True):
+    if profile.is_moe and router_frozen(cfg):
         _freeze_router_weights(model, profile)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -163,15 +163,31 @@ def apply_lora(model: nn.Module, cfg, profile: ModelProfile) -> nn.Module:
     return model
 
 
+_ROUTER_LEAVES = ("gate", "router", "gating", "switch", "shared_expert_gate")
+
+
+def router_frozen(cfg) -> bool:
+    """Router weights stay frozen unless lora.freeze_router or moe.freeze_router is false."""
+    return (bool(getattr(getattr(cfg, "lora", None), "freeze_router", True))
+            and bool(getattr(getattr(cfg, "moe", None), "freeze_router", True)))
+
+
+def is_router_param(pname: str, profile: ModelProfile) -> bool:
+    """True for a router/gate weight. Matches the owning module's name, never a substring of
+    the parameter path: "gate" is inside every SwiGLU gate_proj (and its LoRA tensors)."""
+    if "lora_" in pname:
+        return False
+    module = pname.rsplit(".", 1)[0]
+    if any(module == r or module.endswith("." + r) for r in profile.router_module_names):
+        return True
+    return module.rsplit(".", 1)[-1] in _ROUTER_LEAVES
+
+
 def _freeze_router_weights(model: nn.Module, profile: ModelProfile) -> None:
     """Freeze all gate/router parameters to prevent MoE routing collapse."""
     frozen = 0
-    router_kw = ("gate", "router", "switch", "gating")
     for pname, param in model.named_parameters():
-        is_router = any(r in pname for r in profile.router_module_names)
-        if not is_router:
-            is_router = any(kw in pname.lower() for kw in router_kw)
-        if is_router and param.requires_grad:
+        if is_router_param(pname, profile) and param.requires_grad:
             param.requires_grad_(False)
             frozen += 1
     if frozen:

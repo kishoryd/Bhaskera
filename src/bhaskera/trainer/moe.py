@@ -289,3 +289,44 @@ def compute_expert_utilization(out, profile: ModelProfile) -> dict:
         logger.debug(f"Expert utilisation computation failed: {e}")
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Router z-loss and HF's built-in aux term
+# ---------------------------------------------------------------------------
+
+def router_z_loss(logits: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Router z-loss of ONE layer (ST-MoE): mean over tokens of logsumexp(router logits)^2.
+    Keeps router logits small so the softmax stays well conditioned; `mask` (1 = real token)
+    leaves padding out."""
+    z = torch.logsumexp(logits.float(), dim=-1).pow(2)
+    if mask is None:
+        return z.mean()
+    m = mask.reshape(-1).float()
+    return (z * m).sum() / m.sum().clamp(min=1.0)
+
+
+def router_z_loss_from_output(out, profile: ModelProfile) -> Optional[torch.Tensor]:
+    """Mean over MoE layers of router_z_loss, from out.router_logits (full-logit layers only)."""
+    rl = getattr(out, "router_logits", None)
+    if rl is None or not profile.is_moe:
+        return None
+    layers = [t for t in _normalize_router_logits(rl)
+              if t is not None and t.dim() >= 2 and _infer_logit_kind(t, profile) == _KIND_FULL]
+    if not layers:
+        return None
+    return sum(router_z_loss(t.reshape(-1, t.shape[-1])) for t in layers) / len(layers)
+
+
+def disable_builtin_aux_loss(model) -> int:
+    """HF MoE CausalLMs add router_aux_loss_coef * aux_loss into out.loss whenever
+    output_router_logits=True. Bhaskera adds moe.aux_loss_weight * aux itself, so leaving
+    HF's term in would count the aux loss twice and make the logged loss not pure
+    cross-entropy. HF reads the coefficient from the module (copied from the config at
+    build time), so it is zeroed on every module that has it. Returns how many."""
+    n = 0
+    for m in model.modules():
+        if isinstance(getattr(m, "router_aux_loss_coef", None), (int, float)) and m.router_aux_loss_coef:
+            m.router_aux_loss_coef = 0.0
+            n += 1
+    return n

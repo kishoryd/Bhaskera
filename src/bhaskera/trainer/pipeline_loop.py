@@ -354,14 +354,15 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
             dist.all_reduce(loss, group=info.pp_group)
             dist.all_reduce(loss, group=info.dp_group)
             loss_val = loss.item() / info.copies
-            aux_val = None
+            aux_val = z_val = None
             if info.is_moe and stage._aux is not None:
                 # mean per-layer load-balancing loss over micro-batches, all stages and copies
-                aux = stage.aux_acc.clone()
+                aux = torch.stack([stage.aux_acc, stage.z_acc.to(stage.aux_acc.device)])
                 stage.aux_acc.zero_()
+                stage.z_acc.zero_()
                 dist.all_reduce(aux, group=info.pp_group)
                 dist.all_reduce(aux, group=info.dp_group)
-                aux_val = aux.item() / (info.copies * m * max(1, info.moe_layers))
+                aux_val, z_val = (aux / (info.copies * m * max(1, info.moe_layers))).tolist()
             step += 1
             # Throughput counts per GPU: a pipeline's tokens are shared by its `stages` GPUs.
             tm = throughput.step(
@@ -386,11 +387,13 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                         msg += f" {label}={tm[key]:{fmt}}{unit}"
                 if aux_val is not None:
                     msg += f" aux_loss={aux_val:.4f}"
+                    if z_val:
+                        msg += f" z_loss={z_val:.3f}"
                 msg += f" | pipeline={t1 - t0:.2f}s dp_sync={t2 - t1:.2f}s"
                 logger.info(msg)
                 if tracker:
                     tracker.log({"loss": loss_val, "lr": lr, "grad_norm": grad_norm, "epoch": float(epoch),
-                                 **({"aux_loss": aux_val} if aux_val is not None else {}),
+                                 **({"aux_loss": aux_val, "z_loss": z_val} if aux_val is not None else {}),
                                  "time/pipeline_s": t1 - t0, "time/dp_sync_s": t2 - t1,
                                  "cuda/max_allocated_mib": torch.cuda.max_memory_allocated() / 2**20,
                                  **tm}, step=step)

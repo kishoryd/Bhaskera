@@ -25,7 +25,8 @@ from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
 from bhaskera.utils.startup_timer import mark as startup_mark
 
 from .checkpointing import maybe_resume, save_and_prune
-from .moe import compute_expert_utilization, extract_aux_loss
+from .moe import (compute_expert_utilization, disable_builtin_aux_loss, extract_aux_loss,
+                  router_z_loss_from_output)
 from .optim import build_optimizer, build_scheduler
 from .precision import resolve_autocast_dtype
 from bhaskera.models.quantization import param_numel
@@ -392,6 +393,13 @@ def _run_epoch(
         and getattr(moe_cfg, "log_expert_utilization", True)
     )
     expert_log_every = getattr(moe_cfg, "log_every_n_steps", 10) if moe_cfg else 10
+    z_loss_weight = float(getattr(moe_cfg, "router_z_loss_weight", 0.0) or 0.0) if moe_cfg else 0.0
+    if profile.is_moe:
+        n_coef = disable_builtin_aux_loss(model)
+        if n_coef and rank == 0:
+            logger.info(f"MoE: HF's built-in router_aux_loss_coef zeroed on {n_coef} module(s); "
+                        f"the loss adds moe.aux_loss_weight={aux_loss_weight} x aux "
+                        f"and moe.router_z_loss_weight={z_loss_weight} x z-loss")
 
     metrics_cfg = getattr(getattr(cfg, "monitoring", None), "metrics", None)
     sys_every   = int(getattr(metrics_cfg, "system_every_n_steps", 10)) if metrics_cfg else 10
@@ -466,6 +474,7 @@ def _run_epoch(
         capture_window(step)   # no-op unless BHASKERA_NSYS=1
         micro_losses:     list[torch.Tensor] = []
         micro_aux_losses: list[torch.Tensor] = []
+        micro_z_losses: list[torch.Tensor] = []
         window_tokens  = 0
         window_samples = 0
         window_processed = 0
@@ -546,11 +555,15 @@ def _run_epoch(
                         out       = model(**forward_kwargs)
                         main_loss = out.loss
                         aux_loss  = extract_aux_loss(out, profile)
+                        z_loss    = (router_z_loss_from_output(out, profile)
+                                     if z_loss_weight > 0 else None)
 
+                        total_loss = main_loss
                         if aux_loss is not None:
-                            total_loss = (main_loss + aux_loss_weight * aux_loss) / grad_accum
-                        else:
-                            total_loss = main_loss / grad_accum
+                            total_loss = total_loss + aux_loss_weight * aux_loss
+                        if z_loss is not None:
+                            total_loss = total_loss + z_loss_weight * z_loss
+                        total_loss = total_loss / grad_accum
 
                     with nvtx_range("backward"):   # DDP/FSDP gradient comms overlap here
                         total_loss.backward()
@@ -570,6 +583,8 @@ def _run_epoch(
             micro_losses.append(main_loss.detach())
             if aux_loss is not None:
                 micro_aux_losses.append(aux_loss.detach())
+            if z_loss is not None:
+                micro_z_losses.append(z_loss.detach())
 
         # If loader exhausted mid-window, break the outer loop too
         if loader_iter is None:
@@ -711,8 +726,11 @@ def _run_epoch(
                     "loss_spike_ratio": loss_spike,
                 }
                 if profile.is_moe:
+                    window_z = torch.stack(micro_z_losses).mean().item() if micro_z_losses else 0.0
                     metrics["aux_loss"]   = window_aux
-                    metrics["total_loss"] = window_loss + aux_loss_weight * window_aux
+                    metrics["z_loss"]     = window_z
+                    metrics["total_loss"] = (window_loss + aux_loss_weight * window_aux
+                                             + z_loss_weight * window_z)
                 metrics.update(throughput_metrics)
                 metrics.update(timing_metrics)
 
