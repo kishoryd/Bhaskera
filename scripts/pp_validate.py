@@ -175,6 +175,7 @@ def ref_model(cfg, init, device, moe=False):
             p.data.copy_(init[n].to(device))
     if moe:   # HF would add 0.001 x its own aux loss to out.loss; the reference adds the explicit term below
         m.config.router_aux_loss_coef = 0.0
+        m.router_aux_loss_coef = 0.0   # HF copies the coefficient onto the model at build time
     return m
 
 
