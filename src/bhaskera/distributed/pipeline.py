@@ -39,7 +39,8 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 )
 from torch.distributed.device_mesh import init_device_mesh
 
-from bhaskera.distributed.moe_routing import make_routing_recompute_stable, recompute_contexts
+from bhaskera.distributed.moe_experts import stack_frozen_experts
+from bhaskera.distributed.moe_routing import make_routing_recompute_stable, recompute_contexts, routed_moe_blocks
 from bhaskera.introspect import _EXPERT_LEAF_NAMES, introspect_model
 
 logger = logging.getLogger(__name__)
@@ -298,6 +299,17 @@ def build_stage(cfg, rank: int, world_size: int, device: torch.device) -> tuple[
     stage.to_empty(device=device)
     _load_stage_weights(stage, name, layer_ids, bool(getattr(mcfg, "tie_word_embeddings", False)))
     stage.rotary = rotary_cls(config=mcfg, device=device)
+    mode = getattr(pcfg, "moe_experts", "auto")
+    if mode not in ("auto", "loop", "bmm", "hf"):
+        raise ValueError(f"pipeline.moe_experts={mode!r}: use auto, loop, bmm or hf")
+    if is_moe and mode != "hf" and not getattr(cfg.lora, "include_experts", False):
+        # experts stay frozen: re-store them stacked and compute them without per-expert host syncs
+        for p in stage.parameters():
+            p.requires_grad = False
+        blocks = routed_moe_blocks(stage)[0]
+        n = sum(stack_frozen_experts(b, a, mode) for _, b, a in blocks)
+        if rank == 0:
+            logger.info(f"pipeline: frozen experts stacked in {n}/{len(blocks)} MoE blocks (mode {mode})")
 
     if not cfg.lora.enabled:
         raise ValueError("pipeline strategy is LoRA-only (it keeps the base frozen and resident)")

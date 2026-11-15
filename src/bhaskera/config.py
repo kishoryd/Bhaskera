@@ -219,6 +219,7 @@ class PipelineConfig:
     schedule: str = "1f1b"              # "1f1b" | "gpipe"
     activation_checkpointing: bool = True
     eval_micro_batches: int = 16        # per pipeline copy, per periodic eval (bounds eval time)
+    moe_experts: str = "auto"           # frozen-expert compute: auto | loop | bmm | hf (HF's per-expert loop)
 
 
 @dataclass
@@ -486,6 +487,7 @@ def _dict_to_config(raw: dict) -> Config:
                     schedule=str(pp_raw.get("schedule", "1f1b")).lower(),
                     activation_checkpointing=bool(pp_raw.get("activation_checkpointing", True)),
                     eval_micro_batches=int(pp_raw.get("eval_micro_batches", 16)),
+                    moe_experts=str(pp_raw.get("moe_experts", "auto")),
                 ),
             ),
         ),

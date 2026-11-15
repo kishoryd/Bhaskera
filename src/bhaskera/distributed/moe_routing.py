@@ -115,6 +115,11 @@ def _stable_forward(self, hidden_states: torch.Tensor):
         weights = weights / weights.sum(dim=-1, keepdim=True)
     weights = weights.to(x.dtype)
 
+    if hasattr(self, "_bk_gate"):        # experts re-stored by moe_experts.stack_frozen_experts
+        from bhaskera.distributed.moe_experts import expert_forward
+        out = expert_forward(self, x, selected, weights)
+        return out.reshape(batch_size, seq_len, hidden_dim), router_logits
+
     experts = self._modules[self._bhaskera_experts_attr]
     out = torch.zeros((batch_size * seq_len, hidden_dim), dtype=x.dtype, device=x.device)
     expert_mask = F.one_hot(selected, num_classes=len(experts)).permute(2, 1, 0)
