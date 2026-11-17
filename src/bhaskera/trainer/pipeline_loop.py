@@ -36,6 +36,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.distributed.pipelining import PipelineStage, Schedule1F1B, ScheduleGPipe
 
+from bhaskera.trainer.eval_metrics import token_accuracy_from_hidden
 from bhaskera.distributed.pipeline import _DTYPES, PipelineInfo, Stage, canonical_name
 from bhaskera.utils.throughput import ThroughputTracker
 
@@ -159,7 +160,7 @@ def _resume(stage: Stage, info: PipelineInfo, optimizer, scheduler, save_dir: st
 
 @torch.no_grad()
 def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, device, rank: int,
-                       dtype: torch.dtype) -> float | None:
+                       dtype: torch.dtype) -> tuple[float | None, float | None]:
     """Forward-only pass of up to eval_micro_batches micro-batches per pipeline copy.
 
     Micro-batches go through the stages one at a time (send/recv between neighbours): eval is
@@ -168,7 +169,8 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
     from its `stages` ranks in turn (the source broadcasts the batch; the first stage feeds
     it in), which covers the whole validation set. Every rank pulls from its own shard in
     lockstep, so no shard's stream is left unread. Returns the mean loss per micro-batch over
-    all copies (same value on every rank), or None if nothing was evaluated.
+    all copies (same value on every rank), or None if nothing was evaluated, and the
+    next-token accuracy over the same tokens.
     """
     rows_mb = int(cfg.training.batch_size)
     seq_len = int(cfg.data.seq_len)
@@ -188,6 +190,7 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
     pending = next(loader, None)
     exhausted = [False] * info.stages
     total, n, j = 0.0, 0, 0
+    correct = counted = 0
     while n < limit and not all(exhausted):
         src_stage, j = j % info.stages, j + 1
         if exhausted[src_stage]:
@@ -216,15 +219,20 @@ def _run_eval_pipeline(stage: Stage, info: PipelineInfo, val_dataset, cfg, devic
         h = stage(x, pos_row)
         if info.last:
             total += float(loss_fn(h, lab))
+            c, k = token_accuracy_from_hidden(h, stage.lm_head, lab, rows_mb)
+            correct, counted = correct + c, counted + k
         else:
             dist.send(h.contiguous(), dst=next_r, group=info.pp_group)
         n += 1
         if batch is not None:
             pending = next(loader, None)
     stage.train(was_training)
-    agg = torch.tensor([total, float(n) if info.last else 0.0], device=device)
+    agg = torch.tensor([total, float(n) if info.last else 0.0, float(correct), float(counted)],
+                       device=device, dtype=torch.float64)
     dist.all_reduce(agg)
-    return None if agg[1].item() == 0 else float(agg[0] / agg[1])
+    if agg[1].item() == 0:
+        return None, None
+    return float(agg[0] / agg[1]), (float(agg[2] / agg[3]) if agg[3].item() > 0 else None)
 
 
 def _sync_lora_init(lora: list, info: PipelineInfo) -> None:
@@ -399,15 +407,18 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                                  **tm}, step=step)
             if val_dataset is not None and eval_steps > 0 and step % eval_steps == 0:
                 te = time.perf_counter()
-                eval_loss = _run_eval_pipeline(stage, info, val_dataset, cfg, device, rank, act_dtype)
+                eval_loss, eval_acc = _run_eval_pipeline(stage, info, val_dataset, cfg, device, rank, act_dtype)
                 if rank == 0:
                     if eval_loss is None:
                         logger.warning(f"[epoch {epoch}][step {step}] eval skipped: no validation batches")
                     else:
-                        logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f} "
+                        acc_txt = f" eval_acc={eval_acc:.4f}" if eval_acc is not None else ""
+                        logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f}{acc_txt} "
                                     f"({time.perf_counter() - te:.1f}s)")
                         if tracker:
-                            tracker.log({"eval/loss": eval_loss}, step=step)
+                            tracker.log({"eval/loss": eval_loss,
+                                         **({"eval/accuracy": eval_acc} if eval_acc is not None else {})},
+                                        step=step)
                 throughput.reset_step_clock()
             if ckpt.enabled and ckpt.save_interval > 0 and step % ckpt.save_interval == 0:
                 _save_lora(stage, info, ckpt.save_dir, step, rank, optimizer, scheduler)

@@ -258,6 +258,7 @@ class TrainingConfig:
     # set; a value here with no val cache configured is a no-op.
     eval_steps: int = 0
     eval_batch_size: int = 0                  # 0 -> reuse training batch_size
+    eval_max_rows: int = 0                    # cap on validation rows per eval, all ranks together (0 = whole set)
     target_eval_loss: Optional[float] = None  # stop once eval_loss <= this
 
 
@@ -444,6 +445,7 @@ def _dict_to_config(raw: dict) -> Config:
             startup_timeout_s=int(train_raw.get("startup_timeout_s", 3600) or 0),
             eval_steps=int(train_raw.get("eval_steps", 0)),
             eval_batch_size=int(train_raw.get("eval_batch_size", 0)),
+            eval_max_rows=int(train_raw.get("eval_max_rows", 0)),
             target_eval_loss=(
                 float(train_raw["target_eval_loss"])
                 if train_raw.get("target_eval_loss") is not None

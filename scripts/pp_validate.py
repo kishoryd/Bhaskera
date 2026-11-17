@@ -227,13 +227,18 @@ def ref_train(cfg, init, data, steps, device, start=0, state=None, moe=False):
 
 
 def ref_eval(model, cfg, datas, limit_rows=None):
-    """Mean per-micro-batch loss over every row of the given fake datasets."""
-    tot, n = 0.0, 0
+    """Mean per-micro-batch loss over every row of the given fake datasets; next-token accuracy
+    over the same rows in ref_eval.last_acc."""
+    from bhaskera.trainer.eval_metrics import token_accuracy_counts
+    tot, n, c_all, k_all = 0.0, 0, 0, 0
     with torch.no_grad():
         for d in datas:
             for b in d.iter_torch_batches(batch_size=int(cfg.training.batch_size)):
-                tot += float(model(input_ids=b["input_ids"], labels=b["labels"], use_cache=False).loss)
-                n += 1
+                out = model(input_ids=b["input_ids"], labels=b["labels"], use_cache=False)
+                tot += float(out.loss)
+                c, k = token_accuracy_counts(out.logits, b["labels"].to(out.logits.device))
+                c_all, k_all, n = c_all + c, k_all + k, n + 1
+    ref_eval.last_acc = c_all / max(k_all, 1)
     return tot / max(n, 1)
 
 
@@ -317,20 +322,23 @@ def eval_scenarios(base, mdir, device):
                  for c in range(copies) for s in range(stages)]
         want = ref_eval(model, cfg, datas)
         got = tr.rows[2].get("eval/loss")
-        ok = got is not None and abs(got - want) < 2e-4
-        detail = f"pipeline={got} reference={want:.6f} (rows={sum(d.n_rows for d in datas)})"
+        acc = tr.rows[2].get("eval/accuracy")
+        ok = got is not None and abs(got - want) < 2e-4 and acc is not None and abs(acc - ref_eval.last_acc) < 1e-6
+        detail = (f"pipeline={got} reference={want:.6f} accuracy pipeline={acc} reference={ref_eval.last_acc:.6f}"
+                  f" (rows={sum(d.n_rows for d in datas)})")
     note("eval == reference over uneven shards (all stages' shards, all copies)", _agree(ok), detail)
 
     # cap smaller than the data
     cfg2 = make_cfg(base, mdir, stages=stages, m=m, steps=2, eval_steps=2, eval_mb=3)
     stage2, info2 = build_stage(cfg2, dist.get_rank(), dist.get_world_size(), device)
     v = FakeData(seed=11, salt=info2.copy * 4 + info2.stage, n_rows=50)
-    got = PL._run_eval_pipeline(stage2, info2, v, cfg2, device, dist.get_rank(), torch.float32)
-    note("eval cap (eval_micro_batches=3) returns a value without exhausting data", _agree_all(got is not None))
+    got, acc = PL._run_eval_pipeline(stage2, info2, v, cfg2, device, dist.get_rank(), torch.float32)
+    note("eval cap (eval_micro_batches=3) returns a value without exhausting data",
+         _agree_all(got is not None and acc is not None and 0.0 <= acc <= 1.0))
 
     # empty validation set: must return None on every rank, no hang
-    got = PL._run_eval_pipeline(stage2, info2, FakeData(n_rows=0), cfg2, device, dist.get_rank(), torch.float32)
-    note("eval with an empty validation set returns None on every rank", _agree(got is None))
+    got, acc = PL._run_eval_pipeline(stage2, info2, FakeData(n_rows=0), cfg2, device, dist.get_rank(), torch.float32)
+    note("eval with an empty validation set returns None on every rank", _agree(got is None and acc is None))
     return stage, info, tr, init, final
 
 

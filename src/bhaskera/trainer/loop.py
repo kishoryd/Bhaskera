@@ -25,6 +25,7 @@ from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
 from bhaskera.utils.startup_timer import mark as startup_mark
 
 from .checkpointing import maybe_resume, save_and_prune
+from .eval_metrics import token_accuracy_counts
 from .moe import (compute_expert_utilization, disable_builtin_aux_loss, extract_aux_loss,
                   router_z_loss_from_output)
 from .optim import build_optimizer, build_scheduler
@@ -271,7 +272,7 @@ def train(
 
 def _run_eval(
     *, model, val_dataset, cfg, device, autocast_dtype, use_autocast,
-) -> Optional[float]:
+) -> tuple[Optional[float], Optional[float]]:
     """
     One full pass over this rank's local validation shard, no backward.
 
@@ -282,6 +283,9 @@ def _run_eval(
     the next training step. Returns None if no rank saw any eval batches
     (e.g. an empty val shard), rather than lying with a 0.0 loss that
     would trivially — and falsely — satisfy any early-stop target.
+
+    Also returns next-token accuracy (None if the model returned no logits).
+    training.eval_max_rows > 0 caps the rows evaluated (all ranks together).
     """
     train_cfg = cfg.training
     eval_bs   = train_cfg.eval_batch_size or train_cfg.batch_size
@@ -300,10 +304,17 @@ def _run_eval(
         device=device,
     )
 
+    world = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+    cap_rows = int(getattr(train_cfg, "eval_max_rows", 0) or 0)
+    max_batches = -(-cap_rows // (world * eval_bs)) if cap_rows > 0 else None
     total_loss = 0.0
     n_batches  = 0
+    correct = counted = 0
+    has_logits = 1.0
     with torch.no_grad():
         for batch in val_loader:
+            if max_batches is not None and n_batches >= max_batches:
+                break
             autocast_ctx = (
                 torch.autocast("cuda", dtype=autocast_dtype)
                 if use_autocast
@@ -318,23 +329,34 @@ def _run_eval(
                 )
             total_loss += out.loss.item()
             n_batches  += 1
+            logits = getattr(out, "logits", None)
+            if logits is None:
+                has_logits = 0.0
+            else:
+                c, k = token_accuracy_counts(logits, batch["labels"])
+                correct, counted = correct + c, counted + k
 
     if was_training:
         model.train()
 
     if dist.is_available() and dist.is_initialized():
-        sum_and_count = torch.tensor(
-            [total_loss, float(n_batches)], device=device, dtype=torch.float32,
+        sums = torch.tensor(
+            [total_loss, float(n_batches), float(correct), float(counted)],
+            device=device, dtype=torch.float64,
         )
-        dist.all_reduce(sum_and_count, op=dist.ReduceOp.SUM)
-        total_loss_all, n_batches_all = sum_and_count.tolist()
+        dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+        flag = torch.tensor([has_logits], device=device)
+        dist.all_reduce(flag, op=dist.ReduceOp.MIN)
+        total_loss_all, n_batches_all, correct_all, counted_all = sums.tolist()
+        has_logits = flag.item()
     else:
         total_loss_all, n_batches_all = total_loss, float(n_batches)
+        correct_all, counted_all = float(correct), float(counted)
 
     if n_batches_all == 0:
-        return None
-
-    return total_loss_all / n_batches_all
+        return None, None
+    acc = correct_all / counted_all if has_logits and counted_all > 0 else None
+    return total_loss_all / n_batches_all, acc
 
 
 def _log_oom_breakdown(snapshot: dict, dump_path: str) -> None:
@@ -755,7 +777,7 @@ def _run_epoch(
         # ── Periodic eval / MLPerf-style convergence early-stop ──────
         eval_steps = train_cfg.eval_steps
         if val_dataset is not None and eval_steps > 0 and step % eval_steps == 0:
-            eval_loss = _run_eval(
+            eval_loss, eval_acc = _run_eval(
                 model=model, val_dataset=val_dataset, cfg=cfg,
                 device=device, autocast_dtype=autocast_dtype,
                 use_autocast=use_autocast,
@@ -768,9 +790,12 @@ def _run_epoch(
                     )
             else:
                 if rank == 0:
-                    logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f}")
+                    acc_txt = f" eval_acc={eval_acc:.4f}" if eval_acc is not None else ""
+                    logger.info(f"[epoch {epoch}][step {step}] eval_loss={eval_loss:.4f}{acc_txt}")
                     if tracker:
-                        tracker.log({"eval/loss": eval_loss}, step=step)
+                        tracker.log({"eval/loss": eval_loss,
+                                     **({"eval/accuracy": eval_acc} if eval_acc is not None else {})},
+                                    step=step)
                 target = train_cfg.target_eval_loss
                 if target is not None and eval_loss <= target:
                     stop_early = True
