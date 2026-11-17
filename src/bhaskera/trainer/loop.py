@@ -23,6 +23,7 @@ from bhaskera.utils import ThroughputTracker
 from bhaskera.utils.system_stats import system_stats, cuda_memory_stats
 from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
 from bhaskera.utils.startup_timer import mark as startup_mark
+from bhaskera.utils.peak_mem import peak_mem_gib
 
 from .checkpointing import maybe_resume, save_and_prune
 from .eval_metrics import token_accuracy_counts
@@ -707,6 +708,7 @@ def _run_epoch(
 
         # ── Logging ────────────────────────────────────────────────
         with nvtx_range("metrics_logging"):
+            mem_alloc, mem_res = peak_mem_gib(device)          # collective: every rank
             if rank == 0:
                 msg = (
                     f"[epoch {epoch}][step {step}] loss={window_loss:.4f} "
@@ -724,6 +726,7 @@ def _run_epoch(
                     msg += f" step_s={throughput_metrics['throughput/step_time_s']:.2f}"
                 if "throughput/mfu_step_pct" in throughput_metrics:
                     msg += f" MFU_step={throughput_metrics['throughput/mfu_step_pct']:.1f}%"
+                msg += f" mem={mem_alloc:.1f}/{mem_res:.1f}GiB"
                 if timing_metrics:
                     msg += (
                         f" | step={timing_metrics['time/step_s']:.2f}s"

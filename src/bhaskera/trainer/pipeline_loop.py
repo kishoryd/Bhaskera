@@ -39,6 +39,7 @@ from torch.distributed.pipelining import PipelineStage, Schedule1F1B, ScheduleGP
 from bhaskera.trainer.eval_metrics import token_accuracy_from_hidden
 from bhaskera.distributed.pipeline import _DTYPES, PipelineInfo, Stage, canonical_name
 from bhaskera.utils.throughput import ThroughputTracker
+from bhaskera.utils.peak_mem import peak_mem_gib
 
 from .optim import build_optimizer, build_scheduler
 
@@ -381,6 +382,7 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
             )
             if startup_watchdog is not None and step == 1:
                 startup_watchdog.done()
+            mem_alloc, mem_res = peak_mem_gib(device)          # collective: every rank (max over all stages)
             if rank == 0:
                 lr = scheduler.get_last_lr()[0]
                 msg = f"[epoch {epoch}][step {step}] loss={loss_val:.4f} lr={lr:.2e} grad_norm={grad_norm:.4f}"
@@ -397,6 +399,7 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                     msg += f" aux_loss={aux_val:.4f}"
                     if z_val:
                         msg += f" z_loss={z_val:.3f}"
+                msg += f" mem={mem_alloc:.1f}/{mem_res:.1f}GiB"
                 msg += f" | pipeline={t1 - t0:.2f}s dp_sync={t2 - t1:.2f}s"
                 logger.info(msg)
                 if tracker:
