@@ -1,0 +1,59 @@
+#%Module1.0
+#
+# AIStack :: Bhaskera @VERSION@
+# Finetuning (LLMs, multi-node)
+# CUDA: 12.4 (PyTorch 2.6.0+cu124; spack cuda-12.4.1 for flash-attention / Triton builds)
+#
+
+module-whatis "AIStack Bhaskera @VERSION@ :: Distributed LLM fine-tuning (LoRA/QLoRA; DDP, FSDP2, HSDP, Pipeline), CUDA: 12.4"
+
+proc ModulesHelp { } {
+    puts stderr ""
+    puts stderr "  Bhaskera @VERSION@"
+    puts stderr "  Category : Finetuning (LLMs, multi-node)"
+    puts stderr "  CUDA     : 12.4 (PyTorch 2.6.0+cu124)"
+    puts stderr "  Prefix   : @ENV@"
+    puts stderr "  Files    : \$BHASKERA_HOME = @SHARE@"
+    puts stderr "             (configs/release, scripts/train.sbatch, README.md, docs/)"
+    puts stderr ""
+    puts stderr "  Commands : bhaskera-tokenize, bhaskera-preflight, bhaskera-train,"
+    puts stderr "             bhaskera-dashboard, bhaskera-infer, bhaskera-diag"
+    puts stderr ""
+    puts stderr "  Quick start:"
+    puts stderr "    cp \$BHASKERA_HOME/configs/release/rel-ddp-qwen14b.yaml my_run.yaml   # edit paths"
+    puts stderr "    bhaskera-preflight --config my_run.yaml --num-gpus 16"
+    puts stderr "    mkdir -p logs"
+    puts stderr "    sbatch -A <account> --nodes=8 --partition=gpu-small --time=08:00:00 \\"
+    puts stderr "           \$BHASKERA_HOME/scripts/train.sbatch my_run.yaml"
+    puts stderr ""
+    puts stderr "  User guide: the Bhaskera tab of the PARAM Rudra user manual."
+    puts stderr ""
+    puts stderr "  This module does not change your shell prompt. To confirm it loaded:"
+    puts stderr "    echo \$BHASKERA_HOME"
+    puts stderr "    which bhaskera-train"
+    puts stderr ""
+}
+
+# One conda env active at a time: loading another MLDL/AIStack module
+# swaps this one out instead of stacking PATH entries.
+family "condaenv"
+
+set envpath   @ENV@
+set share     @SHARE@
+set spackcuda @CUDA@
+
+if { ![file isdirectory $envpath] } {
+    puts stderr "AIStack/bhaskera/@VERSION@: $envpath does not exist"
+    break
+}
+
+setenv       CONDA_PREFIX            $envpath
+setenv       CONDA_DEFAULT_ENV       bhaskera
+setenv       CONDA_SHLVL             1
+setenv       VIRTUAL_ENV             $envpath
+setenv       BHASKERA_HOME           $share
+setenv       BHASKERA_VERSION        @VERSION@
+setenv       MLFLOW_ALLOW_FILE_STORE true
+setenv       CUDA_HOME               $spackcuda
+prepend-path PATH                    $envpath/bin
+prepend-path PATH                    $spackcuda/bin

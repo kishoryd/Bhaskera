@@ -114,6 +114,21 @@ This lands on one of several login nodes (for example `login02`, `login08`). Che
 
 ## Installation
 
+**Shared module (PARAM Rudra).** Where an administrator has installed Bhaskera centrally, no setup is needed:
+
+```bash
+module load bhaskera/2.2.0
+cp $BHASKERA_HOME/configs/release/rel-ddp-qwen14b.yaml my_run.yaml    # tested configs ship with the module
+sbatch -A <account> --nodes=8 $BHASKERA_HOME/scripts/train.sbatch my_run.yaml
+```
+
+Administrators install it with `bash scripts/install_system.sh` from a checkout. It builds the environment in
+`/home/apps/miniconda/envs/bhaskera` from `scripts/requirements-lock.txt` (the exact tested versions), copies configs,
+launcher and docs to `/home/apps/bhaskera/<version>`, and writes the modulefile `/home/apps/AIStack/bhaskera/<version>`.
+`ENV_PREFIX`, `SHARE` and `MODDIR` override the three locations for a staging install.
+
+**Your own copy:**
+
 ```bash
 cd /scratch/<project>/<you>
 git clone git@github.com:kishoryd/Bhaskera.git && cd Bhaskera

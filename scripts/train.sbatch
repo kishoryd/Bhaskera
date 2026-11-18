@@ -2,9 +2,11 @@
 # Bhaskera training launcher: starts Ray on every node of the job (ray symmetric-run) and runs bhaskera-train.
 # This is the launcher used for the 125-run scale matrix (8-128 nodes, A100 80 GB, 2 GPUs per node).
 #
-# Run from the repository folder (the one that holds bhaskera-activate.sh, written by setup.sh):
-#   mkdir -p logs
-#   sbatch --nodes=8 scripts/train.sbatch configs/release/rel-ddp-qwen14b.yaml
+# Two ways to run it (logs go to ./logs of the folder you submit from):
+#   With the shared module:   module load bhaskera
+#                             mkdir -p logs; sbatch -A <account> --nodes=8 $BHASKERA_HOME/scripts/train.sbatch my_run.yaml
+#   From your own clone:      cd Bhaskera   (the folder holding bhaskera-activate.sh, written by setup.sh)
+#                             mkdir -p logs; sbatch -A <account> --nodes=8 scripts/train.sbatch configs/my_run.yaml
 # Add --partition=..., --time=..., --job-name=... as your cluster needs.
 #
 # Sized for nodes with 2 GPUs, 48 CPU cores and about 187 GB RAM, used exclusively. Change the
@@ -20,15 +22,22 @@
 
 set -uo pipefail
 CONFIG="${1:?usage: sbatch scripts/train.sbatch <config.yaml>}"
-REPO="${SLURM_SUBMIT_DIR:?run with sbatch from the repository folder}"
+REPO="${SLURM_SUBMIT_DIR:?submit this script with sbatch}"
 NUM_GPUS="${NUM_GPUS:-2}"                       # GPUs per node
 IFACE="${NCCL_SOCKET_IFNAME:-ib0}"              # network interface Ray and NCCL use (InfiniBand here)
 
 # Compute nodes usually have no internet: models and data must already be on disk.
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}" TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export MLFLOW_ALLOW_FILE_STORE=true             # MLflow 3 refuses its local file store without this
-source "$REPO/bhaskera-activate.sh"
-export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
+if [ -n "${BHASKERA_HOME:-}" ] && command -v bhaskera-train >/dev/null; then
+    echo "using the bhaskera module ($BHASKERA_HOME)"                 # environment comes from `module load`
+elif [ -f "$REPO/bhaskera-activate.sh" ]; then
+    source "$REPO/bhaskera-activate.sh"                               # your own clone, set up by setup.sh
+    export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
+else
+    echo "ERROR: run 'module load bhaskera' first, or submit from a Bhaskera clone set up with setup.sh" >&2
+    exit 1
+fi
 
 export NCCL_TIMEOUT="${NCCL_TIMEOUT:-3600}" TORCH_NCCL_BLOCKING_WAIT=1 TORCH_DISTRIBUTED_TIMEOUT="${TORCH_DISTRIBUTED_TIMEOUT:-3600}"
 export NCCL_ASYNC_ERROR_HANDLING=1 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
@@ -46,7 +55,7 @@ ip_head="${head_ip}:${port}"
 export RAY_TMPDIR="/tmp/ray_${SLURM_JOB_ID}" RAY_raylet_start_wait_time_s=300 RAY_ADDRESS="$ip_head"
 
 echo "=== bhaskera train: job $SLURM_JOB_ID, $SLURM_NNODES nodes, $WORKER_COUNT GPU workers ==="
-echo "config=$CONFIG commit=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)"
+echo "config=$CONFIG bhaskera=$(python -c 'import importlib.metadata as m; print(m.version("bhaskera"))' 2>/dev/null) commit=$(cat "${BHASKERA_HOME:-/nonexistent}/COMMIT" 2>/dev/null || git -C "$REPO" rev-parse --short HEAD 2>/dev/null)"
 
 srun --nodes="$SLURM_NNODES" --ntasks="$SLURM_NNODES" \
     ray symmetric-run --address "$ip_head" --min-nodes "$SLURM_NNODES" \
