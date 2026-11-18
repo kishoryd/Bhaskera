@@ -158,10 +158,14 @@ def cmd_start(cfg: DashboardConfig) -> None:
     _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     log_fd = open(_LOG_FILE, "a")
 
+    # MLflow >= 3 refuses a file:// store unless this is set (the training jobs set it in
+    # prod_train.sbatch; the UI must too, or every page request fails).
+    env = {**os.environ, "MLFLOW_ALLOW_FILE_STORE": os.environ.get("MLFLOW_ALLOW_FILE_STORE", "true")}
     proc = subprocess.Popen(
         cmd,
         stdout=log_fd,
         stderr=log_fd,
+        env=env,
         start_new_session=True,   # detach from current terminal
     )
     _write_pid(proc.pid)
