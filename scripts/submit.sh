@@ -5,8 +5,8 @@
 # Requires Ray >= 2.49
 #
 # Usage:
-#   sbatch scripts/submit.sh --config configs/config.yaml
-#   sbatch scripts/submit.sh --config configs/config.yaml --num-workers 8
+#   sbatch scripts/submit.sh --config configs/release/rel-ddp-qwen14b.yaml
+#   sbatch scripts/submit.sh --config configs/release/rel-ddp-qwen14b.yaml --num-workers 8
 # =============================================================================
 
 #SBATCH --job-name=bhaskera
@@ -27,6 +27,10 @@ EXTRA_ARGS="$*"
 # =============================================================================
 source "${SLURM_SUBMIT_DIR}/bhaskera-activate.sh"
 export PYTHONPATH="${SLURM_SUBMIT_DIR}/src:${PYTHONPATH:-}"
+# MLflow 3 refuses its local file store unless this is set (metrics logging fails without it);
+# a less fragmenting GPU allocator, used in all the release test runs.
+export MLFLOW_ALLOW_FILE_STORE="${MLFLOW_ALLOW_FILE_STORE:-true}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # =============================================================================
 # NCCL timeout + blocking wait (fix #9)
@@ -49,7 +53,7 @@ export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 # communication overlapped compute, and steps were 11-14% slower than with 32.
 # DDP keeps 1 (unchanged, overlaps fine); FSDP and pipeline (stage send/recv) get 32.
 # Override by exporting it before sbatch.
-_CFG="${SLURM_SUBMIT_DIR}/configs/config.yaml"
+_CFG="${SLURM_SUBMIT_DIR}/configs/release/rel-ddp-qwen14b.yaml"
 set -- $EXTRA_ARGS
 while [ $# -gt 0 ]; do [ "$1" = "--config" ] && _CFG="$2"; shift; done
 [ -f "$_CFG" ] || _CFG="${SLURM_SUBMIT_DIR}/${_CFG}"
@@ -148,6 +152,6 @@ srun --nodes="$SLURM_JOB_NUM_NODES" --ntasks="$SLURM_JOB_NUM_NODES" \
         --metrics-export-port=8080 \
 	--\
         python -m bhaskera.launcher.train \
-            --config "${SLURM_SUBMIT_DIR}/configs/config.yaml" \
+            --config "${SLURM_SUBMIT_DIR}/configs/release/rel-ddp-qwen14b.yaml" \
             --num-workers "$WORKER_COUNT" \
             $EXTRA_ARGS

@@ -1,177 +1,354 @@
-# Robustness and profiling additions
+# Bhaskera
 
-## Summary
+Ray-native distributed LLM fine-tuning framework, tested at scale on **PARAM Rudra** (8–128 nodes, up to 256 NVIDIA A100 80 GB GPUs).
 
-Features for large multi-node runs. They catch failures before or early in a job, show where step time is spent, and remove padding waste from training data.
+Bhaskera wraps PyTorch FSDP2 / DDP / pipeline parallelism, Hugging Face `transformers`, PEFT LoRA and QLoRA, and a persistent Ray Data tokenisation pipeline behind a YAML-driven CLI. It targets supervised fine-tuning of dense and mixture-of-experts (MoE) causal language models on Slurm clusters, with MLflow and Ray Dashboard observability.
 
-## Changes
+Version: 2.2.0 (Python >= 3.11).
 
-### Startup watchdog (`utils/watchdog.py`)
+---
 
-Stops a job that hangs before training starts, instead of leaving it idle for its full allocation.
+## Quick start on PARAM Rudra
 
-- Each worker logs its startup phase: distributed init, model build, model wrap, checkpoint resume, first batch.
-- If no training step completes within `training.startup_timeout_s` (default 3600 s; `0` disables it), the worker writes the stack trace of every thread and exits with code 86.
-
-### Step time breakdown and straggler detection (`trainer/step_timing.py`)
-
-Splits each optimizer step into four metrics:
-
-| Metric | Measures |
-|---|---|
-| `time/data_wait_s` | Time blocked on the data loader |
-| `time/compute_s` | Forward and backward pass, including FSDP communication |
-| `time/optimizer_s` | Optimizer step |
-| `time/other_s` | Remainder |
-
-- GPU times are measured with CUDA events at an existing synchronization point, so the measurement adds no overhead.
-- Every `monitoring.metrics.straggler_every_n_steps` steps (default 10), all ranks share their timings.
-- Rank 0 logs the slowest rank and its host, and warns when that rank is more than 25% and more than 1 s slower than the median.
-
-### Profiling with Nsight Systems (branch `profile/qwen3-14b-nsys`)
-
-Adds a way to record a timeline of a training step with NVIDIA Nsight Systems (`nsys`), to see how much of a step the GPU spends computing, waiting on communication, or idle. Everything is off by default; a normal run is unchanged.
-
-| Change | What it does | Files |
-|---|---|---|
-| **Labels for each phase of a step.** The training loop marks `data_wait`, `forward_loss`, `backward`, `grad_clip`, `optimizer_step`, `loss_sync`, `throughput_tracker`, `metrics_logging` and `system_stats` with NVTX ranges. The last four cover the code after the optimizer step, which a first test run showed takes a large share of wall time. | The Nsight Systems timeline shows these names, so each part of a step can be timed separately. Gradient communication overlaps with `backward`, so it shows inside that range. | `trainer/loop.py` |
-| **A capture window.** Recording starts and stops inside the program (`cudaProfilerStart`/`Stop`) at chosen steps. | Only a couple of steady-state steps are recorded, which keeps the report small and skips start-up and warm-up. | `utils/nvtx_prof.py` (new) |
-| **A profiling launch script.** `nsys profile` wraps the Ray start-up, so the training worker processes are traced too. It writes one report per node. | Ray starts the workers, so `nsys` cannot simply wrap the Python command. | `scripts/nsys_train.sbatch` (new) |
-| **A short Qwen3-14B config** (8 nodes, DDP, 16 steps). | A run that matches the benchmark setup and finishes quickly. | `configs/profile/qwen3_14b_ddp_8node_nsys.yaml` (new) |
-| **Short configs for other setups.** Qwen3-14B at 64 nodes (DDP, 16 steps), and Llama-3.3-70B at 8 nodes (FSDP, 5 steps, capturing only the 4th step because one step takes about 5 minutes). | Profile how communication scales (DDP at 64 nodes) and how FSDP's all-gather and reduce-scatter behave (Llama-70B). | `configs/profile/qwen3_14b_ddp_64node_nsys.yaml`, `configs/profile/llama33_70b_fsdp_8node_nsys.yaml` (new) |
-| **Start-up timestamps.** The worker logs one line per milestone (`dist_ready`, `model_loaded`, `model_wrapped`, `first_step_done`) with the time since the previous milestone and since the worker started. | Shows how long start-up took and where, without a profiler. It is always on and costs one GPU sync per milestone. Ray start-up and the driver's data-set build happen before the worker exists, so read those from the driver's own log timestamps. | `utils/startup_timer.py` (new), `launcher/worker.py`, `trainer/loop.py` |
-
-Settings, all environment variables:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `BHASKERA_NSYS` | off | Set to `1` to turn on the labels and the capture window. The launch script sets it. |
-| `BHASKERA_NSYS_START_STEP` | `12` | First recorded step (counting from 0, so the 13th step). |
-| `BHASKERA_NSYS_STOP_STEP` | `14` | Recording stops when this step begins, so two steps are recorded. |
-| `BHASKERA_NSYS_FLUSH_SECONDS` | `10` | Pause after the capture ends so every node finishes writing its report. |
-
-Run it:
+**1. Log in and set up** (once; compiling flash-attention is the slow part):
 
 ```bash
-sbatch --nodes=8 --partition=gpu-small --job-name=nsys-q14b \
-  --export=ALL,SRC_ROOT=$PWD scripts/nsys_train.sbatch configs/profile/qwen3_14b_ddp_8node_nsys.yaml
+ssh -p 4422 <user>@paramrudra.cdacb.in
+cd /scratch/<project>/<you>
+git clone git@github.com:kishoryd/Bhaskera.git && cd Bhaskera
+bash setup.sh                      # venv + PyTorch + Bhaskera + QLoRA/MLflow/W&B extras + flash-attention
+source bhaskera-activate.sh        # run this in every new shell
 ```
 
-The launch script uses `--capture-range-end=stop-shutdown`: when the capture ends, Nsight Systems writes its report and ends the run, so the job stops after the captured steps. (With plain `stop`, the first test run was killed after the capture, and two of the eight nodes did not write a complete report.) Reports are written to `nsys_reports/<jobid>/<hostname>.nsys-rep`. Open one in the Nsight Systems GUI, or print a summary on the cluster with `nsys stats <file>.nsys-rep`.
-
-Tested once on the cluster (job 96499, Qwen3-14B, 8 nodes) with plain `stop`: the capture opened and closed and six nodes wrote full reports. `stop-shutdown`, the flush delay and the start-up timestamps have not been run yet.
-
-### FSDP communication: findings and fixes (branch `profile/qwen3-14b-nsys`)
-
-Measured on Llama-3.3-70B (LoRA, FSDP2, 2 x A100 80GB PCIe per node):
-
-* **Network:** one 100 Gb/s InfiniBand card per node, attached to the other CPU socket from both GPUs. NCCL uses InfiniBand, but GPUDirect RDMA stays disabled even with `NCCL_NET_GDR_LEVEL=SYS`, so every byte is staged through host memory. Slurm runs `topology/flat`, so `--switches` placement is not available.
-* **Weight all-gathers dominate at scale:** at 128 nodes they take 80% of GPU time (161 per GPU per step, ~308 ms each). Each GPU receives the whole model twice per step whatever the node count, and the per-link rate falls from ~10 GB/s at 16 ranks to ~5.7 GB/s at 256.
-* **NCCL settings do not help:** `Simple` (default) is fastest; `LL`/`LL128` are 1.5-2x slower; more channels, connections per link, buffer size and CPU/memory placement make no measurable difference. Run-to-run variation from shared-fabric load is up to ~1.7x (`scripts/allgather_bench.sbatch`).
-* **Communication did not overlap compute at all** (0% in the 8-node trace): `CUDA_DEVICE_MAX_CONNECTIONS=1`, a Megatron tensor-parallel convention set by every launcher, serializes FSDP's all-gather stream behind compute. DDP was unaffected (51-67% of its all-reduce hidden).
-
-| Change | Files | Measured effect |
-|---|---|---|
-| `CUDA_DEVICE_MAX_CONNECTIONS=32` for FSDP (DDP keeps 1), chosen from the config's strategy; override by exporting it | `scripts/submit.sh`, `scripts/submit_*fsdp*.sh`, profiling launchers | Llama-70B, 8 nodes: 125 s -> 107 s per step (4 seq/GPU); 102 s -> 91 s (8 seq/GPU + packing, 34.6% MFU) |
-| `fsdp.reshard_after_forward_group: K` keeps a 1/K shard after forward so backward gathers inside blocks of K ranks; `fsdp.keep_gathered_layers: N` keeps the last N layers whole (no backward gather) | `distributed/fsdp.py`, `config.py` | 128 nodes, 1 seq/GPU, together with the line above: 62 s -> 53 s per step |
-| One micro-batch per step, as large as fits (8 seq/GPU Llama-70B, 4 Mistral-123B at 8 nodes) plus packing | `configs/profile/*_v2.yaml` | Llama-70B, 8 nodes: 280 s -> 91 s per step; ~1,000 -> 5,760 real tokens/s |
-| Bigger global batch at large scale (4 seq/GPU at 128 nodes = 512 sequences/step) | `configs/profile/llama33_70b_fsdp_128node_bs4*.yaml` | 128 nodes: 62 s -> 90 s per step for 4x the tokens (16,700 -> 46,800 tokens/s). Changes the training recipe. |
-
-What is left is the per-step weight volume over a 100 Gb/s link. Beyond the above, reducing it needs a larger batch per step, fewer bytes per weight, or a parallelism that moves activations instead of weights.
-
-### Kernel-level profiling with Nsight Compute (branch `profile/qwen3-14b-nsys`)
-
-Nsight Systems (above) shows when each kernel runs. Nsight Compute shows how well each kernel uses the GPU: tensor-core use, memory bandwidth, occupancy and stalls. It re-runs every profiled kernel several times, so it is slow and is limited to a small number of kernels in one step.
-
-| File | What it does |
-|---|---|
-| `scripts/ncu_smoke.sbatch` | A 2-minute check that GPU performance counters can be read by a normal user on this cluster. Run it first. |
-| `scripts/ncu_train.sbatch` | Profiles Qwen3-14B DDP on one node (2 GPUs, partition `gpu-debug`). Only matrix-multiply and attention kernels are profiled (`KERNEL_REGEX`, default `gemm|flash|fmha`), at most 40 per process, only in the 13th step. NCCL kernels are deliberately excluded because replaying a collective on one rank would hang the others. |
-| `configs/profile/qwen3_14b_ddp_1node_ncu.yaml` | The 1-node DDP config: 1 micro-batch per step, 14 steps. |
-
-Reports are written to `ncu_reports/<jobid>/*.ncu-rep` and opened in the Nsight Compute GUI.
-
-### MFU calculation and sequence packing (branch `profile/qwen3-14b-nsys`)
-
-The reported MFU was wrong in three ways for the Qwen3-14B LoRA benchmark; it is now computed from what the GPU actually does.
-
-| Change | Problem solved | Files |
-|---|---|---|
-| **FLOPs per token follow the real cost of the backward pass.** Forward is 2 × parameters, backward adds 2 × parameters for activation gradients plus 2 × *trainable* parameters for weight gradients, plus a causal attention term (6 × layers × hidden × sequence length). Full fine-tuning gives the usual 6 × parameters; LoRA with a frozen base gives about 4 × parameters. | The old formula used 6 × parameters for LoRA runs, which overstated the model FLOPs by about 1.5×, and ignored attention, which is about 8% for Qwen3-14B at 4096 tokens. | `utils/throughput.py`, `trainer/loop.py` |
-| **MFU counts the tokens the GPU processed** (rows × sequence length, padding included). Tokens per second still counts real tokens only. | Padding costs the same compute as real text. About 43% of each 4096-token row of the Nemotron cache is padding, so leaving it out understated MFU by that share. | `utils/throughput.py`, `trainer/loop.py` |
-| **Two new metrics.** `throughput/hfu_pct` also counts the forward pass that activation checkpointing recomputes during backward. `throughput/padding_pct` is the padding share. The step log line adds `HFU=` and `pad=`. | Separates "useful model FLOPs" from "FLOPs the hardware executed", and shows how much a run wastes on padding. | `utils/throughput.py`, `trainer/loop.py` |
-| **Runtime sequence packing is available on this branch** (`data.runtime_packing`, from `feature/robustness`). Several examples share one 4096-token row, and flash attention keeps them from attending to each other. | Cuts the padding from about 43% to about 0.1%, so the same compute processes about 1.74× more real tokens. | `data/packing.py`, `launcher/train.py`, `config.py`, `trainer/loop.py` |
-
-Two configs compare the effect on Qwen3-14B DDP at 8 nodes, 20 steps each: `configs/profile/qwen3_14b_ddp_8node_mfu_unpacked.yaml` and `configs/profile/qwen3_14b_ddp_8node_mfu_packed.yaml`.
-
-The attention term uses the full row length, so with packing it slightly overstates the attention work (at most about 4% of the total for Qwen3-14B). The new formula is covered by `utils/tests/test_throughput.py`; the packed training path was not run on this branch yet.
-
-### Benchmark suite
-
-### Pre-submission checks (`bhaskera-preflight`)
+**2. Point a config at your model and data.** Copy a tested config and edit `model.name`, `data.tokenized_path` and `data.val_tokenized_path` (see *Typical workflow* to tokenise your own data):
 
 ```bash
-bhaskera-preflight --config <config.yaml>
+cp configs/release/rel-ddp-qwen14b.yaml configs/my_run.yaml
+bhaskera-preflight --config configs/my_run.yaml --num-gpus 16    # seconds, on the login node: all PASS?
 ```
 
-Runs on the login node in seconds, with no GPU required. It checks:
-- the model directory and tokenizer
-- flash-attention and Liger imports
-- that the tokenized caches exist and match the config
-- for config combinations known to fail
-
-It also estimates per-GPU memory and reports the smallest GPU count that fits. It exits with code 1 if any check fails.
-
-### Node health check (`scripts/node_healthcheck.py`, `scripts/sbatch_x.sh`)
-
-- `scripts/submit.sh` runs a one-minute GPU test on every node before training. The test checks GPU count, bf16 matmul correctness and throughput, a cross-GPU checksum, and peer-to-peer copy.
-- A node that fails, hangs, or runs below 70% of the fastest node is recorded in `.bad_nodes`, and the job exits with code 3.
-- `scripts/sbatch_x.sh` resubmits a job, excluding nodes recorded in the last `BAD_NODE_TTL_DAYS` days (default 7).
-- Set `BHASKERA_PREFLIGHT=0` to skip the check.
-
-### Tokenized cache validation (`data/tokenize.py`)
-
-Training checks the cache metadata against the config:
-- A `seq_len` mismatch is an error.
-- A different model name is a warning, because models that share a tokenizer can share a cache.
-
-### Runtime sequence packing (`data/packing.py`)
-
-`data.runtime_packing: true` packs several training examples into each `seq_len` row.
-
-- **Effect:** on Nemotron at 4096 tokens, padding drops from 42.7% to 0.1%, and the same data needs 1.74× fewer rows.
-- **Isolation:** examples in a row never attend to each other.
-  - `position_ids` restart at each example boundary.
-  - Each micro-batch is flattened to batch size 1, which makes flash-attention treat each example as a separate sequence (variable-length mode).
-  - The first label of each example is masked, so no example is trained to predict across a boundary.
-- **Requirements:** `model.attn_impl: flash_attention_2`. Only the training split is packed; evaluation is unchanged.
-
-## New configuration keys
-
-| Key | Default |
-|---|---|
-| `training.startup_timeout_s` | `3600` |
-| `monitoring.metrics.step_timing` | `true` |
-| `monitoring.metrics.straggler_every_n_steps` | `10` |
-| `data.runtime_packing` | `false` |
-| `data.packing_window_rows` | `2048` |
-
-## Validation
+**3. Train** on 8 nodes (16 GPUs):
 
 ```bash
-python -m bhaskera.data.tests.test_packing
-python -m bhaskera.trainer.tests.test_step_timing
-python -m bhaskera.trainer.tests.test_packing_fa2      # requires GPU and flash-attention 2
+mkdir -p logs
+sbatch --nodes=8 --partition=gpu-small --time=04:00:00 \
+  --exclude=cbgpu0075,cbgpu0076,cbgpu0159,cbgpu0178,cbgpu0270,cbgpu0305,cbgpu0312 \
+  scripts/train.sbatch configs/my_run.yaml
 ```
 
-Tested on A100:
+**4. Monitor:**
 
-| Check | Result |
+```bash
+squeue -u $USER                                                   # queued / running
+tail -f logs/bhaskera_<jobid>.out | grep --line-buffered -E '\[step|eval'   # first step after ~5–15 min
+```
+
+Charts in MLflow: on the login node run `bhaskera-dashboard start --port 5055` and `hostname -i`, then on your laptop:
+
+```bash
+ssh -J <user>@paramrudra.cdacb.in:4422 -L 5055:localhost:5055 -L 8265:localhost:8265 <user>@<login-node-address>
+```
+
+Open http://localhost:5055 (MLflow). For the Ray Dashboard of a running job, first run on the login node `ssh -N -L 8265:localhost:8265 <first node of the job> &`, then open http://localhost:8265. Details are in *Running on PARAM Rudra* and *Monitoring* below.
+
+---
+
+## What it does
+
+- **Five ways to spread a run over GPUs**, chosen per run in YAML: DDP, FSDP2 (`fully_shard`), HSDP (FSDP2 with `HYBRID_SHARD`), QLoRA + DDP (4-bit frozen base model), and Pipeline (1F1B or GPipe schedule).
+- **LoRA fine-tuning** via PEFT, with target modules found automatically (`target_modules: ["auto"]`).
+- **MoE support:** frozen routers, Switch-Transformer-style auxiliary load-balancing loss, router z-loss, expert-utilisation logging. Under Pipeline: routing pinned across activation-checkpoint recompute, and frozen experts stacked for fast batched maths.
+- **Persistent tokenisation cache:** `bhaskera-tokenize` writes Parquet shards keyed by model, sequence length, dataset and format; training reads the cache directly.
+- **Runtime sequence packing** (`data.runtime_packing`): joins short conversations into full rows so no compute goes to padding.
+- **Pluggable chat formats:** built-in `chatml`, `alpaca`, `sharegpt`; custom formats register with `@register_format`.
+- **Evaluation** during training: held-out loss and next-token accuracy (`training.eval_steps`, `training.eval_max_rows`).
+- **Preflight check** (`bhaskera-preflight`): on the login node, in seconds, checks model, tokenizer, kernels and data caches, and estimates memory per GPU.
+- **Sharded checkpointing** with `torch.distributed.checkpoint` and an atomic `.complete` marker; resume from the last save.
+- **Architecture-agnostic introspection** (`bhaskera.introspect`): one pass over the loaded model finds decoder layers, experts, routers and LoRA targets. No hardcoded model class names.
+- **Liger Kernel** (fused RMSNorm / RoPE / SwiGLU / cross-entropy) and **flash-attention 2**.
+- **Observability:** one log line per step (loss, tokens/s, MFU, padding, peak GPU memory, time breakdown, slowest GPU); MLflow on a shared `$HOME` file store; Ray Dashboard; optional W&B.
+- **Reliability:** startup watchdog, straggler detection, node health check script.
+- **Inference CLI** (`bhaskera-infer`) with TurboQuant KV cache and speculative decoding (not re-tested in this release).
+
+---
+
+## Running on PARAM Rudra
+
+### Hardware (as measured, November 2026)
+
+| | |
 |---|---|
-| Step timing | Pass |
-| Packed example vs. same example alone | Outputs match within bf16 precision (0.0039) |
-| Isolation between packed examples | Changing one example leaves the others exactly unchanged |
-| Loss | Identical packed and unpacked (6.2670) |
-| Negative control (batch size 2, not flattened) | Leak detected, confirming the test catches it |
+| GPU nodes | `cbgpuXXXX`: 2 × NVIDIA A100 80 GB PCIe, 48 CPU cores, about 187 GB RAM |
+| Network | One 100 Gb/s InfiniBand card per node (`ib0`), attached to the other CPU socket from the GPUs. **GPUDirect RDMA does not work**, so all GPU traffic between nodes goes through host memory. Slurm uses a flat topology. |
+| Internet | Login nodes: yes. **Compute nodes: no.** Download models and datasets on a login node first. |
+| Storage | `/scratch` (Lustre) for code, models, data and logs. `$HOME` is shared with compute nodes; MLflow writes there (`~/mlflow-runs`). |
 
-More detail is in the READMEs under `src/bhaskera/data/`, `launcher/` and `trainer/`.
+### Logging in
+
+```bash
+ssh -p 4422 <user>@paramrudra.cdacb.in
+```
+
+This lands on one of several login nodes (for example `login02`, `login08`). Check with `hostname`. Anything you start there, such as the MLflow UI, runs only on that login node. The login nodes block each other's ports except SSH, so tunnels must go **through SSH to that exact login node** (see *Monitoring*).
+
+### Partitions and limits (per user)
+
+| Partition | Max time | Running / submitted jobs | Used here for |
+|---|---|---|---|
+| `gpu-debug` | 1 h | 2 / 4 | Tests, tokenising, 1–2-node rehearsals |
+| `gpu-small` | 24 h | 4 / 8 | 8–16 nodes |
+| `gpu-large` | 12 h | 2 / 4 | 32–64 nodes |
+| `gpu-massive` | 6 h | 2 / 2 | 128 nodes |
+
+128-node jobs can wait hours in the queue. Startup (Ray plus model loading) takes about 5 min for Qwen3-14B, 10–15 min for 70B–123B and 15–20 min for Qwen3-235B, before the first step.
+
+### Practical notes from the test campaign
+
+- **Exclude known bad nodes.** These failed during November 2026 testing (broken GPU, network faults or a full local disk): `cbgpu0039–0042, 0055–0058, 0075, 0076, 0086, 0127, 0139, 0155, 0159, 0172, 0178, 0240, 0270, 0305, 0312`. Pass them with `sbatch --exclude=...`. The list changes over time.
+- **Slurm can report a failed launch as COMPLETED.** Always check the job log for `[step` lines.
+- **Tokenise on a compute node** (`gpu-debug`), not on a login node. Ray stalled on a busy shared login node.
+- **MLflow UI port:** port 5000 was already in use on `login02`. Start the UI with `--port 5055` (or any free port).
+- **A GPU that fails to start** shows `invalid device ordinal` in the log; a node whose local disk is full shows `No space left on device`. Exclude that node and resubmit.
+
+---
+
+## Installation
+
+```bash
+cd /scratch/<project>/<you>
+git clone git@github.com:kishoryd/Bhaskera.git && cd Bhaskera
+bash setup.sh
+source bhaskera-activate.sh
+```
+
+`setup.sh` finds CUDA (on PARAM Rudra through `module load cuda/12.4`), maps it to a PyTorch wheel, creates a Python 3.11 venv with `uv`, installs PyTorch, then Bhaskera with the `[wandb,mlflow,qlora]` extras, then builds flash-attention (a failed build is not fatal). It writes `bhaskera-activate.sh` into the repository folder: it loads CUDA and activates the venv, and every job script sources it.
+
+Overrides: `BHASKERA_CUDA=12.4 bash setup.sh`, `BHASKERA_VENV=/path bash setup.sh`.
+
+---
+
+## Typical workflow on PARAM Rudra
+
+**1. Get the model and data onto `/scratch`** from a login node (compute nodes have no internet), for example with `huggingface-cli download <model> --local-dir /scratch/.../models/<model>`.
+
+**2. Tokenise once**, as a small job. Start from `configs/local_data_tokenize_chatml.yaml`: set `model.name`, your `train_path` / `val_path`, `seq_len` and `cache_dir`.
+
+```bash
+sbatch --partition=gpu-debug --nodes=1 --gres=gpu:1 --cpus-per-task=48 --time=00:30:00 \
+  --wrap "source bhaskera-activate.sh && bhaskera-tokenize --config my_tokenize.yaml --split both"
+```
+
+It prints the two lines (`tokenized_path`, `val_tokenized_path`) to paste into the training config.
+
+**3. Choose a config** from `configs/release/` (table in [configs/README.md](configs/README.md)). Set `model.name` and the data paths. For a real run, raise `training.max_steps` and set `checkpoint.enabled: true`; the release configs are 6–10-step tests with checkpointing off.
+
+**4. Preflight** on the login node:
+
+```bash
+bhaskera-preflight --config configs/release/rel-ddp-qwen14b.yaml --num-gpus 16
+```
+
+**5. Train:**
+
+```bash
+mkdir -p logs                     # Slurm does not create it
+sbatch --nodes=8 --partition=gpu-small --time=04:00:00 --exclude=<bad nodes> \
+  scripts/train.sbatch configs/release/rel-ddp-qwen14b.yaml
+```
+
+`scripts/train.sbatch` is the launcher used for the 125 test runs. It starts Ray on every node (`ray symmetric-run` over InfiniBand), sets the NCCL and memory settings used in testing, and runs `bhaskera-train` with one worker per GPU. It is sized for PARAM Rudra GPU nodes (2 GPUs, 48 cores, 170 GB requested); edit its `#SBATCH` lines and `NUM_GPUS` for other hardware.
+
+**6. Monitor** (next section).
+
+---
+
+## Monitoring
+
+**Step log:**
+
+```bash
+tail -f logs/bhaskera_<jobid>.out | grep --line-buffered -E '\[step|eval'
+```
+
+```
+[step 15] loss=1.5586 lr=3.01e-05 grad_norm=0.3502 tok/s=6940 MFU=36.0% HFU=53.4% pad=0% step_s=4.68 MFU_step=36.2% mem=16.0/16.3GiB | step=4.59s data=0.00s fwd+bwd=4.58s opt=0.00s
+[step 15] eval_loss=1.5579 eval_acc=0.6567
+```
+
+| Field | Meaning |
+|---|---|
+| `loss`, `eval_loss`, `eval_acc` | Training loss; loss and next-token accuracy on held-out data |
+| `lr`, `grad_norm` | Learning rate; size of the update (a sudden jump is a warning sign) |
+| `tok/s`, `MFU`, `pad` | Real tokens per second (all GPUs); share of the GPUs' peak maths speed used for model work; share of the batch that was padding |
+| `HFU`, `MFU_step` | Like MFU, also counting activation-checkpoint recompute; MFU of this step alone |
+| `mem` | Peak GPU memory on the busiest GPU (allocated / reserved) |
+| `step`, `data`, `fwd+bwd`, `opt`, `slowest=rN` | Where the step's time went; the slowest GPU when one lags |
+
+**MLflow** (charts for every run, kept for comparison). On your login node:
+
+```bash
+bhaskera-dashboard start --port 5055      # remembers the port next time
+hostname -i                               # this login node's internal address, e.g. 172.40.0.22
+```
+
+On your laptop:
+
+```bash
+ssh -J <user>@paramrudra.cdacb.in:4422 -L 5055:localhost:5055 <user>@<login-node-address>
+# browser: http://localhost:5055   (experiment "bhaskera")
+```
+
+**Ray Dashboard** (nodes, one worker per GPU, GPU use, logs), only while the job runs. On the same login node:
+
+```bash
+ssh -N -L 8265:localhost:8265 $(scontrol show hostnames $(squeue -j <jobid> -h -o %N) | head -1) &
+```
+
+On your laptop, add `-L 8265:localhost:8265` to the ssh command above, then open http://localhost:8265.
+
+From VS Code Remote-SSH you can instead forward ports 5055 and 8265 in the **Ports** tab.
+
+---
+
+## Choosing a strategy
+
+Set `training.distributed.strategy` (`ddp`, `fsdp` or `pipeline`). HSDP is `fsdp` with `fsdp.sharding_strategy: HYBRID_SHARD`; QLoRA is `ddp` with `model.quantization: qlora`.
+
+| Strategy | In plain words | Use it for | Avoid when |
+|---|---|---|---|
+| DDP | Every GPU holds the whole model; only small LoRA updates cross the network | Models that fit one GPU in bf16 (about 14B) | Larger models (out of memory) |
+| QLoRA + DDP | Frozen model stored in 4-bit so it fits one GPU | 70B–123B dense models: fastest at scale | MoE models; Qwen3-235B does not fit |
+| Pipeline | Layers split into stages on different GPUs, like an assembly line | Very large models and **all MoE models** | Very small models |
+| FSDP | Model cut into pieces over all GPUs, fetched every step | When nothing else fits | 128 nodes on PARAM Rudra (weight traffic dominates) |
+| HSDP | FSDP inside small groups of GPUs | As FSDP; keep each group inside one node | Groups that span nodes (no gain here) |
+
+In the 10-step tests, QLoRA's eval accuracy was within about half a point of the bf16 strategies (Llama-70B, 8 nodes: 62.99% vs 63.55%). A longer quality comparison has not been done.
+
+---
+
+## Tested results on PARAM Rudra
+
+5 models × 5 strategies × 5 node counts (8, 16, 32, 64, 128) = **125 runs**, each 10 steps plus an evaluation: **105 passed, 20 failed** (all 20 are memory limits: DDP with models over 80 GB, and Qwen3-235B in QLoRA). Full table: [docs/scale-matrix-results.md](docs/scale-matrix-results.md).
+
+Fastest setup per model at 128 nodes. "Time per epoch" is projected from measured speed for one pass over a 1.24-billion-token training set, startup excluded.
+
+| Model | Strategy | Tokens/s | MFU | Time per epoch | Eval accuracy |
+|---|---|---|---|---|---|
+| Qwen3-14B | QLoRA + DDP | 424,899 | 34.4% | 49 min | 65.5% |
+| Qwen3-30B-A3B (MoE) | Pipeline | 386,473 | 7.7% | 53 min | 67.1% |
+| Llama-3.3-70B | QLoRA + DDP | 103,481 | 38.8% | 3.3 h | 62.8% |
+| Mistral-Large-123B | QLoRA + DDP | 57,457 | 37.3% | 6.4 h | 71.9% |
+| Qwen3-235B-A22B (MoE) | Pipeline | 80,110* | 9.9% | 4.3 h | 68.0% |
+
+\* Some steps ran over 1.5× slower than usual (a slow node or network); included in the figure.
+
+Scaling, Qwen3-14B with QLoRA (time per epoch): 8 nodes 12.5 h → 16 nodes 6.3 h → 32 nodes 3.2 h → 64 nodes 1.8 h → 128 nodes 49 min. QLoRA, DDP and Pipeline nearly halve the time each time nodes double. FSDP and HSDP fall to about 5–7% MFU at 128 nodes, because on PARAM Rudra every weight transfer goes through host memory.
+
+---
+
+## CLI entry points
+
+| Command | Module | Purpose |
+|---|---|---|
+| `bhaskera-train` | `bhaskera.launcher.train` | Ray Train driver: one worker per GPU (launch through `scripts/train.sbatch` on Slurm) |
+| `bhaskera-tokenize` | `bhaskera.launcher.tokenize` | Tokenise a dataset once into a Parquet cache |
+| `bhaskera-preflight` | `bhaskera.launcher.preflight` | Pre-submission checks and memory estimate, on the login node |
+| `bhaskera-dashboard` | `bhaskera.launcher.dashboard` | Start / stop / status of the MLflow UI on the login node |
+| `bhaskera-infer` | `bhaskera.launcher.infer` | Generation from a model or checkpoint |
+| `bhaskera-diag` | `bhaskera.launcher.diagnostics` | NCCL all-reduce and bandwidth check |
+
+---
+
+## Configuration
+
+One YAML file per run (`--config`). The schema is the dataclasses in `src/bhaskera/config.py`.
+
+| Section | Holds |
+|---|---|
+| `model` | `name` (local path on PARAM Rudra), `dtype`, `attn_impl` (`flash_attention_2`), `use_liger_kernel`, `quantization` (`none` or `qlora`) |
+| `data` | `name: local`, `format`, `seq_len`, `tokenized_path`, `val_tokenized_path`, `runtime_packing`, `num_workers` (2 × nodes) |
+| `lora` | `r`, `alpha`, `dropout`, `target_modules` (`["auto"]`), `include_experts`, `freeze_router` |
+| `moe` | `aux_loss_weight`, `router_z_loss_weight`, `freeze_router`, expert-utilisation logging |
+| `training` | `batch_size`, `grad_accum`, `lr`, `max_steps`, `warmup_steps`, `eval_steps`, `eval_max_rows`, `target_eval_loss` |
+| `training.distributed` | `strategy` (`ddp` / `fsdp` / `pipeline`), plus `fsdp` (`sharding_strategy`, `hsdp_shard_size`, activation checkpointing), `ddp` and `pipeline` (`stages`, `microbatches`, `schedule`: `1f1b` / `gpipe`, `activation_checkpointing`) blocks |
+| `checkpoint` | `enabled`, `save_dir`, `save_interval`, `keep_last_n` |
+| `logging` | `tracker` (`mlflow`, `wandb`, `ray`, a list, or `none`), `project`, `run_name` |
+| `monitoring` | Ray Dashboard host/port, metrics export port, per-step metric switches |
+| `inference` | Generation settings, KV-cache mode, TurboQuant and speculative-decoding options |
+
+Configs shipped: `configs/release/` (the 15 configs tested in this release), tokenise configs for the five tested models, a custom-data example, and inference examples. See [configs/README.md](configs/README.md).
+
+---
+
+## Validation status
+
+| Done in this release | Result |
+|---|---|
+| Unit tests (`pytest src`, on a compute node) | 97 passed, 8 skipped. One timing test, `test_amortised_O1_per_step`, can fail on a heavily loaded login node. |
+| Pipeline correctness harness (`scripts/pp_validate.py`): pipeline vs the unsplit model, including loss, router terms and eval accuracy | 56 checks passed, 0 failed |
+| 125-run scale matrix on PARAM Rudra | 105 passed; 20 failed for memory limits |
+| Resume from checkpoint | Tested with Pipeline (Llama-70B, Qwen3-30B) |
+| Tokenise → preflight → train with DDP, FSDP, Pipeline and QLoRA on a fresh public dataset | Run end to end on 1–2 nodes; eval loss fell and accuracy rose in every strategy |
+
+**Not done:** a long run (hundreds to thousands of steps) comparing final quality between strategies; the test runs are 10 steps, so accuracy shows the strategies agree, not which is best. Checkpoint resume was not re-tested with FSDP, HSDP or QLoRA.
+
+---
+
+## Known limitations
+
+1. **MoE models are slow outside Pipeline:** 0.2–1.7% MFU with FSDP, HSDP, DDP and QLoRA, because Hugging Face's expert code loops over every expert. Use Pipeline (8–11% MFU).
+2. **DDP needs the whole model on each GPU:** out of memory for Llama-70B, Mistral-123B and Qwen3-235B. Use QLoRA or Pipeline.
+3. **Qwen3-235B with QLoRA does not fit** (about 118 GB of 4-bit weights against 80 GB per GPU). Mistral-123B with QLoRA fits only at batch size 1 with gradient accumulation 2 (78 of 80 GB).
+4. **FSDP and HSDP lose speed at 128 nodes** on PARAM Rudra, because there is no GPUDirect RDMA.
+5. **Checkpoints with FSDP, HSDP, DDP and QLoRA are written only when an epoch ends** (`save_interval` counts epochs for them), so a long single-epoch run has no mid-run save. Pipeline saves every `save_interval` steps. Until this changes, split long runs into shorter ones, or use Pipeline.
+6. **gpt-oss-120b is not supported** (MXFP4 experts). `scripts/convert_mxfp4_to_bf16.py` writes a bf16 copy, but training on it was not validated.
+7. **Inference and serving are outside this release.** `bhaskera-infer` is included but not re-tested. A vLLM-based engine and an OpenAI-compatible server are on the `inference` and `serve` branches, not merged.
+8. **`bhaskera-activate.sh` is machine-specific.** The committed copy points at another environment; `bash setup.sh` rewrites it for yours.
+
+---
+
+## Repository layout
+
+```
+Bhaskera/
+├── configs/
+│   ├── release/                 # the 15 configs tested in this release
+│   ├── tests/                   # base config for the pipeline harness and tests
+│   └── *.yaml                   # tokenise, custom-data and inference examples
+├── scripts/
+│   ├── train.sbatch             # Slurm launcher (Ray over all nodes) used for the test runs
+│   ├── submit.sh                # older general-purpose Slurm launcher
+│   ├── pp_validate.py           # pipeline-vs-unsplit-model correctness harness
+│   ├── node_healthcheck.py      # node checks before a run
+│   └── convert_mxfp4_to_bf16.py
+├── src/bhaskera/
+│   ├── config.py                # dataclass schema + YAML loader
+│   ├── introspect.py            # ModelProfile auto-detection
+│   ├── data/                    # local datasets, formats, packing, tokenisation cache
+│   ├── distributed/             # FSDP2 / HSDP / DDP wrap, pipeline, MoE routing, checkpoints
+│   ├── launcher/                # CLI entry points
+│   ├── models/                  # loader, LoRA, QLoRA
+│   ├── trainer/                 # training loops, MoE losses, evaluation, optimiser
+│   ├── inference/               # generation, TurboQuant KV cache, speculative decoding
+│   └── utils/                   # throughput / MFU, memory, watchdog, trackers
+├── docs/                        # scale-matrix results; earlier profiling and robustness notes
+├── ARCHITECTURE.md              # design and module reference
+├── bhaskera-activate.sh         # written by setup.sh: loads CUDA, activates the venv
+├── pyproject.toml
+└── setup.sh                     # one-shot installer
+```
+
+---
+
+## Dependencies
+
+Core runtime (from `pyproject.toml`): `torch>=2.4`, `transformers>=4.45,<5.0.0`, `ray[train,data,default]>=2.10`, `peft>=0.10`, `accelerate>=0.20`, `datasets>=2.0`, `safetensors>=0.4`, `liger-kernel>=0.5`, `nvidia-ml-py>=12.535`, `omegaconf>=2.3.0`, `pyyaml>=6.0`, `numpy`, `pandas`, `psutil`, `tqdm`.
+
+Optional extras: `qlora` (`bitsandbytes>=0.43`), `mlflow`, `wandb`, `flash` (`flash-attn>=2.5`), `inference` (`scipy`), `dev` (`pytest`, `ruff`), `observability` (W&B + MLflow).
+
+## Tests
+
+```bash
+pip install -e ".[dev]"
+pytest src
+```

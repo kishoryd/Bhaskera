@@ -7,7 +7,7 @@ prints the config snippet to paste into your training config.
 Usage examples
 --------------
 HF dataset (unchanged):
-    bhaskera-tokenize --config configs/tokenize.yaml
+    bhaskera-tokenize --config configs/tokenize_qwen3_14b_nemotron.yaml
 
 Local JSONL with ChatML (your case):
     bhaskera-tokenize --config configs/local_chatml.yaml --split both

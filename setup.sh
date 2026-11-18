@@ -319,7 +319,7 @@ uv pip install torch torchvision torchaudio \
 # This pulls in liger-kernel (declared in pyproject.toml) too — it's a pure
 # Python package on top of the torch+triton we just installed, so it slots
 # in without any CUDA-compiler dance.
-uv pip install -e "$SCRIPT_DIR[wandb,mlflow]" --quiet
+uv pip install -e "$SCRIPT_DIR[wandb,mlflow,qlora]" --quiet
 
 # ── install flash-attn (GPU only, post-torch, out-of-band) ──────────────────
 # flash-attn ships a CUDA extension whose setup.py imports torch at build

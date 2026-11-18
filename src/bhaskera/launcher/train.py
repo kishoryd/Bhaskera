@@ -4,10 +4,10 @@ bhaskera.launcher.train
 Unified CLI + Ray Train driver.
 
 Local (1–N GPUs):
-    python -m bhaskera.launcher.train --config configs/config.yaml
+    python -m bhaskera.launcher.train --config configs/release/rel-ddp-qwen14b.yaml
 
 SLURM (called by scripts/submit.sh after Ray cluster is bootstrapped):
-    python -m bhaskera.launcher.train --config configs/config.yaml --num-workers 8
+    python -m bhaskera.launcher.train --config configs/release/rel-ddp-qwen14b.yaml --num-workers 8
 
 
 """

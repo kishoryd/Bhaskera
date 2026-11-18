@@ -125,7 +125,7 @@ Default port is `5000`; default store is `~/mlflow-runs` — the same path the t
 ## `preflight.py` — `bhaskera-preflight`
 
 ```bash
-bhaskera-preflight --config configs/qwen3_235b_a22b_fsdp_8node_nemotron.yaml [--num-gpus 16] [--gpu-mem-gb 80]
+bhaskera-preflight --config configs/release/rel-pp-moe-qwen235b.yaml [--num-gpus 16] [--gpu-mem-gb 80]
 ```
 
 Login-node checks, in seconds and CPU only, before submitting: model directory, tokenizer load (catches missing deps like `sentencepiece`), flash-attn / Liger import against the installed torch, tokenized caches (existence and `seq_len`/model match), config combinations known to fail here (`shard_experts_individually` with >= 64 experts), and a per-GPU memory estimate with the smallest GPU count that fits. The memory model is a planning estimate: sharded weights + two gathered layer units + root + decoder-level activation checkpoints + one layer's recompute + logits (unless Liger) + 3.5 GiB overhead. Exits 1 on any FAIL.
@@ -141,13 +141,13 @@ Login-node checks, in seconds and CPU only, before submitting: model directory, 
 bhaskera-dashboard
 
 # (compute node) tokenise once
-bhaskera-tokenize --config configs/tokenize.yaml
+bhaskera-tokenize --config configs/tokenize_qwen3_14b_nemotron.yaml
 
 # (compute node) sanity-check NCCL
 bhaskera-diag --num-workers 4
 
 # (compute node) train
-bhaskera-train --config configs/qwen.yaml --num-workers 4
+bhaskera-train --config configs/release/rel-ddp-qwen14b.yaml --num-workers 16
 
 # (compute node) infer from a checkpoint
 bhaskera-infer --config configs/inference.yaml --prompt "..."

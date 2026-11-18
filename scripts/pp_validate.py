@@ -487,7 +487,7 @@ def padding(base, mdir16, device):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="configs/profile/llama33_70b_pipeline_4node.yaml")
+    ap.add_argument("--base", default="configs/tests/llama33_70b_pipeline_4node.yaml")
     ap.add_argument("--work", required=True)
     args = ap.parse_args()
     rank, world = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])

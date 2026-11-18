@@ -76,7 +76,7 @@ def test_latest_checkpoint_needs_the_complete_marker(tmp_path):
 
 
 def test_pipeline_rejects_quantization():
-    cfg = load_config(os.path.join(REPO, "configs/profile/llama33_70b_pipeline_4node.yaml"))
+    cfg = load_config(os.path.join(REPO, "configs/tests/llama33_70b_pipeline_4node.yaml"))
     cfg.model.quantization = "qlora"
     with pytest.raises(ValueError, match="quantization"):
         build_stage(cfg, 0, 8, torch.device("cpu"))
@@ -101,7 +101,7 @@ def test_every_config_loads_and_pipeline_configs_are_consistent():
 def test_pipeline_rejects_gpt_oss_with_a_clear_message(tmp_path):
     import json
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "gpt_oss", "architectures": ["GptOssForCausalLM"]}))
-    cfg = load_config(os.path.join(REPO, "configs/profile/llama33_70b_pipeline_4node.yaml"))
+    cfg = load_config(os.path.join(REPO, "configs/tests/llama33_70b_pipeline_4node.yaml"))
     cfg.model.name = str(tmp_path)
     with pytest.raises(ValueError, match="gpt_oss"):
         build_stage(cfg, 0, 8, torch.device("cpu"))
