@@ -176,6 +176,9 @@ def _estimate_memory(cfg, model_cfg: dict, args, rep: _Report) -> None:
         mlp_width, dispatch = inter, 0
 
     embed = vocab * hidden * train_elem * (1 if model_cfg.get("tie_word_embeddings") else 2)
+    qlora = str(getattr(cfg.model, "quantization", "none") or "none").lower() == "qlora"
+    if qlora:  # NF4: 0.5 byte/param + double-quantised scales; embeddings and lm_head stay in bf16
+        weights = (weights - embed) * (0.516 / train_elem) + embed
     unit = max(0.0, (weights - embed) / layers)  # one decoder layer's weights
     act_ckpt = layers * batch * seq * hidden * train_elem
     act_layer = batch * seq * train_elem * (12 * hidden + 3 * mlp_width + dispatch)
@@ -184,9 +187,13 @@ def _estimate_memory(cfg, model_cfg: dict, args, rep: _Report) -> None:
     strategy = cfg.training.distributed.strategy.lower()
     fsdp = cfg.training.distributed.fsdp
 
+    stages = int(getattr(getattr(cfg.training.distributed, "pipeline", None), "stages", 1) or 1)
+
     def per_gpu(n: int) -> float:
         if strategy == "ddp":
             w = weights
+        elif strategy == "pipeline":  # each GPU holds one stage; first/last stage also holds embeddings
+            w = (weights - embed) / stages + embed
         else:
             gathered = 2 * unit  # current layer + prefetched/next
             root = embed if not fsdp.root_reshard_after_forward else 0
@@ -194,7 +201,8 @@ def _estimate_memory(cfg, model_cfg: dict, args, rep: _Report) -> None:
         return w + act_ckpt + act_layer + logits + overhead
 
     budget = 0.92 * args.gpu_mem_gb * _GIB
-    rep.add("INFO", "weights", f"{weights / 1e9:.1f} GB in {cfg.training.distributed.fsdp.param_dtype} "
+    rep.add("INFO", "weights", f"{weights / 1e9:.1f} GB in "
+            f"{'4-bit NF4 (QLoRA)' if qlora else cfg.training.distributed.fsdp.param_dtype} "
             f"({layers} layers, ~{unit / 1e9:.2f} GB per layer unit)")
     counts = [args.num_gpus] if args.num_gpus else [8, 16, 32, 64, 128, 256]
     for n in counts:
@@ -204,7 +212,11 @@ def _estimate_memory(cfg, model_cfg: dict, args, rep: _Report) -> None:
     if strategy == "ddp":
         fits = per_gpu(1) <= budget
         rep.add("PASS" if fits else "FAIL", "min GPUs (DDP)",
-                "any count (full replica fits)" if fits else "full replica does not fit one GPU; use fsdp")
+                "any count (full replica fits)" if fits
+                else "full replica does not fit one GPU; use model.quantization: qlora or strategy: pipeline")
+    elif strategy == "pipeline":
+        rep.add("PASS" if per_gpu(stages) <= budget else "FAIL", f"pipeline ({stages} stages)",
+                f"GPU count must be a multiple of {stages}")
     else:
         fixed = per_gpu(1) - weights
         min_n = math.inf if budget <= fixed else math.ceil(weights / (budget - fixed))
