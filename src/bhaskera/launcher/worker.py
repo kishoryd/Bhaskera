@@ -8,6 +8,8 @@ actor and also directly by raw SLURM workers.
 """
 from __future__ import annotations
 
+import contextlib
+
 import logging
 import os
 import random
@@ -26,6 +28,20 @@ from bhaskera.utils.startup_timer import mark as startup_mark
 from bhaskera.utils.watchdog import StartupWatchdog
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _close_tracker_on_failure(tracker):
+    """If training stops with an error, close the run as FAILED so the metrics logged so far stay in MLflow."""
+    try:
+        yield
+    except BaseException:
+        if tracker:
+            try:
+                tracker.finish(failed=True)
+            except Exception:
+                pass
+        raise
 
 
 def worker_fn(cfg_dict: dict) -> None:
@@ -74,9 +90,10 @@ def worker_fn(cfg_dict: dict) -> None:
         stage, info = build_stage(cfg, rank, world_size, device)
         startup_mark("model_loaded", rank)
         tracker = build_logger(cfg, rank=rank, world_size=world_size)
-        train_pipeline(stage=stage, info=info, dataset=dataset, val_dataset=val_dataset, cfg=cfg, rank=rank,
-                       local_rank=local_rank, tracker=tracker, world_size=world_size,
-                       startup_watchdog=watchdog)
+        with _close_tracker_on_failure(tracker):
+            train_pipeline(stage=stage, info=info, dataset=dataset, val_dataset=val_dataset, cfg=cfg, rank=rank,
+                           local_rank=local_rank, tracker=tracker, world_size=world_size,
+                           startup_watchdog=watchdog)
         return
     load_device = torch.device("cpu") if strategy == "fsdp" else device
 
@@ -101,18 +118,19 @@ def worker_fn(cfg_dict: dict) -> None:
     # which backends to enable for non-rank-0 (Ray-only).
     tracker = build_logger(cfg, rank=rank, world_size=world_size)
 
-    train(
-        model=model,
-        dataset=dataset,
-        val_dataset=val_dataset,
-        cfg=cfg,
-        profile=profile,
-        rank=rank,
-        local_rank=local_rank,
-        tracker=tracker,
-        world_size=world_size,
-        startup_watchdog=watchdog,
-    )
+    with _close_tracker_on_failure(tracker):
+        train(
+            model=model,
+            dataset=dataset,
+            val_dataset=val_dataset,
+            cfg=cfg,
+            profile=profile,
+            rank=rank,
+            local_rank=local_rank,
+            tracker=tracker,
+            world_size=world_size,
+            startup_watchdog=watchdog,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -17,5 +17,5 @@ class BaseLogger:
     def log(self, metrics: dict[str, Any], step: int) -> None:  # pragma: no cover
         ...
 
-    def finish(self) -> None:  # pragma: no cover
+    def finish(self, failed: bool = False) -> None:  # pragma: no cover
         ...

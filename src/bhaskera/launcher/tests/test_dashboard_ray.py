@@ -69,7 +69,7 @@ def test_laptop_command_is_fixed_and_contains_no_node(monkeypatch):
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
     monkeypatch.setenv("BHASKERA_MODULE", "bhaskera/1.1.0")
     cmd = dashboard.laptop_command(_cfg())
-    assert cmd == ('ssh -p 4422 -L 8265:localhost:20029 -L 3000:localhost:30029 dlapp@paramrudra.cdacb.in '
+    assert cmd == ('ssh -p 4422 -L 8265:localhost:20029 -L 3000:localhost:30029 -L 5055:localhost:40029 dlapp@paramrudra.cdacb.in '
                    '"bash -lc \'module load bhaskera/1.1.0 && bhaskera-dashboard ray\'"')
     assert "cbgpu" not in cmd
 
@@ -85,7 +85,7 @@ def test_info_prints_the_command_and_nothing_else(monkeypatch, capsys):
     monkeypatch.setattr(dashboard, "my_jobs", lambda: pytest.fail("must not look for jobs"))
     dashboard.cmd_ray(_cfg(), None, info=True)
     out = capsys.readouterr().out
-    assert "bhaskera-dashboard ray" in out and "open http://localhost:8265" in out
+    assert "bhaskera-dashboard ray" in out and "http://localhost:8265" in out and "http://localhost:5055" in out
 
 
 class _FakeProc:
@@ -106,6 +106,7 @@ class _FakeProc:
 
 
 def test_waits_for_a_queued_job_then_links_its_head_node(monkeypatch, capsys):
+    monkeypatch.setattr(dashboard, "ensure_mlflow", lambda cfg: None)
     states = iter([[_job("7", "PENDING", nodes="", reason="Priority")],
                    [_job("7", "PENDING", nodes="", reason="Priority")],
                    [_job("7")]])
@@ -121,7 +122,13 @@ def test_waits_for_a_queued_job_then_links_its_head_node(monkeypatch, capsys):
     started = []
     monkeypatch.setattr(dashboard, "my_jobs", jobs)
     monkeypatch.setattr(dashboard, "head_node", lambda nodes: "cbgpu0241")
-    monkeypatch.setattr(dashboard.time, "sleep", lambda s: None)
+    def sleep(seconds):
+        if started and started[0] and getattr(sleep, "after_link", 0) > 3:
+            raise KeyboardInterrupt
+        if started:
+            sleep.after_link = getattr(sleep, "after_link", 0) + 1
+
+    monkeypatch.setattr(dashboard.time, "sleep", sleep)
     monkeypatch.setattr(dashboard.subprocess, "Popen", lambda cmd: started.append(cmd) or _FakeProc(cmd))
     dashboard.cmd_ray(_cfg(), None)
     out = capsys.readouterr().out
@@ -130,10 +137,40 @@ def test_waits_for_a_queued_job_then_links_its_head_node(monkeypatch, capsys):
     assert started and started[0][-1] == "cbgpu0241"
 
 
-def test_no_job_at_all_is_an_error(monkeypatch):
+def test_no_job_keeps_waiting_and_mlflow_open(monkeypatch, capsys):
+    monkeypatch.setattr(dashboard, "ensure_mlflow", lambda cfg: None)
     monkeypatch.setattr(dashboard, "my_jobs", lambda: [])
-    with pytest.raises(SystemExit):
-        dashboard.cmd_ray(_cfg(), None)
+    calls = []
+
+    def sleep(seconds):
+        calls.append(seconds)
+        if len(calls) > 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(dashboard.time, "sleep", sleep)
+    dashboard.cmd_ray(_cfg(), None)
+    out = capsys.readouterr().out
+    assert "waiting for one" in out and len(calls) == 3
+
+
+def test_close_orphan_runs_marks_runs_of_finished_jobs(tmp_path, monkeypatch):
+    mlflow = pytest.importorskip("mlflow")
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    store = tmp_path / "runs"
+    client = mlflow.tracking.MlflowClient(tracking_uri=f"file://{store}")
+    exp = client.create_experiment("bhaskera")
+    gone = client.create_run(exp, tags={"slurm_job": "11"}).info.run_id
+    alive = client.create_run(exp, tags={"slurm_job": "22"}).info.run_id
+    untagged = client.create_run(exp).info.run_id
+    monkeypatch.setattr(dashboard, "_active_job_ids", lambda: {"22"})
+    cfg = dashboard.DashboardConfig()
+    cfg.store = str(store)
+    assert dashboard.close_orphan_runs(cfg) == 1
+    assert client.get_run(gone).info.status == "KILLED"
+    assert client.get_run(alive).info.status == "RUNNING"
+    assert client.get_run(untagged).info.status == "RUNNING"
+    monkeypatch.setattr(dashboard, "_active_job_ids", lambda: None)   # Slurm unavailable: change nothing
+    assert dashboard.close_orphan_runs(cfg) == 0
 
 
 def test_ssh_target_and_options(monkeypatch):
@@ -176,3 +213,29 @@ def test_remote_command_without_module_uses_tool_path(monkeypatch):
     monkeypatch.delenv("BHASKERA_MODULE", raising=False)
     monkeypatch.setattr(dashboard.shutil, "which", lambda name: "/home/u/venv/bin/bhaskera-dashboard")
     assert dashboard._remote_command() == "bash -lc '/home/u/venv/bin/bhaskera-dashboard ray'"
+
+
+def test_mlflow_port_is_per_user_unless_chosen(monkeypatch):
+    monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
+    cfg = dashboard.DashboardConfig()
+    assert dashboard.mlflow_port(cfg) == 40029
+    cfg.port = 5055
+    assert dashboard.mlflow_port(cfg) == 5055
+
+
+def test_ensure_mlflow_starts_it_once(monkeypatch, capsys):
+    monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
+    started = []
+    monkeypatch.setattr(dashboard, "_read_pid", lambda: None)
+    monkeypatch.setattr(dashboard, "cmd_start", lambda c: started.append(c.port))
+    dashboard.ensure_mlflow(dashboard.DashboardConfig())
+    assert started == [40029]
+    monkeypatch.setattr(dashboard, "_read_pid", lambda: 123)
+    monkeypatch.setattr(dashboard, "_pid_alive", lambda pid: True)
+    dashboard.ensure_mlflow(dashboard.DashboardConfig())
+    assert started == [40029] and "MLflow is running" in capsys.readouterr().out
+
+
+def test_ssh_config_block_forwards_mlflow(monkeypatch):
+    monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
+    assert "LocalForward 5055 localhost:40029" in dashboard.ssh_config_block(_cfg())

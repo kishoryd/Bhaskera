@@ -38,9 +38,9 @@ class MultiLogger(BaseLogger):
                     "continuing with remaining loggers"
                 )
 
-    def finish(self) -> None:
+    def finish(self, failed: bool = False) -> None:
         for child in self._children:
             try:
-                child.finish()
+                child.finish(failed=failed)
             except Exception as e:
                 logger.debug(f"{type(child).__name__}.finish raised: {e}")

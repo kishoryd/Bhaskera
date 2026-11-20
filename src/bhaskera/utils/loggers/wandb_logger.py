@@ -41,8 +41,8 @@ class WandbLogger(BaseLogger):
             metrics = {**metrics, **system_stats(), **cuda_memory_stats()}
         self._wandb.log(metrics, step=step)
 
-    def finish(self) -> None:
+    def finish(self, failed: bool = False) -> None:
         try:
-            self._wandb.finish()
+            self._wandb.finish(exit_code=1 if failed else 0)
         except Exception as e:
             logger.debug(f"wandb.finish failed: {e}")

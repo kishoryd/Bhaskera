@@ -311,7 +311,8 @@ class MLflowLogger(BaseLogger):
                     "(store slow or unreachable)"
                 )
 
-    def finish(self) -> None:
+    def finish(self, failed: bool = False) -> None:
+        """Close the run. A failed run is marked FAILED, so its curves stay in MLflow and show how far it got."""
         if not self._available:
             return
         self._stop.set()
@@ -325,7 +326,7 @@ class MLflowLogger(BaseLogger):
 
         try:
             if self._mlflow is not None and self._run_id is not None:
-                self._mlflow.end_run()
+                self._mlflow.end_run(status="FAILED" if failed else "FINISHED")
         except Exception as e:
             logger.debug(f"MLflowLogger: end_run failed: {e}")
 

@@ -308,6 +308,66 @@ def user_ports() -> tuple[int, int]:
     return base, base + 10000
 
 
+_MLFLOW_LOCAL_PORT = 5055   # where MLflow appears on the laptop
+
+
+def mlflow_port(cfg: DashboardConfig) -> int:
+    """Login-node port of the MLflow UI: the saved or chosen port, else one of your own (like the Ray ports),
+    so that users who share a login node do not collide."""
+    if cfg.port and cfg.port != _DEFAULT_PORT:
+        return cfg.port
+    return 40000 + os.getuid() % 10000
+
+
+def _active_job_ids() -> Optional[set[str]]:
+    """Ids of this user's Slurm jobs that are not finished, or None when Slurm cannot be asked."""
+    try:
+        r = subprocess.run(["squeue", "-h", "-u", os.environ.get("USER", ""), "-o", "%i"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return set(r.stdout.split()) if r.returncode == 0 else None
+
+
+def close_orphan_runs(cfg: DashboardConfig) -> int:
+    """Mark runs that still say RUNNING although their Slurm job has ended (killed, time limit, node failure)
+    as KILLED. Their curves were saved while the job ran; this only fixes the label. Returns the count."""
+    active = _active_job_ids()
+    if active is None or not Path(cfg.store).is_dir():
+        return 0
+    try:
+        from mlflow.tracking import MlflowClient
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+        client = MlflowClient(tracking_uri=f"file://{Path(cfg.store).resolve()}")
+        closed = 0
+        for exp in client.search_experiments():
+            for run in client.search_runs([exp.experiment_id], max_results=500):
+                job = run.data.tags.get("slurm_job", "")
+                if run.info.status == "RUNNING" and job and job not in active:
+                    client.set_terminated(run.info.run_id, status="KILLED")
+                    closed += 1
+        return closed
+    except Exception as e:  # never block the dashboard over a label
+        logging.getLogger(__name__).debug("close_orphan_runs: %s", e)
+        return 0
+
+
+def ensure_mlflow(cfg: DashboardConfig) -> None:
+    """Start the MLflow UI on this login node unless it already runs. A failure only costs the MLflow page."""
+    cfg.port = mlflow_port(cfg)
+    closed = close_orphan_runs(cfg)
+    if closed:
+        print(f"{closed} MLflow run(s) of finished jobs were still marked running; marked as killed.")
+    pid = _read_pid()
+    if pid and _pid_alive(pid):
+        print(f"MLflow is running on {socket.gethostname()}, port {cfg.port}.")
+        return
+    try:
+        cmd_start(cfg)
+    except SystemExit:
+        print("MLflow could not be started here; run 'bhaskera-dashboard start --port <free port>' to see why.")
+
+
 def my_jobs() -> list[dict]:
     """The current user's running and pending jobs."""
     fmt = "%i|%j|%T|%N|%r|%k"
@@ -364,7 +424,7 @@ def laptop_command(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) 
     ray_port, grafana_port = user_ports()
     remote = _remote_command()
     return (f"ssh {ssh_options(cfg)}-L {local_port}:localhost:{ray_port} -L {_GRAFANA_PORT}:localhost:{grafana_port} "
-            f"{ssh_target(cfg)} \"{remote}\"")
+            f"-L {_MLFLOW_LOCAL_PORT}:localhost:{mlflow_port(cfg)} {ssh_target(cfg)} \"{remote}\"")
 
 
 def ssh_config_block(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> str:
@@ -380,6 +440,7 @@ def ssh_config_block(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT
         lines.append(f"    Port {opts[1]}")
     lines += [f"    LocalForward {local_port} localhost:{ray_port}",
               f"    LocalForward {_GRAFANA_PORT} localhost:{grafana_port}",
+              f"    LocalForward {_MLFLOW_LOCAL_PORT} localhost:{mlflow_port(cfg)}",
               f"    RemoteCommand {_remote_command()}",
               "    RequestTTY yes", "    ServerAliveInterval 30"]
     return "\n".join(lines)
@@ -393,7 +454,10 @@ def cmd_ssh_config(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) 
     print("From then on, this is all you type; it finds your job and keeps the dashboard link open:")
     print()
     print("    ssh bhaskera-ray")
-    print("    open http://localhost:8265        # Grafana charts: http://localhost:3000")
+    print("    then open in a browser:")
+    print(f"      Ray Dashboard   http://localhost:{local_port}")
+    print(f"      Grafana charts  http://localhost:{_GRAFANA_PORT}")
+    print(f"      MLflow          http://localhost:{_MLFLOW_LOCAL_PORT}")
 
 
 def forward_command(head: str, ray_port: int, grafana_port: int) -> list[str]:
@@ -410,53 +474,95 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
     print("(the command is always the same; it finds your job and its nodes by itself):")
     print()
     print(f"    {laptop_command(cfg, local_port)}")
-    print(f"    open http://localhost:{local_port}")
+    print("    then open in a browser:")
+    print(f"      Ray Dashboard   http://localhost:{local_port}")
+    print(f"      Grafana charts  http://localhost:{_GRAFANA_PORT}")
+    print(f"      MLflow          http://localhost:{_MLFLOW_LOCAL_PORT}")
     print()
     if info:
         return
 
-    waited, shown = False, ""
+    ensure_mlflow(cfg)
+    print()
+    try:
+        _serve_dashboards(job, ray_port, grafana_port)
+    except KeyboardInterrupt:
+        print()
+
+
+def _idle() -> None:
+    """Keep the laptop connection (and with it the MLflow page) open until Ctrl-C."""
+    while True:
+        time.sleep(60)
+
+
+def _serve_dashboards(job: Optional[str], ray_port: int, grafana_port: int) -> None:
+    """Link the Ray Dashboard and Grafana of the chosen job to the login node, for as long as the job runs.
+    MLflow does not depend on the job, so the connection stays open when the job ends, and a new job is picked up."""
+    shown = ""
     while True:
         chosen, note = choose_job(my_jobs(), job)
         if chosen is None:
-            _die(note)
-        if chosen["state"] == "RUNNING" and chosen["nodes"]:
-            break
-        line = f"job {chosen['id']} ({chosen['name']}) is {chosen['state'].lower()}"
-        if chosen["reason"] and chosen["reason"] != "None":
-            line += f" ({chosen['reason']})"
-        if line != shown:
-            print(f"{line}; waiting for nodes ...", flush=True)
-            shown = line
-        waited = True
-        time.sleep(10)
-    if note:
-        print(note)
-    head = head_node(chosen["nodes"])
-    print(f"job {chosen['id']} ({chosen['name']}) is running; its Ray head is on {head}"
-          + ("" if not waited else " (it has just started, the dashboard needs a minute or two to come up)"))
-    print(f"Dashboard link is up. Keep this window open; it closes by itself when the job ends. Ctrl-C closes it now.")
-    print(flush=True)
+            if job:
+                print(f"{note}. MLflow stays available; Ctrl-C closes this window.", flush=True)
+                _idle()
+            line = "no Bhaskera job is running or queued; waiting for one (MLflow already lists finished runs) ..."
+            if line != shown:
+                print(line, flush=True)
+                shown = line
+            time.sleep(10)
+            continue
 
-    proc = subprocess.Popen(forward_command(head, ray_port, grafana_port))
-    try:
-        while proc.poll() is None:
-            time.sleep(15)
-            running = [j for j in my_jobs() if j["id"] == chosen["id"] and j["state"] == "RUNNING"]
-            if not running:
-                print(f"job {chosen['id']} is no longer running; closing the dashboard link.")
+        waited = False
+        while not (chosen["state"] == "RUNNING" and chosen["nodes"]):
+            line = f"job {chosen['id']} ({chosen['name']}) is {chosen['state'].lower()}"
+            if chosen["reason"] and chosen["reason"] != "None":
+                line += f" ({chosen['reason']})"
+            if line != shown:
+                print(f"{line}; waiting for nodes ...", flush=True)
+                shown = line
+            waited = True
+            time.sleep(10)
+            chosen, note = choose_job(my_jobs(), job)
+            if chosen is None:
                 break
-        else:
-            print(f"the link to {head} closed (ssh exited with {proc.returncode}).")
-    except KeyboardInterrupt:
-        print()
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        if chosen is None:
+            continue
+
+        if note:
+            print(note)
+        head = head_node(chosen["nodes"])
+        print(f"job {chosen['id']} ({chosen['name']}) is running; its Ray head is on {head}"
+              + ("" if not waited else " (it has just started, the dashboard needs a minute or two to come up)"))
+        print("Ray Dashboard and Grafana are linked. Keep this window open; MLflow stays available after the job "
+              "ends. Ctrl-C closes it.")
+        print(flush=True)
+        shown = ""
+
+        proc = subprocess.Popen(forward_command(head, ray_port, grafana_port))
+        try:
+            while proc.poll() is None:
+                time.sleep(15)
+                running = [j for j in my_jobs() if j["id"] == chosen["id"] and j["state"] == "RUNNING"]
+                if not running:
+                    print(f"job {chosen['id']} is no longer running; the Ray Dashboard and Grafana close with it.")
+                    break
+            else:
+                print(f"the link to {head} closed (ssh exited with {proc.returncode}).")
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+
+        print("The metrics of the job stay in MLflow, also when it failed. Waiting for the next job; "
+              "Ctrl-C closes this window.", flush=True)
+        if job:
+            _idle()
+        time.sleep(10)
+
 
 # ---------------------------------------------------------------------------
 # Arg parsing
