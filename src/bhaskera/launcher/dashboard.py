@@ -329,24 +329,44 @@ def _active_job_ids() -> Optional[set[str]]:
     return set(r.stdout.split()) if r.returncode == 0 else None
 
 
+def _unfinished_runs(store: Path) -> list[tuple[str, str]]:
+    """(run id, Slurm job id) of every run in the file store that is still marked RUNNING. Reads only the
+    small status files, so it stays fast with hundreds of runs."""
+    found = []
+    for meta in store.glob("*/*/meta.yaml"):
+        try:
+            if "\nstatus: 1\n" not in meta.read_text():
+                continue
+            job = (meta.parent / "tags" / "slurm_job").read_text().strip()
+        except OSError:
+            continue
+        if job:
+            found.append((meta.parent.name, job))
+    return found
+
+
 def close_orphan_runs(cfg: DashboardConfig) -> int:
     """Mark runs that still say RUNNING although their Slurm job has ended (killed, time limit, node failure)
     as KILLED. Their curves were saved while the job ran; this only fixes the label. Returns the count."""
+    store = Path(cfg.store)
+    if not store.is_dir():
+        return 0
+    unfinished = _unfinished_runs(store)
+    if not unfinished:
+        return 0
     active = _active_job_ids()
-    if active is None or not Path(cfg.store).is_dir():
+    if active is None:
+        return 0
+    dead = [run for run, job in unfinished if job not in active]
+    if not dead:
         return 0
     try:
         from mlflow.tracking import MlflowClient
         os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
-        client = MlflowClient(tracking_uri=f"file://{Path(cfg.store).resolve()}")
-        closed = 0
-        for exp in client.search_experiments():
-            for run in client.search_runs([exp.experiment_id], max_results=500):
-                job = run.data.tags.get("slurm_job", "")
-                if run.info.status == "RUNNING" and job and job not in active:
-                    client.set_terminated(run.info.run_id, status="KILLED")
-                    closed += 1
-        return closed
+        client = MlflowClient(tracking_uri=f"file://{store.resolve()}")
+        for run in dead:
+            client.set_terminated(run, status="KILLED")
+        return len(dead)
     except Exception as e:  # never block the dashboard over a label
         logging.getLogger(__name__).debug("close_orphan_runs: %s", e)
         return 0

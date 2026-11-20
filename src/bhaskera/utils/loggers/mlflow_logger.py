@@ -211,7 +211,9 @@ class MLflowLogger(BaseLogger):
     # --------------------------------------------------------------
     def _log_run_identity(self, cfg) -> None:
         log_cfg = cfg.logging
-        mlflow = self._mlflow
+        # The fluent mlflow.set_tag / log_param take no run_id in MLflow 3, so tags and params go through the
+        # client; without this, runs carried no tags (such as slurm_job) and no params.
+        mlflow = self._mlflow.tracking.MlflowClient()
         run_id = self._run_id
 
         # Tags: framework / tracker first, then host / SLURM, then user tags.
@@ -237,7 +239,7 @@ class MLflowLogger(BaseLogger):
                 tags[t.strip()] = "true"
         for k, v in tags.items():
             try:
-                mlflow.set_tag(k, _truncate(v, _PARAM_VALUE_MAX), run_id=run_id)
+                mlflow.set_tag(run_id, k, _truncate(v, _PARAM_VALUE_MAX))
             except Exception:
                 pass
 
@@ -252,7 +254,7 @@ class MLflowLogger(BaseLogger):
         }
         for k, v in base_params.items():
             try:
-                mlflow.log_param(k, _truncate(str(v), _PARAM_VALUE_MAX), run_id=run_id)
+                mlflow.log_param(run_id, k, _truncate(str(v), _PARAM_VALUE_MAX))
             except Exception:
                 pass
 
@@ -264,7 +266,7 @@ class MLflowLogger(BaseLogger):
             cfg_dict = {}
         for k, v in _flatten(cfg_dict):
             try:
-                mlflow.log_param(k, _truncate(_stringify(v), _PARAM_VALUE_MAX), run_id=run_id)
+                mlflow.log_param(run_id, k, _truncate(_stringify(v), _PARAM_VALUE_MAX))
             except Exception:
                 # MLflow rejects duplicate / oversized params silently here.
                 pass
