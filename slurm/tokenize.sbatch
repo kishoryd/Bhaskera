@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=48
 #SBATCH --exclusive
-#SBATCH --mem=0
+#SBATCH --mem=180G                     # debug partition maximum per node
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%x_%j.out
 

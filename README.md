@@ -24,7 +24,7 @@ git clone https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
 BHASKERA_CUDA=12.4 bash setup.sh
 source .venv/bin/activate
 uv pip install "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
-uv pip install "ray[train,data,default]==2.56.1" peft==0.20.0 accelerate==1.14.0 liger-kernel==0.8.1 mlflow==3.15.0 pyarrow==25.0.0 bitsandbytes==0.50.2   # versions validated on PARAM Rudra
+uv pip install -r slurm/requirements-paramrudra.lock      # exact versions used for the benchmarks
 export BHASKERA_DIR=$PWD
 
 # 2. A working folder with the job scripts and the tested recipes

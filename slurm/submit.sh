@@ -6,15 +6,18 @@
 #
 # Needs:  export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera
 #         export SLURM_ACCOUNT=<your_account>      (your project account, used as sbatch -A)
+# Optional: export BHASKERA_EXCLUDE=cbgpuXXXX,...  keep jobs off faulty nodes (passed as sbatch --exclude)
 set -euo pipefail
 cd "$(dirname "$0")"
 : "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera}"
 : "${SLURM_ACCOUNT:?export SLURM_ACCOUNT=<your_account>  (your PARAM Rudra project account)}"
 mkdir -p logs
+EXCL=()
+[[ -n "${BHASKERA_EXCLUDE:-}" ]] && EXCL=(--exclude="$BHASKERA_EXCLUDE")
 
 if [[ "${1:-}" == "tokenize" ]]; then
     cfg="${2:?usage: ./submit.sh tokenize <tokenize.yaml>}"
-    sbatch -A "$SLURM_ACCOUNT" tokenize.sbatch "$cfg"
+    sbatch -A "$SLURM_ACCOUNT" "${EXCL[@]}" tokenize.sbatch "$cfg"
     exit
 fi
 
@@ -49,7 +52,7 @@ if ! python -m bhaskera.launcher.preflight --config "$cfg" --num-gpus $(( 2 * no
 fi
 
 name=$(basename "$cfg" .yaml)
-jid=$(sbatch --parsable -A "$SLURM_ACCOUNT" --job-name="$name" --nodes="$nodes" \
+jid=$(sbatch --parsable -A "$SLURM_ACCOUNT" "${EXCL[@]}" --job-name="$name" --nodes="$nodes" \
       --partition="$part" --time="${hours}:00:00" train.sbatch "$cfg")
 echo "submitted job $jid: $name on $nodes nodes ($((2*nodes)) GPUs), $part, ${hours} h"
 echo "follow it:  tail -f logs/${name}_${jid}.out | grep --line-buffered -E '\[step|eval|exit code'"

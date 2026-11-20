@@ -14,6 +14,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=48
 #SBATCH --exclusive
+#SBATCH --mem=170G                     # host RAM per node; the GPU partitions default to only 20 GB
 #SBATCH --output=logs/%x_%j.out
 
 set -uo pipefail
@@ -36,6 +37,10 @@ export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-$CDMC}
 # One Ray cluster across all nodes of this job, addressed over ib0.
 nodes=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
 head_ip=$(srun --nodes=1 --ntasks=1 -w "${nodes[0]}" ip -4 addr show ib0 | awk '/inet / {print $2}' | cut -d/ -f1)
+if [[ -z "$head_ip" ]]; then
+    echo "=== could not read the ib0 address of ${nodes[0]} (Slurm controller unreachable or ib0 down); resubmit ==="
+    exit 1
+fi
 port=$(( 6379 + SLURM_JOB_ID % 1000 ))
 export RAY_ADDRESS="${head_ip}:${port}" RAY_TMPDIR="/tmp/ray_${SLURM_JOB_ID}" RAY_raylet_start_wait_time_s=300
 GPUS_PER_NODE=2

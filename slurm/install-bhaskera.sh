@@ -29,8 +29,9 @@ BHASKERA_CUDA=12.4 BHASKERA_VENV="$PREFIX/venv" bash setup.sh
 
 source "$PREFIX/venv/bin/activate"
 uv pip install "$FA_WHEEL"                   # prebuilt: no nvcc needed (there is no CUDA 12 toolkit module)
-# Versions validated on PARAM Rudra (newer Ray needs an auth token between nodes and breaks multi-node jobs)
-uv pip install "ray[train,data,default]==2.56.1" peft==0.20.0 accelerate==1.14.0 liger-kernel==0.8.1 mlflow==3.15.0 pyarrow==25.0.0 bitsandbytes==0.50.2
+# Exact versions of the environment used for every benchmark run. Newer Ray / grpcio releases break
+# multi-node start-up on PARAM Rudra (InvalidAuthToken, or workers timing out waiting for the head node).
+uv pip install -r "$KIT/requirements-paramrudra.lock"
 
 mkdir -p "$PREFIX/share/kit/recipes"
 cp "$KIT"/train.sbatch "$KIT"/tokenize.sbatch "$KIT"/submit.sh "$PREFIX/share/kit/"
