@@ -138,6 +138,24 @@ def _warn_if_dequantizing(name: str, model_config, rank: int) -> None:
         )
 
 
+def _build_empty_model(model_config, kwargs: dict):
+    """Architecture only (meta device, no weights), with the same tied-embedding structure as rank 0's
+    real model.
+
+    Some custom-code models (BharatGen Param2-17B) come out of `from_config` with separate input and
+    output embeddings even though `tie_word_embeddings` is true, so this rank would hold one more
+    parameter than rank 0 (which loaded real weights and tied them). The ranks then disagree on the
+    model structure and the weight broadcast at start-up waits forever.
+    """
+    from accelerate import init_empty_weights
+    with init_empty_weights():
+        model = AutoModelForCausalLM.from_config(model_config, **kwargs)
+    if getattr(model_config, "tie_word_embeddings", False):
+        # outside the context: inside it, accelerate re-wraps every assigned parameter, which breaks the tie
+        model.tie_weights()
+    return model
+
+
 def build_model(
     cfg, device: torch.device, rank: int = 0
 ) -> Tuple[torch.nn.Module, ModelProfile]:
@@ -171,6 +189,9 @@ def build_model(
     """
     name = cfg.model.name
     trust_remote_code = getattr(cfg.model, "trust_remote_code", False)
+    if trust_remote_code:
+        from .compat import patch_transformers_for_remote_code
+        patch_transformers_for_remote_code()
     strategy = cfg.training.distributed.strategy.lower()
     meta_build = strategy == "fsdp" and rank != 0
 
@@ -207,12 +228,10 @@ def build_model(
             # a different attention module class) would make this rank's
             # module tree diverge from rank 0's, which fully_shard()'s
             # collectives assume never happens.
-            from accelerate import init_empty_weights
             meta_kwargs = {
                 k: v for k, v in kwargs.items() if k != "low_cpu_mem_usage"
             }
-            with init_empty_weights():
-                model = AutoModelForCausalLM.from_config(model_config, **meta_kwargs)
+            model = _build_empty_model(model_config, meta_kwargs)
         else:
             quant_cfg = build_quantization_config(cfg)   # raises under FSDP
             if quant_cfg is not None:

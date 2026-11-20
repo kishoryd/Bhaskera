@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     args = _parse_args()
     cfg  = load_config(args.config)
+    # Workers run in their own temporary working directories (gone when the job ends), so a relative
+    # checkpoint folder would silently lose every checkpoint. Resolve it here, against the folder the job
+    # was submitted from.
+    cfg.checkpoint.save_dir = os.path.abspath(cfg.checkpoint.save_dir)
 
     if args.no_dashboard:
         cfg.monitoring.dashboard = False
