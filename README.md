@@ -103,7 +103,7 @@ The BharatGen rows are throughput tests only: no model-quality evaluation was do
 | Data | `bhaskera-tokenize` tokenises once into a Parquet cache; runtime sequence packing removes padding |
 | Chat formats | `chatml`, `alpaca`, `sharegpt`, or your own via `@register_format` |
 | Evaluation | Held-out loss and next-token accuracy |
-| Checkpoints | Sharded (DCP), trained LoRA weights and optimizer state only (Qwen3-14B QLoRA: 942 MB); Pipeline runs resume from the latest checkpoint (see Known limitations for the other strategies) |
+| Checkpoints | Sharded (DCP), trained LoRA weights and optimizer state only (Qwen3-14B QLoRA: 942 MB); a resubmitted job resumes from the latest checkpoint with the learning-rate schedule in step (validated for QLoRA/DDP, FSDP and Pipeline) |
 | Preflight | `python -m bhaskera.launcher.preflight` checks model, libraries, data and GPU-memory fit on the login node (within 13% of the measured peak on seven recipes) |
 | Metrics | One log line per step (loss, tok/s, MFU, peak GPU memory, step-time breakdown), MLflow |
 
@@ -232,8 +232,6 @@ how a release is cut. Use a tagged version for installs: `git clone --branch v1.
 
 ## Known limitations
 
-- **Resume (DDP, QLoRA, FSDP):** the code that finds and loads a checkpoint was broken and has been fixed in this
-  release, with unit tests; validation on the cluster is still in progress. Pipeline resume is validated.
 - MoE models are slow outside the Pipeline strategy (0.2–1.7% MFU): use Pipeline for MoE. The BharatGen MoE
   models run under FSDP only; Pipeline is not validated for their custom code.
 - DDP needs the whole model on each GPU: 70 B and larger need QLoRA or Pipeline. Qwen3-235B does not fit

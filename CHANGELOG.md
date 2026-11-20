@@ -40,8 +40,11 @@ Validated on PARAM Rudra (2 × A100 80 GB per node) with five models from 14 B t
 ### Fixed (found while preparing this release)
 - **Resume never worked for DDP, QLoRA and FSDP runs.** The trainer passed the newest `step_N` folder to a
   function that expects the folder containing the `step_N` folders, so every resubmitted job restarted at
-  step 0. It now passes the right folder, and the learning-rate schedule is rebuilt at the resumed step
-  (unit-tested; cluster validation in progress). Pipeline had its own resume, which worked.
+  step 0. It now passes the right folder, and the learning-rate schedule is rebuilt at the resumed step.
+  Validated on PARAM Rudra: QLoRA/DDP (Qwen3-14B) and FSDP (Param-1-7B) runs resumed from step 10 and
+  continued at step 11 with the learning rate in step. After the optimizer state loads, its settings
+  (`betas`, `eps`, `lr`, `weight_decay`) can be missing on GPU; they are now restored from the configured
+  values (a warning names them). Pipeline had its own resume, which worked.
 - **DDP, QLoRA and FSDP checkpoints stored the whole model**, including the frozen base weights: 10 GB for
   Qwen3-14B QLoRA, 40 GB for Llama-3.3-70B QLoRA, and Mistral-Large-123B ran the node out of host RAM while
   saving, leaving an empty folder. Checkpoints now hold only the trained weights and optimizer state
