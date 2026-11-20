@@ -10,10 +10,10 @@ How to cut a release: [RELEASING.md](RELEASING.md).
 
 ### Added
 - **All running jobs in one place.** `bhaskera-dashboard ray` now runs a small hub on the login node. It picks
-  up every running Bhaskera job by itself, also jobs that start later, and links each job's Ray Dashboard
-  and Grafana. `http://localhost:8265` lists the jobs, `http://job-<id>.localhost:8265` is the Ray Dashboard
-  of one job and `http://job-<id>.localhost:3000` its Grafana charts. The laptop command is unchanged.
-  `--job <id>` limits it to one job. Jobs started from now on embed the charts under their own job address.
+  up every running Bhaskera job by itself, also jobs that start later. Everything is behind one address,
+  `http://localhost:8265`: a page that lists the running jobs and links their Ray Dashboards, Grafana charts
+  and MLflow. The laptop command and the `ssh-config` entry now forward that one port instead of three.
+  `--job <id>` limits it to one job. Jobs started from now on embed their charts under their own address.
 
 ### Fixed
 - MLflow runs carried no tags or params (`slurm_job`, host, nodes, the configuration): MLflow 3 takes no

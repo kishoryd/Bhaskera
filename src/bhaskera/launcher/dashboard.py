@@ -291,8 +291,7 @@ def _print_tunnel(cfg: DashboardConfig, *, verbose: bool = False) -> None:
 # ever forwards two fixed ports to the login node (derived from the user id, so users who share a login node
 # do not collide), which is why the command to type never changes.
 
-_RAY_DASHBOARD_PORT = 8265          # Ray Dashboard, on the job's first node
-_GRAFANA_PORT = 3000                # Grafana (the dashboard's time-series charts), on the job's first node
+_LAPTOP_PORT = 8265                 # the one address on the laptop: http://localhost:8265
 _JOB_COMMENT = "bhaskera"           # submit.sh puts this in the Slurm job comment
 
 
@@ -304,13 +303,9 @@ def _slurm(cmd: list[str]) -> str:
         return ""
 
 
-def user_ports() -> tuple[int, int]:
-    """Login-node ports for the Ray Dashboard and Grafana: fixed for a user, different between users."""
-    base = 20000 + os.getuid() % 10000
-    return base, base + 10000
-
-
-_MLFLOW_LOCAL_PORT = 5055   # where MLflow appears on the laptop
+def hub_port() -> int:
+    """Login-node port of the hub: fixed for a user, different between users that share a login node."""
+    return 20000 + os.getuid() % 10000
 
 
 def mlflow_port(cfg: DashboardConfig) -> int:
@@ -433,17 +428,13 @@ def _remote_command() -> str:
     return f"bash -lc '{tool} ray'"
 
 
-def laptop_command(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> str:
+def laptop_command(cfg: DashboardConfig, local_port: int = _LAPTOP_PORT) -> str:
     """The one command to run on a laptop: it logs in and runs this tool, which does the rest."""
-    ray_port, grafana_port = user_ports()
-    remote = _remote_command()
-    return (f"ssh {ssh_options(cfg)}-L {local_port}:localhost:{ray_port} -L {_GRAFANA_PORT}:localhost:{grafana_port} "
-            f"-L {_MLFLOW_LOCAL_PORT}:localhost:{mlflow_port(cfg)} {ssh_target(cfg)} \"{remote}\"")
+    return f"ssh {ssh_options(cfg)}-L {local_port}:localhost:{hub_port()} {ssh_target(cfg)} \"{_remote_command()}\""
 
 
-def ssh_config_block(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> str:
+def ssh_config_block(cfg: DashboardConfig, local_port: int = _LAPTOP_PORT) -> str:
     """A `~/.ssh/config` entry for the laptop, so that `ssh bhaskera-ray` replaces the long command."""
-    ray_port, grafana_port = user_ports()
     target = ssh_target(cfg)
     user, _, host = target.rpartition("@")
     lines = ["Host bhaskera-ray", f"    HostName {host}"]
@@ -452,69 +443,60 @@ def ssh_config_block(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT
     opts = ssh_options(cfg).split()
     if opts:
         lines.append(f"    Port {opts[1]}")
-    lines += [f"    LocalForward {local_port} localhost:{ray_port}",
-              f"    LocalForward {_GRAFANA_PORT} localhost:{grafana_port}",
-              f"    LocalForward {_MLFLOW_LOCAL_PORT} localhost:{mlflow_port(cfg)}",
+    lines += [f"    LocalForward {local_port} localhost:{hub_port()}",
               f"    RemoteCommand {_remote_command()}",
               "    RequestTTY yes", "    ServerAliveInterval 30"]
     return "\n".join(lines)
 
 
-def cmd_ssh_config(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> None:
+def cmd_ssh_config(cfg: DashboardConfig, local_port: int = _LAPTOP_PORT) -> None:
     print("Add this to ~/.ssh/config on your laptop (once):")
     print()
     print(ssh_config_block(cfg, local_port))
     print()
-    print("From then on, this is all you type; it finds your job and keeps the dashboard link open:")
+    print("From then on, this is all you type:")
     print()
     print("    ssh bhaskera-ray")
-    print("    then open in a browser:")
-    print(f"      Ray Dashboard   http://localhost:{local_port}")
-    print(f"      Grafana charts  http://localhost:{_GRAFANA_PORT}")
-    print(f"      MLflow          http://localhost:{_MLFLOW_LOCAL_PORT}")
+    print(f"    then open http://localhost:{local_port} in a browser; everything is linked from that page.")
 
 
 def forward_command(head: str, ray_port: int, grafana_port: int) -> list[str]:
     """The ssh command, run on the login node, that links the login-node ports to the first node of the job."""
     return ["ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "BatchMode=yes",
-            "-L", f"{ray_port}:localhost:{_RAY_DASHBOARD_PORT}",
-            "-L", f"{grafana_port}:localhost:{_GRAFANA_PORT}", head]
+            "-L", f"{ray_port}:localhost:{ray_hub.RAY_PORT}",
+            "-L", f"{grafana_port}:localhost:{ray_hub.GRAFANA_PORT}", head]
 
 
-def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_port: int = _RAY_DASHBOARD_PORT) -> None:
-    ray_port, grafana_port = user_ports()
+def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_port: int = _LAPTOP_PORT) -> None:
     print()
-    print("From your laptop, this one command logs in and keeps the dashboard link open")
-    print("(the command is always the same; it finds your job and its nodes by itself):")
+    print("From your laptop, this one command logs in and keeps everything open")
+    print("(the command is always the same; it finds your jobs and their nodes by itself):")
     print()
     print(f"    {laptop_command(cfg, local_port)}")
-    print("    then open in a browser:")
-    print(f"      Ray Dashboard   http://localhost:{local_port}")
-    print(f"      Grafana charts  http://localhost:{_GRAFANA_PORT}")
-    print(f"      MLflow          http://localhost:{_MLFLOW_LOCAL_PORT}")
+    print()
+    print(f"Then open http://localhost:{local_port} in a browser: your running jobs, with their Ray Dashboards,")
+    print("charts and MLflow, are linked from that page.")
     print()
     if info:
         return
 
     ensure_mlflow(cfg)
     print()
-    hub = ray_hub.Hub(lambda: hub_jobs(my_jobs(), job), head_node, forward_command, laptop_ray=local_port,
-                      laptop_grafana=_GRAFANA_PORT, laptop_mlflow=_MLFLOW_LOCAL_PORT)
+    hub = ray_hub.Hub(lambda: hub_jobs(my_jobs(), job), head_node, forward_command, laptop_port=local_port,
+                      mlflow_port=mlflow_port(cfg))
     try:
-        servers = ray_hub.serve(hub, ray_port, grafana_port)
+        server = ray_hub.serve(hub, hub_port())
     except OSError as e:
-        _die(f"cannot listen on the login-node ports {ray_port} and {grafana_port} ({e}); is another "
+        _die(f"cannot listen on the login-node port {hub_port()} ({e}); is another "
              "'bhaskera-dashboard ray' of yours running? Stop it first (Ctrl-C).")
-    print(f"Your Bhaskera jobs are listed at http://localhost:{local_port}  (each job: http://job-<id>.localhost:{local_port}).")
-    print("Keep this window open. Jobs that start later are added by themselves; MLflow stays available after they end.")
-    print("Ctrl-C closes it.\n", flush=True)
+    print(f"Open http://localhost:{local_port} in your browser. Keep this window open; it closes with Ctrl-C.")
+    print("Jobs that start later are added by themselves, and MLflow stays available after they end.\n", flush=True)
     announced_idle = False
     try:
         while True:
             added, removed = hub.refresh()
             for link in added:
-                print(f"job {link.job_id} ({link.name}) is running, Ray head {link.head}: "
-                      f"http://job-{link.job_id}.localhost:{local_port}", flush=True)
+                print(f"job {link.job_id} ({link.name}) is running on {link.head}; added to the page.", flush=True)
             for job_id in removed:
                 print(f"job {job_id} is no longer running; its Ray Dashboard and Grafana are closed. "
                       "Its metrics stay in MLflow.", flush=True)
@@ -526,8 +508,7 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
         print()
     finally:
         hub.close()
-        for srv in servers:
-            srv.shutdown()
+        server.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +548,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--ray-port",
         type=int,
-        default=_RAY_DASHBOARD_PORT,
+        default=_LAPTOP_PORT,
         help="Port on your laptop for the Ray Dashboard in the printed command (default: 8265).",
     )
     p.add_argument(

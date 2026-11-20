@@ -5,10 +5,11 @@ jobs without knowing their nodes, `bhaskera-dashboard ray` runs this hub on the 
 
 * for each running job it keeps an ssh link from the login node to the first node of that job
   (the Ray Dashboard and Grafana listen there only);
-* two small proxies, on the two ports the laptop forwards, pick the job from the address that was typed:
-  ``http://job-<id>.localhost:8265`` is the Ray Dashboard of that job and ``http://job-<id>.localhost:3000``
-  its Grafana charts. Browsers send every ``*.localhost`` name to the laptop itself, so no setup is needed;
-* ``http://localhost:8265`` is a list of the running jobs with links.
+* one small proxy, on the single port the laptop forwards, picks the target from the address that was typed:
+  ``http://job-<id>.localhost:8265`` is the Ray Dashboard of that job, ``http://grafana-<id>.localhost:8265``
+  its Grafana charts and ``http://mlflow.localhost:8265`` MLflow. Browsers send every ``*.localhost`` name to
+  the laptop itself, so no setup is needed;
+* ``http://localhost:8265`` is a list of the running jobs with links to all of these.
 
 Jobs that start later are picked up by themselves, jobs that end are dropped.
 """
@@ -27,15 +28,20 @@ from typing import Callable, Optional
 RAY_PORT = 8265        # on the first node of a job
 GRAFANA_PORT = 3000    # on the first node of a job
 
-_HOST = re.compile(r"^job-(\d+)\.localhost(?::\d+)?$", re.IGNORECASE)
+_HOST = re.compile(r"^(job|grafana)-(\d+)\.localhost(?::\d+)?$|^(mlflow)\.localhost(?::\d+)?$", re.IGNORECASE)
 _HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
         "transfer-encoding", "upgrade", "host", "origin"}
 
 
-def job_from_host(host: str) -> Optional[str]:
-    """The job id in an address like ``job-128944.localhost:8265``, else None."""
+def target_from_host(host: str) -> Optional[tuple[str, str]]:
+    """What an address like ``job-128944.localhost:8265`` asks for: ("job", "128944"), ("grafana", "128944") or
+    ("mlflow", ""); None for any other address."""
     m = _HOST.match((host or "").strip())
-    return m.group(1) if m else None
+    if not m:
+        return None
+    if m.group(3):
+        return "mlflow", ""
+    return m.group(1).lower(), m.group(2)
 
 
 def free_port() -> int:
@@ -59,11 +65,11 @@ class Hub:
     """Keeps one ssh link per running job and answers which local port belongs to which job."""
 
     def __init__(self, list_jobs: Callable[[], list[dict]], head_of: Callable[[str], str],
-                 forward_cmd: Callable[[str, int, int], list[str]], *, laptop_ray: int = RAY_PORT,
-                 laptop_grafana: int = GRAFANA_PORT, laptop_mlflow: int = 5055,
+                 forward_cmd: Callable[[str, int, int], list[str]], *, laptop_port: int = RAY_PORT,
+                 mlflow_port: Optional[int] = None,
                  spawn: Callable[..., object] = subprocess.Popen, pick_port: Callable[[], int] = free_port):
         self._list_jobs, self._head_of, self._forward_cmd = list_jobs, head_of, forward_cmd
-        self.laptop_ray, self.laptop_grafana, self.laptop_mlflow = laptop_ray, laptop_grafana, laptop_mlflow
+        self.laptop_port, self.mlflow_port = laptop_port, mlflow_port
         self._spawn, self._pick_port = spawn, pick_port
         self._links: dict[str, JobLink] = {}
         self._lock = threading.Lock()
@@ -123,8 +129,8 @@ class Hub:
             rows.append(
                 f"<tr><td>{html.escape(l.job_id)}</td><td>{html.escape(l.name)}</td>"
                 f"<td>{html.escape(l.nodes)}</td>"
-                f"<td><a href='http://job-{l.job_id}.localhost:{self.laptop_ray}/'>Ray Dashboard</a></td>"
-                f"<td><a href='http://job-{l.job_id}.localhost:{self.laptop_grafana}/'>Grafana charts</a></td></tr>")
+                f"<td><a href='http://job-{l.job_id}.localhost:{self.laptop_port}/'>Ray Dashboard</a></td>"
+                f"<td><a href='http://grafana-{l.job_id}.localhost:{self.laptop_port}/'>Grafana charts</a></td></tr>")
         body = ("".join(rows) if rows else
                 "<tr><td colspan=5>No Bhaskera job is running. This page updates when one starts.</td></tr>")
         return (
@@ -137,12 +143,11 @@ class Hub:
             "<table><tr><th>Slurm job</th><th>Name</th><th>Nodes</th><th></th><th></th></tr>"
             f"{body}</table>"
             f"<p>Training curves of every run, finished and failed ones too: "
-            f"<a href='http://localhost:{self.laptop_mlflow}/'>MLflow</a></p>")
+            f"<a href='http://mlflow.localhost:{self.laptop_port}/'>MLflow</a></p>")
 
 
-def _handler(hub: Hub, kind: str):
-    """Request handler for the Ray Dashboard proxy (kind 'ray') or the Grafana proxy (kind 'grafana')."""
-    upstream_service = RAY_PORT if kind == "ray" else GRAFANA_PORT
+def _handler(hub: Hub):
+    """Request handler of the proxy: Ray Dashboard, Grafana or MLflow, by the address that was typed."""
 
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "bhaskera-hub"
@@ -159,28 +164,39 @@ def _handler(hub: Hub, kind: str):
             if self.command != "HEAD":
                 self.wfile.write(data)
 
+        def _upstream(self, kind: str, job_id: str) -> tuple[Optional[int], int, str]:
+            """(login-node port, port the service believes it has, what to call it in messages)."""
+            if kind == "mlflow":
+                return hub.mlflow_port, hub.mlflow_port or 0, "MLflow"
+            link = hub.link(job_id)
+            if link is None:
+                return None, 0, f"Job {html.escape(job_id)}"
+            if kind == "grafana":
+                return link.grafana_port, GRAFANA_PORT, f"The charts of job {html.escape(job_id)}"
+            return link.ray_port, RAY_PORT, f"The dashboard of job {html.escape(job_id)}"
+
         def _handle(self) -> None:
-            job_id = job_from_host(self.headers.get("Host", ""))
-            if job_id is None:
+            target = target_from_host(self.headers.get("Host", ""))
+            if target is None:
                 if self.path.split("?")[0] in ("/", "/index.html"):
                     return self._send(200, hub.index_html())
                 return self._send(404, "Open the list of jobs at http://localhost first.")
-            link = hub.link(job_id)
-            if link is None:
-                return self._send(404, f"Job {html.escape(job_id)} is not running.")
+            kind, job_id = target
+            port, service_port, what = self._upstream(kind, job_id)
+            if port is None:
+                return self._send(404, f"{what} is not running.")
             if "upgrade" in self.headers.get("Connection", "").lower():
                 return self._send(501, "Live connections are not available through the hub.")
-            port = link.ray_port if kind == "ray" else link.grafana_port
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else None
             headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP}
-            headers["Host"] = f"localhost:{upstream_service}"
+            headers["Host"] = f"localhost:{service_port}"
             try:
                 conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
                 conn.request(self.command, self.path, body, headers)
                 resp = conn.getresponse()
             except OSError:
-                return self._send(502, f"The dashboard of job {html.escape(job_id)} is not up yet; try again in a minute.")
+                return self._send(502, f"{what} is not up yet; try again in a minute.")
             self.send_response(resp.status)
             for k, v in resp.getheaders():
                 if k.lower() not in _HOP:
@@ -203,17 +219,9 @@ def _handler(hub: Hub, kind: str):
     return Handler
 
 
-def serve(hub: Hub, ray_listen: int, grafana_listen: int) -> list[http.server.ThreadingHTTPServer]:
-    """Start the two proxies on 127.0.0.1 (raises OSError when a port is taken). Each runs in its own thread."""
-    servers = []
-    try:
-        for port, kind in ((ray_listen, "ray"), (grafana_listen, "grafana")):
-            srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), _handler(hub, kind))
-            srv.daemon_threads = True
-            threading.Thread(target=srv.serve_forever, daemon=True).start()
-            servers.append(srv)
-    except OSError:
-        for srv in servers:
-            srv.shutdown()
-        raise
-    return servers
+def serve(hub: Hub, port: int) -> http.server.ThreadingHTTPServer:
+    """Start the proxy on 127.0.0.1 in its own thread (raises OSError when the port is taken)."""
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), _handler(hub))
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv

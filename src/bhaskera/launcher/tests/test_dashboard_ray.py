@@ -36,16 +36,16 @@ def test_head_node(monkeypatch):
 
 def test_ports_are_per_user_and_stable(monkeypatch):
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
-    assert dashboard.user_ports() == (20029, 30029)
+    assert dashboard.hub_port() == 20029
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80030)
-    assert dashboard.user_ports() == (20030, 30030)
+    assert dashboard.hub_port() == 20030
 
 
 def test_laptop_command_is_fixed_and_contains_no_node(monkeypatch):
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
     monkeypatch.setenv("BHASKERA_MODULE", "bhaskera/1.1.0")
     cmd = dashboard.laptop_command(_cfg())
-    assert cmd == ('ssh -p 4422 -L 8265:localhost:20029 -L 3000:localhost:30029 -L 5055:localhost:40029 dlapp@paramrudra.cdacb.in '
+    assert cmd == ('ssh -p 4422 -L 8265:localhost:20029 dlapp@paramrudra.cdacb.in '
                    '"bash -lc \'module load bhaskera/1.1.0 && bhaskera-dashboard ray\'"')
     assert "cbgpu" not in cmd
 
@@ -61,7 +61,7 @@ def test_info_prints_the_command_and_nothing_else(monkeypatch, capsys):
     monkeypatch.setattr(dashboard, "my_jobs", lambda: pytest.fail("must not look for jobs"))
     dashboard.cmd_ray(_cfg(), None, info=True)
     out = capsys.readouterr().out
-    assert "bhaskera-dashboard ray" in out and "http://localhost:8265" in out and "http://localhost:5055" in out
+    assert "bhaskera-dashboard ray" in out and "http://localhost:8265" in out and "localhost:3000" not in out
 
 
 class _FakeProc:
@@ -133,7 +133,7 @@ def test_ssh_config_block(monkeypatch):
     block = dashboard.ssh_config_block(dashboard.DashboardConfig())
     assert "Host bhaskera-ray" in block
     assert "HostName login.example.org" in block and "User alice" in block and "Port 4422" in block
-    assert "LocalForward 8265 localhost:" in block and "LocalForward 3000 localhost:" in block
+    assert "LocalForward 8265 localhost:" in block and block.count("LocalForward") == 1
     assert "module load bhaskera/1.1.0" in block and "ServerAliveInterval 30" in block
 
 
@@ -164,9 +164,9 @@ def test_ensure_mlflow_starts_it_once(monkeypatch, capsys):
     assert started == [40029] and "MLflow is running" in capsys.readouterr().out
 
 
-def test_ssh_config_block_forwards_mlflow(monkeypatch):
+def test_ssh_config_block_has_one_forward(monkeypatch):
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
-    assert "LocalForward 5055 localhost:40029" in dashboard.ssh_config_block(_cfg())
+    assert dashboard.ssh_config_block(_cfg()).count("LocalForward") == 1
 
 
 def test_hub_jobs_are_the_running_bhaskera_jobs_or_the_one_asked_for():
