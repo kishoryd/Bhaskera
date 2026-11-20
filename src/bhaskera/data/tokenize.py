@@ -21,8 +21,12 @@ import torch.distributed as dist
 
 logger = logging.getLogger(__name__)
 
-# Bhaskera version written into metadata.json
-_BHASKERA_VERSION = "2.3.0"
+# Bhaskera version written into metadata.json -- single source of truth is pyproject.toml
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    _BHASKERA_VERSION = _pkg_version("bhaskera")
+except PackageNotFoundError:          # running from a source tree that was never pip-installed
+    _BHASKERA_VERSION = "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +370,33 @@ def tokenize_dataset(
 # Internal: TokenizerActor (now format-aware)
 # ---------------------------------------------------------------------------
 
+
+def ensure_pad_token(tokenizer, model_name: str, trust_remote_code: bool = False) -> None:
+    """Make sure `tokenizer` has a pad token (padding rows to seq_len needs one).
+
+    Order: the tokenizer's own pad token, then its EOS token (Falcon, GPT-2, Llama-2, Param2), then the
+    pad/EOS id from the model's config.json for tokenizers that declare no special tokens at all
+    (BharatGen Param-1-7B). Padded positions are masked out of the loss, so which id is used does not
+    change training.
+    """
+    if tokenizer.pad_token is not None:
+        return
+    if tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+        return
+    from transformers import AutoConfig
+    cfg = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+    for attr in ("pad_token_id", "eos_token_id"):
+        tid = getattr(cfg, attr, None)
+        if isinstance(tid, (list, tuple)):
+            tid = tid[0] if tid else None
+        if tid is not None:
+            tokenizer.pad_token = tokenizer.convert_ids_to_tokens(int(tid))
+            return
+    raise ValueError(
+        f"{model_name}: the tokenizer has no pad or EOS token and config.json has no pad_token_id or "
+        "eos_token_id. Add a pad token to the tokenizer (special_tokens_map.json) and retry.")
+
 class TokenizerActor:
     """
     Loads the tokenizer once per Ray worker, tokenizes many batches.
@@ -388,9 +419,7 @@ class TokenizerActor:
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, trust_remote_code=trust_remote_code,
         )
-        if self.tokenizer.pad_token is None:
-            # Falcon, GPT-2, Llama-2, Param2 all need this.
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        ensure_pad_token(self.tokenizer, model_name, trust_remote_code)
         self.seq_len        = seq_len
         self.text_col       = text_col
         self.format_name    = format_name
