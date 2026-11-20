@@ -1,10 +1,10 @@
--- Lmod modulefile: Bhaskera 1.1.0 (distributed LoRA / QLoRA fine-tuning of LLMs) on PARAM Rudra.
--- Install with install-bhaskera.sh, then copy this file to <MODULEPATH dir>/bhaskera/1.1.0.lua
-local root = "/home/apps/bhaskera/1.1.0"
+-- Lmod modulefile: Bhaskera 1.1.1 (distributed LoRA / QLoRA fine-tuning of LLMs) on PARAM Rudra.
+-- Install with install-bhaskera.sh, then copy this file to <MODULEPATH dir>/bhaskera/1.1.1.lua
+local root = "/home/apps/bhaskera/1.1.1"
 local quickstart = "/home/apps/bhaskera/quickstart"   -- shared models, tokenised data and ready recipes (see make-quickstart.py)
 
 whatis("Name: Bhaskera")
-whatis("Version: 1.1.0")
+whatis("Version: 1.1.1")
 whatis("Description: Ray-native distributed LoRA/QLoRA fine-tuning of LLMs (DDP, QLoRA, Pipeline, FSDP, HSDP) on A100 GPU nodes")
 whatis("URL: https://github.com/kishoryd/Bhaskera")
 
@@ -24,14 +24,14 @@ setenv("BHASKERA_LOGIN_HOST", "paramrudra.cdacb.in")
 setenv("BHASKERA_LOGIN_PORT", "4422")
 
 help([[
-Bhaskera 1.1.0 -- distributed LoRA / QLoRA fine-tuning of large language models
+Bhaskera 1.1.1 -- distributed LoRA / QLoRA fine-tuning of large language models
 on PARAM Rudra GPU nodes (2 x A100 80 GB per node), 1 to 128+ nodes.
 
   Includes: torch 2.6.0+cu124, flash-attn 2.7.3, bitsandbytes, transformers 4.57, ray, peft.
 
 Quick start (models, tokenised data and ready recipes are on shared storage; nothing to download):
 
-  module load bhaskera/1.1.0
+  module load bhaskera/1.1.1
   cp -r $BHASKERA_KIT /scratch/<project>/<username>/bhaskera-runs
   cd /scratch/<project>/<username>/bhaskera-runs
   cp $BHASKERA_QUICKSTART/recipes/*.yaml recipes/

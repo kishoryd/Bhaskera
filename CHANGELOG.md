@@ -8,6 +8,22 @@ How to cut a release: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-20
+
+### Fixed
+- **Central install: other users could not start Python.** `install-bhaskera.sh` let `uv` place the Python
+  interpreter in the home folder of the installing user and the environment only linked to it. The installer
+  now keeps the interpreter in `$PREFIX/python`.
+- A run that stops with an error is closed as FAILED in MLflow, so the curves logged so far stay and show how
+  far it got. Runs whose Slurm job ended without closing them (time limit, failed node) are marked KILLED the
+  next time the dashboard starts.
+
+### Changed
+- `bhaskera-dashboard ray` also starts the MLflow page on the login node you land on, and the laptop command
+  and `ssh-config` forward it to `localhost:5055`. MLflow gets a port of its own per user on the login node.
+- The connection stays open when the job ends, or before one exists: MLflow keeps working, and the next job is
+  picked up by itself. The Ray Dashboard and Grafana exist only while a job runs.
+
 ## [1.1.0] - 2026-11-20
 
 ### Added
@@ -104,5 +120,6 @@ are supported.
 - Training gpt-oss (MXFP4) models is not supported.
 
 [Unreleased]: https://github.com/kishoryd/Bhaskera/compare/v1.1.0...HEAD
+[1.1.1]: https://github.com/kishoryd/Bhaskera/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/kishoryd/Bhaskera/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/kishoryd/Bhaskera/releases/tag/v1.0.0
