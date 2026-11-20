@@ -56,9 +56,9 @@ def _unwrap_ddp(model: nn.Module) -> nn.Module:
 
 
 def _fill_missing_hyperparameters(optimizer: torch.optim.Optimizer, fresh: list[dict]) -> None:
-    """After an optimizer state load, restore any parameter-group setting (betas, eps, lr, ...) the load
-    left out, from the settings the optimizer was built with. On the GPU runs the restored groups were
-    missing `betas` and training stopped with KeyError at the first step."""
+    """After an optimizer state load, restore any parameter-group setting (betas, eps, lr, ...) that the
+    load left out, using the values the optimizer was built with. Without them the next optimizer step
+    raises KeyError."""
     filled: set[str] = set()
     for group, defaults in zip(optimizer.param_groups, fresh):
         for key, value in defaults.items():
@@ -74,9 +74,9 @@ def _state_dict_options(strict: bool = True) -> StateDictOptions:
     """Sharded, CPU-offloaded, trainable parameters only.
 
     With LoRA / QLoRA the frozen base model is not part of the checkpoint: it is reloaded from the
-    model folder when a run starts, so saving it would only cost disk space and host RAM (a 4-bit
-    123B model ran the node out of memory while saving). A run with no frozen parameters (full
-    fine-tuning) is unaffected.
+    model folder when a run starts, so saving it would only cost disk space and host RAM (the 4-bit
+    weights of a 123B model do not fit in a node's memory when gathered for saving). A run with no
+    frozen parameters (full fine-tuning) is unaffected.
     """
     try:
         return StateDictOptions(full_state_dict=False, cpu_offload=True, ignore_frozen_params=True, strict=strict)

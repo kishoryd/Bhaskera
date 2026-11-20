@@ -1,13 +1,13 @@
 # Bhaskera recipe: qwen3-235b-a22b-pipeline
 # Model    : Qwen/Qwen3-235B-A22B-Instruct-2507   (download to /scratch/<project>/<username>/models/Qwen3-235B-A22B-Instruct-2507)
 # Strategy : pipeline (pipeline, 16 stages)
-# Measured on PARAM Rudra (Nov 2026, seq_len 4096, 2 x A100 80 GB per node):
+# Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):
 #            10.9% MFU, 2.6 days/epoch on 8 nodes, 4.3 h on 128 nodes, 45 GB/GPU
 # Nodes    : nodes: a multiple of 8 (16 pipeline stages)
 #
 # Before use: replace every <project>/<username>, and set data.tokenized_path /
 # data.val_tokenized_path to the two lines printed by the tokenize job.
-# max_steps is 10 (a smoke test). After the smoke test, set it for a full run:
+# max_steps is 10, so a first job finishes in minutes. For a full run set it to:
 #   max_steps = (training-set tokens) / (tok/s x step_s from the [step] log line)
 # Run with:  ./submit.sh recipes/qwen3-235b-a22b-pipeline.yaml <nodes> <hours>
 model:

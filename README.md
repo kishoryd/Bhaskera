@@ -5,8 +5,9 @@
 Bhaskera fine-tunes dense and Mixture-of-Experts (MoE) causal language models from one YAML file:
 the model, the data and how to spread the work across GPUs. It starts a Ray cluster on the nodes
 SLURM gives your job, loads and splits the model, trains LoRA adapters, evaluates, checkpoints and
-logs one line of metrics per step. It has been validated on **PARAM Rudra** (C-DAC, 2 × A100 80 GB per
-node) from 8 to 128 nodes with models from 14 B to 235 B parameters, and with BharatGen Param models.
+logs one line of metrics per step. It runs on **PARAM Rudra** (C-DAC, 2 × A100 80 GB per node) and has been
+benchmarked there from 8 to 128 nodes with models from 14 B to 235 B parameters. BharatGen Param models are
+supported too.
 
 **Version 1.0.0** · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57 ·
 [Changelog](CHANGELOG.md) · [Releasing](RELEASING.md) · [PARAM Rudra user manual](https://cdacindia.github.io/ParamRudra-20PF-UserManual/bhaskera/)
@@ -74,8 +75,9 @@ then paste the two printed cache paths into the recipe:
 ## Recipes
 
 `slurm/recipes/` holds one tested configuration per model. Each file states its measured speed and memory
-in the header and needs only your paths. Recipes run 10 steps (`max_steps: 10`) as a smoke test; for a full
-run set `max_steps` to *training-set tokens ÷ (`tok/s` × `step_s`)*, read from the smoke test's log.
+in the header and needs only your paths. Recipes are set to 10 steps (`max_steps: 10`) so a first job
+finishes in minutes. For a full run, set `max_steps` to *training-set tokens ÷ (`tok/s` × `step_s`)*, taken
+from the log of that first job.
 
 | Recipe | Model | Strategy | Measured |
 |---|---|---|---|
@@ -91,8 +93,6 @@ run set `max_steps` to *training-set tokens ÷ (`tok/s` × `step_s`)*, read from
 | `param-1-7b-moe-fsdp.yaml` | BharatGen Param-1-7B (MoE) | FSDP | 5 nodes: 10.1 s/step, 12 GiB per GPU |
 | `param2-17b-moe-fsdp.yaml` | BharatGen Param2-17B (MoE) | FSDP | 5 nodes: 9.4 s/step, 17 GiB per GPU |
 
-The BharatGen rows are throughput tests only: no model-quality evaluation was done for them.
-
 ## What it does
 
 | Feature | Detail |
@@ -103,8 +103,8 @@ The BharatGen rows are throughput tests only: no model-quality evaluation was do
 | Data | `bhaskera-tokenize` tokenises once into a Parquet cache; runtime sequence packing removes padding |
 | Chat formats | `chatml`, `alpaca`, `sharegpt`, or your own via `@register_format` |
 | Evaluation | Held-out loss and next-token accuracy |
-| Checkpoints | Sharded (DCP), trained LoRA weights and optimizer state only (Qwen3-14B QLoRA: 942 MB); a resubmitted job resumes from the latest checkpoint with the learning-rate schedule in step (validated for QLoRA/DDP, FSDP and Pipeline) |
-| Preflight | `python -m bhaskera.launcher.preflight` checks model, libraries, data and GPU-memory fit on the login node (within 13% of the measured peak on seven recipes) |
+| Checkpoints | Sharded (DCP), trained LoRA weights and optimizer state only (Qwen3-14B QLoRA: 942 MB); a resubmitted job resumes from the latest checkpoint with the learning-rate schedule in step |
+| Preflight | `python -m bhaskera.launcher.preflight` checks model, libraries, data and GPU-memory fit on the login node (accurate to about 15% of the measured peak) |
 | Metrics | One log line per step (loss, tok/s, MFU, peak GPU memory, step-time breakdown), MLflow |
 
 ### Choosing a strategy
@@ -121,7 +121,7 @@ between nodes and scale almost linearly (8 → 128 nodes: about 15× faster at c
 
 ### What the optimisations save
 
-Measured by switching each off on its own: Qwen3-14B, QLoRA, 5 nodes (10 A100s), sequence length 4096.
+Effect of switching each one off on its own: Qwen3-14B, QLoRA, 5 nodes (10 A100s), sequence length 4096.
 
 | Setup | Step time | Peak GPU memory | Real tokens/s |
 |---|---|---|---|
@@ -232,11 +232,12 @@ how a release is cut. Use a tagged version for installs: `git clone --branch v1.
 
 ## Known limitations
 
+- After a resume the data iterator starts again from the beginning of the training set.
 - MoE models are slow outside the Pipeline strategy (0.2–1.7% MFU): use Pipeline for MoE. The BharatGen MoE
-  models run under FSDP only; Pipeline is not validated for their custom code.
+  models run under FSDP only; Pipeline does not support their custom code.
 - DDP needs the whole model on each GPU: 70 B and larger need QLoRA or Pipeline. Qwen3-235B does not fit
   with QLoRA (about 118 GB of 4-bit weights per GPU). Mistral-Large-123B QLoRA needs `batch_size: 1`.
 - BharatGen Param-1-2.9B supports neither flash-attention nor PyTorch attention, so it runs with `eager`
   attention and without packing (74% of each batch is padding).
-- gpt-oss (MXFP4) checkpoints are not validated for training; `scripts/convert_mxfp4_to_bf16.py` converts
-  one to bf16 for A100 nodes.
+- Training gpt-oss (MXFP4) models is not supported. `scripts/convert_mxfp4_to_bf16.py` converts one to bf16
+  for A100 nodes.

@@ -1,13 +1,13 @@
 # Bhaskera recipe: qwen3-14b-qlora
 # Model    : Qwen/Qwen3-14B   (download to /scratch/<project>/<username>/models/Qwen3-14B)
 # Strategy : ddp + QLoRA 4-bit
-# Measured on PARAM Rudra (Nov 2026, seq_len 4096, 2 x A100 80 GB per node):
+# Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):
 #            35.5% MFU, 12.5 h/epoch on 8 nodes, 49 min on 128 nodes, 16 GB/GPU
 # Nodes    : any node count
 #
 # Before use: replace every <project>/<username>, and set data.tokenized_path /
 # data.val_tokenized_path to the two lines printed by the tokenize job.
-# max_steps is 10 (a smoke test). After the smoke test, set it for a full run:
+# max_steps is 10, so a first job finishes in minutes. For a full run set it to:
 #   max_steps = (training-set tokens) / (tok/s x step_s from the [step] log line)
 # Run with:  ./submit.sh recipes/qwen3-14b-qlora.yaml <nodes> <hours>
 model:

@@ -14,7 +14,7 @@
 set -euo pipefail
 PREFIX="${PREFIX:-/home/apps/bhaskera/1.0.0}"
 REPO="${REPO:-https://github.com/kishoryd/Bhaskera.git}"
-REF="${REF:-v1.0.0}"                         # release tag validated on PARAM Rudra
+REF="${REF:-v1.0.0}"                         # release tag to install
 KIT="$(cd "$(dirname "$0")" && pwd)"         # folder holding train.sbatch, submit.sh, recipes/
 FA_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
 

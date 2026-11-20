@@ -145,7 +145,7 @@ def _build_empty_model(model_config, kwargs: dict):
     Some custom-code models (BharatGen Param2-17B) come out of `from_config` with separate input and
     output embeddings even though `tie_word_embeddings` is true, so this rank would hold one more
     parameter than rank 0 (which loaded real weights and tied them). The ranks then disagree on the
-    model structure and the weight broadcast at start-up waits forever.
+    model structure and the weight broadcast at start-up never completes.
     """
     from accelerate import init_empty_weights
     with init_empty_weights():

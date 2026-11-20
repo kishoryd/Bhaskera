@@ -1,14 +1,17 @@
 # Bhaskera recipe: param2-17b-moe-fsdp
 # Model    : bharatgenai/Param2-17B-A2.4B-Thinking   (download to /scratch/<project>/<username>/models/Param2-17B-A2.4B-Thinking)
 # Strategy : FSDP, MoE 17 B (64 experts, top-6)
-# Measured on PARAM Rudra (Nov 2026, seq_len 4096, 5 nodes = 10 x A100 80 GB, 10 steps):
-#            9.4 s/step, 17 GiB per GPU, 1.6% MFU (the standard expert code is slow; Pipeline is not validated for this model)
+# Speed on PARAM Rudra (seq_len 4096, 5 nodes = 10 x A100 80 GB):
+#            9.4 s/step, 17 GiB per GPU, 1.6% MFU.
+#            Experts run one at a time under FSDP, so MFU is low. Pipeline is not supported for this model.
 # Nodes    : any node count
-# Throughput test only: no model-quality evaluation has been done for this model.
 #
 # Before use: replace every <project>/<username>, and set data.tokenized_path /
 # data.val_tokenized_path to the two lines printed by the tokenize job.
+# max_steps is 10, so a first job finishes in minutes. For a full run set it to:
+#   max_steps = (training-set tokens) / (tok/s x step_s from the [step] log line)
 # Run with:  ./submit.sh recipes/param2-17b-moe-fsdp.yaml <nodes> <hours>
+
 model:
   name: /scratch/<project>/<username>/models/Param2-17B-A2.4B-Thinking
   dtype: bfloat16

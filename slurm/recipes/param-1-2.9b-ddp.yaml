@@ -1,14 +1,17 @@
 # Bhaskera recipe: param-1-2.9b-ddp
 # Model    : bharatgenai/Param-1-2.9B-Instruct   (download to /scratch/<project>/<username>/models/Param-1-2.9B-Instruct)
-# Strategy : DDP, dense 2.9 B
-# Measured on PARAM Rudra (Nov 2026, seq_len 4096, 5 nodes = 10 x A100 80 GB, 10 steps):
-#            1.57 s/step, 24 GiB per GPU, 11% MFU (74% of each batch is padding: this model supports neither flash-attention nor packing)
+# Strategy : DDP, dense 2.9 B, eager attention, no packing
+# Speed on PARAM Rudra (seq_len 4096, 5 nodes = 10 x A100 80 GB):
+#            1.6 s/step, 24 GiB per GPU, 11% MFU.
+#            This model supports neither flash-attention nor PyTorch attention, so 74% of each batch is padding.
 # Nodes    : any node count
-# Throughput test only: no model-quality evaluation has been done for this model.
 #
 # Before use: replace every <project>/<username>, and set data.tokenized_path /
 # data.val_tokenized_path to the two lines printed by the tokenize job.
+# max_steps is 10, so a first job finishes in minutes. For a full run set it to:
+#   max_steps = (training-set tokens) / (tok/s x step_s from the [step] log line)
 # Run with:  ./submit.sh recipes/param-1-2.9b-ddp.yaml <nodes> <hours>
+
 model:
   name: /scratch/<project>/<username>/models/Param-1-2.9B-Instruct
   dtype: bfloat16

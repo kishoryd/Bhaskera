@@ -72,8 +72,7 @@ def maybe_resume(model, optimizer, save_dir: str) -> int:
     """Resume from the newest complete checkpoint under `save_dir`; return its step (0 if there is none).
 
     `load_checkpoint` takes the folder that *contains* the step_N folders and does the scan itself
-    (skipping any without a .complete marker). This function used to pick the newest step_N folder and
-    pass that, so the scan found nothing inside it and every resume silently restarted at step 0.
+    (skipping any without a .complete marker), so it is given `save_dir` itself, not a step_N folder.
     """
     return load_checkpoint(model, optimizer, save_dir)
 
@@ -92,9 +91,9 @@ def build_resumed_scheduler(optimizer, train_cfg, step: int):
 
     A resumed optimizer carries the learning rate of the saved step in its parameter groups, and no
     `initial_lr` (the checkpoint only restores keys the fresh optimizer already had). Building the
-    scheduler on that would take the decayed rate as its base, so every group is first put back at the
-    configured base rate, both groups of build_optimizer use `train_cfg.lr`, and the schedule is then
-    replayed up to `step`.
+    scheduler on that would take the decayed rate as its base. Every group is therefore put back at the
+    configured base rate first (both groups made by build_optimizer use `train_cfg.lr`), and the schedule
+    is then replayed up to `step`.
     """
     from .optim import build_scheduler
     for group in optimizer.param_groups:

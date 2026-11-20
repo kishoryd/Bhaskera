@@ -1,13 +1,13 @@
 # Bhaskera recipe: llama-3.3-70b-qlora
 # Model    : meta-llama/Llama-3.3-70B-Instruct   (download to /scratch/<project>/<username>/models/Llama-3.3-70B-Instruct)
 # Strategy : ddp + QLoRA 4-bit
-# Measured on PARAM Rudra (Nov 2026, seq_len 4096, 2 x A100 80 GB per node):
+# Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):
 #            39.1% MFU, 2.2 days/epoch on 8 nodes, 3.3 h on 128 nodes, 55 GB/GPU
 # Nodes    : any node count
 #
 # Before use: replace every <project>/<username>, and set data.tokenized_path /
 # data.val_tokenized_path to the two lines printed by the tokenize job.
-# max_steps is 10 (a smoke test). After the smoke test, set it for a full run:
+# max_steps is 10, so a first job finishes in minutes. For a full run set it to:
 #   max_steps = (training-set tokens) / (tok/s x step_s from the [step] log line)
 # Run with:  ./submit.sh recipes/llama-3.3-70b-qlora.yaml <nodes> <hours>
 model:

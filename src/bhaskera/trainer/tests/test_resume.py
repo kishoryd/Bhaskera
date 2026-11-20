@@ -72,7 +72,7 @@ def test_scheduler_fast_forward_matches_stepping(tmp_path):
 
 def test_resumed_schedule_matches_an_uninterrupted_run(tmp_path):
     """After resume the learning rate must equal what a run that never stopped has at that step
-    (replaying the schedule on top of the restored optimizer once gave a rate 360x too high)."""
+    (replaying the schedule on top of the restored optimizer would apply the warm-up twice)."""
     cfg = SimpleNamespace(warmup_steps=5, max_steps=30, lr=1e-2)
     torch.manual_seed(0)
 
@@ -132,7 +132,7 @@ def test_ddp_wrapped_model_saves_and_resumes(tmp_path):
 
 
 def test_missing_optimizer_settings_are_filled_in():
-    """The GPU runs came back from the optimizer load without `betas`; the first step then raised KeyError."""
+    """The optimizer load can return parameter groups without `betas` or `eps`; the next step must not fail."""
     opt = _opt(_Tiny())
     fresh = [{k: v for k, v in g.items() if k != "params"} for g in opt.param_groups]
     for g in opt.param_groups:
