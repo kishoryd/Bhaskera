@@ -8,7 +8,7 @@ SLURM gives your job, loads and splits the model, trains LoRA adapters, evaluate
 logs one line of metrics per step. It has been validated on **PARAM Rudra** (C-DAC, 2 × A100 80 GB per
 node) from 8 to 128 nodes with models from 14 B to 235 B parameters.
 
-Version 2.2.0 · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57
+Version 1.0.0 · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57
 
 ---
 
@@ -42,7 +42,7 @@ huggingface-cli download Qwen/Qwen3-14B --local-dir ../models/Qwen3-14B
 tail -f logs/qwen3-14b-qlora_<jobid>.out | grep --line-buffered -E '\[step|eval|exit code'
 ```
 
-On PARAM Rudra a central install may also be available as a module: `module load bhaskera/2.2.0`, then
+On PARAM Rudra a central install may also be available as a module: `module load bhaskera/1.0.0`, then
 `cp -r $BHASKERA_KIT bhaskera-runs` and continue from step 3.
 
 ## Recipes

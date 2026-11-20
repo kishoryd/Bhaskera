@@ -17,9 +17,9 @@ Bhaskera follows [Semantic Versioning](https://semver.org/):
 
 | Change | Bump | Example |
 |---|---|---|
-| A config key or CLI option removed or changed so existing runs break | MAJOR | 2.3.0 → 3.0.0 |
-| New feature; existing configs still work | MINOR | 2.3.0 → 2.4.0 |
-| Bug fix only | PATCH | 2.3.0 → 2.3.1 |
+| A config key or CLI option removed or changed so existing runs break | MAJOR | 1.0.0 → 2.0.0 |
+| New feature; existing configs still work | MINOR | 1.0.0 → 1.1.0 |
+| Bug fix only | PATCH | 1.0.0 → 1.0.1 |
 
 The version lives in one place, `pyproject.toml`; code reads it from the installed package.
 
