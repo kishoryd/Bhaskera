@@ -6,6 +6,7 @@
 #
 # Layout created under $PREFIX:
 #   src/        Bhaskera source (git clone, pinned to $REF)
+#   python/     the Python 3.11 interpreter the environment uses (must be readable by everyone)
 #   venv/       Python 3.11 environment: torch 2.6.0+cu124, flash-attn 2.7.3 (prebuilt), bitsandbytes
 #   observability/  Prometheus and Grafana (charts in the Ray Dashboard; skip with WITH_CHARTS=0)
 #   share/kit/  train.sbatch, tokenize.sbatch, submit.sh, make-quickstart.py, recipes/  (users copy this to /scratch)
@@ -23,6 +24,10 @@ echo "== Bhaskera -> $PREFIX (repo $REPO @ $REF)"
 mkdir -p "$PREFIX"
 [[ -d "$PREFIX/src/.git" ]] || git clone -q "$REPO" "$PREFIX/src"
 git -C "$PREFIX/src" fetch -q origin && git -C "$PREFIX/src" checkout -q "$REF"
+
+# Keep the Python interpreter inside $PREFIX. By default uv puts it in the installing user's home folder, and the
+# environment would only be a link to it, which other users cannot read.
+export UV_PYTHON_INSTALL_DIR="$PREFIX/python"
 
 # Login nodes have no GPU, so CUDA must be named explicitly or setup.sh installs a CPU-only torch.
 cd "$PREFIX/src"
