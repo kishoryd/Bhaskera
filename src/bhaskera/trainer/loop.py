@@ -25,11 +25,11 @@ from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
 from bhaskera.utils.startup_timer import mark as startup_mark
 from bhaskera.utils.peak_mem import peak_mem_gib
 
-from .checkpointing import maybe_resume, save_and_prune
+from .checkpointing import build_resumed_scheduler, maybe_resume, save_and_prune
 from .eval_metrics import token_accuracy_counts
 from .moe import (compute_expert_utilization, disable_builtin_aux_loss, extract_aux_loss,
                   router_z_loss_from_output)
-from .optim import build_optimizer, build_scheduler
+from .optim import build_optimizer
 from .precision import resolve_autocast_dtype
 from bhaskera.models.quantization import param_numel
 from .step_timing import StepTimer
@@ -207,7 +207,6 @@ def train(
     ckpt_cfg  = cfg.checkpoint
 
     optimizer = build_optimizer(model, train_cfg)
-    scheduler = build_scheduler(optimizer, train_cfg)
     model.train()
     step = 0
     if ckpt_cfg.enabled:
@@ -215,6 +214,8 @@ def train(
             startup_watchdog.phase("resume checkpoint")
         step = maybe_resume(model, optimizer, ckpt_cfg.save_dir)
         model.train()
+    # built after the resume so the schedule continues from the resumed step (see build_resumed_scheduler)
+    scheduler = build_resumed_scheduler(optimizer, train_cfg, step)
     best_ckpts: list[tuple[float, str]] = []
     grad_skip_count = 0  # consecutive non-finite-grad_norm steps; see max_grad_skip_steps
 

@@ -46,6 +46,29 @@ _STEP_RE = re.compile(r"step_(\d+)$")
 # DCP compatibility shim (fix #12)
 # ---------------------------------------------------------------------------
 
+def _unwrap_ddp(model: nn.Module) -> nn.Module:
+    """The model inside a DDP wrapper. PyTorch's set_model_state_dict renames keys to drop the wrapper's
+    `module.` prefix by popping each model key from the dict, which raises KeyError when the dict holds
+    only the trainable parameters. The inner model has no prefix, and its names are what the checkpoint
+    stores either way. FSDP2 models are not wrapped this way and pass through unchanged."""
+    from torch.nn.parallel import DistributedDataParallel
+    return model.module if isinstance(model, DistributedDataParallel) else model
+
+
+def _state_dict_options(strict: bool = True) -> StateDictOptions:
+    """Sharded, CPU-offloaded, trainable parameters only.
+
+    With LoRA / QLoRA the frozen base model is not part of the checkpoint: it is reloaded from the
+    model folder when a run starts, so saving it would only cost disk space and host RAM (a 4-bit
+    123B model ran the node out of memory while saving). A run with no frozen parameters (full
+    fine-tuning) is unaffected.
+    """
+    try:
+        return StateDictOptions(full_state_dict=False, cpu_offload=True, ignore_frozen_params=True, strict=strict)
+    except TypeError:                       # PyTorch without the option: save everything, as before
+        return StateDictOptions(full_state_dict=False, cpu_offload=True, strict=strict)
+
+
 def _dcp_save(state_dict: dict, path: str) -> None:
     """
     Save via DCP, using the correct API for the installed PyTorch version.
@@ -146,8 +169,8 @@ def save_checkpoint(
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
 
-    options = StateDictOptions(full_state_dict=False, cpu_offload=True)
-    model_sd = get_model_state_dict(model, options=options)
+    options = _state_dict_options()
+    model_sd = get_model_state_dict(_unwrap_ddp(model), options=options)
     optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
 
     _dcp_save({"model": model_sd}, os.path.join(tmp_path, "model"))
@@ -216,14 +239,16 @@ def maybe_resume(
     start_step = int(_STEP_RE.search(ckpt_path).group(1))
     logger.info(f"Resuming from {ckpt_path} (step {start_step})")
 
-    options  = StateDictOptions(full_state_dict=False, cpu_offload=True)
-    model_sd = get_model_state_dict(model, options=options)
+    options  = _state_dict_options()
+    model_sd = get_model_state_dict(_unwrap_ddp(model), options=options)
     optim_sd = get_optimizer_state_dict(model, optimizer, options=options)
 
     _dcp_load({"model": model_sd}, os.path.join(ckpt_path, "model"))
     _dcp_load({"optim": optim_sd}, os.path.join(ckpt_path, "optim"))
 
-    set_model_state_dict(model, model_state_dict=model_sd, options=options)
+    # strict=False: the checkpoint holds only the trainable parameters; the frozen base was loaded from
+    # the model folder. (dcp.load above already fails if a requested trainable key is missing.)
+    set_model_state_dict(_unwrap_ddp(model), model_state_dict=model_sd, options=_state_dict_options(strict=False))
     set_optimizer_state_dict(
         model,
         optimizers=optimizer,
