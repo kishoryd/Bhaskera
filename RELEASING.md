@@ -1,15 +1,19 @@
 # Maintaining and Releasing Bhaskera
 
-## Branches
+## Branches and releases
 
-| Branch | Purpose |
-|---|---|
-| `main` | Released, tested code. Changes arrive only through reviewed pull requests. |
-| `feature/<name>`, `fix/<name>`, `docs/<name>` | One change each, branched from `main`, merged by pull request. |
+`main` holds released code only: the tip of `main` is always the latest release. Every release is a tag
+(`v1.0.0`) on a commit of `main`, with a matching GitHub release. Work in progress lives on a short-lived
+branch and goes into `main` only when it is ready to be released.
 
-Every pull request: runs the CPU tests (`pytest src`), updates `CHANGELOG.md` under **[Unreleased]**,
-and — if it changes training behaviour — is run on the cluster with at least one recipe
-(`./submit.sh slurm/recipes/<recipe>.yaml <nodes> 1`).
+Before a change goes into `main` it must:
+
+- pass the CPU tests (`pytest src`),
+- have its `CHANGELOG.md` entry under **[Unreleased]**,
+- if it changes training behaviour, run on the cluster with at least one recipe
+  (`./submit.sh slurm/recipes/<recipe>.yaml <nodes> 1`).
+
+A fix to a released version is made on `main` and shipped as the next patch release.
 
 ## Versions
 
@@ -25,11 +29,11 @@ The version lives in one place, `pyproject.toml`; code reads it from the install
 
 ## Cutting a release
 
-1. On `main`, move the **[Unreleased]** entries in `CHANGELOG.md` under a new `## [X.Y.Z] - YYYY-MM-DD`
+1. On the release branch, move the **[Unreleased]** entries in `CHANGELOG.md` under a new `## [X.Y.Z] - YYYY-MM-DD`
    heading and update the links at the bottom.
 2. Set `version = "X.Y.Z"` in `pyproject.toml`.
 3. Run the CPU tests, and run at least one recipe on the cluster.
-4. Commit (`Release X.Y.Z`), then tag and push:
+4. Commit (`Release X.Y.Z`), fast-forward `main` to that commit, then tag and push:
 
    ```bash
    git tag -a vX.Y.Z -m "Bhaskera X.Y.Z"
