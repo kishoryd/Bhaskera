@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 
-from bhaskera.distributed.checkpoint import save_checkpoint
+from bhaskera.distributed.checkpoint import _fill_missing_hyperparameters, save_checkpoint
 from bhaskera.trainer.checkpointing import build_resumed_scheduler, fast_forward_scheduler, maybe_resume
 from bhaskera.trainer.optim import build_scheduler
 
@@ -129,3 +129,16 @@ def test_ddp_wrapped_model_saves_and_resumes(tmp_path):
         torch.testing.assert_close(m2.adapter.weight, m.adapter.weight)
     finally:
         dist.destroy_process_group()
+
+
+def test_missing_optimizer_settings_are_filled_in():
+    """The GPU runs came back from the optimizer load without `betas`; the first step then raised KeyError."""
+    opt = _opt(_Tiny())
+    fresh = [{k: v for k, v in g.items() if k != "params"} for g in opt.param_groups]
+    for g in opt.param_groups:
+        del g["betas"], g["eps"]
+    _fill_missing_hyperparameters(opt, fresh)
+    assert opt.param_groups[0]["betas"] == fresh[0]["betas"] and opt.param_groups[0]["eps"] == fresh[0]["eps"]
+    opt.zero_grad()
+    opt.param_groups[0]["params"][0].grad = torch.ones_like(opt.param_groups[0]["params"][0])
+    opt.step()                                           # no KeyError

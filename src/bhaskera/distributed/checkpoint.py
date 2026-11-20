@@ -55,6 +55,21 @@ def _unwrap_ddp(model: nn.Module) -> nn.Module:
     return model.module if isinstance(model, DistributedDataParallel) else model
 
 
+def _fill_missing_hyperparameters(optimizer: torch.optim.Optimizer, fresh: list[dict]) -> None:
+    """After an optimizer state load, restore any parameter-group setting (betas, eps, lr, ...) the load
+    left out, from the settings the optimizer was built with. On the GPU runs the restored groups were
+    missing `betas` and training stopped with KeyError at the first step."""
+    filled: set[str] = set()
+    for group, defaults in zip(optimizer.param_groups, fresh):
+        for key, value in defaults.items():
+            if key not in group:
+                group[key] = value
+                filled.add(key)
+    if filled:
+        logger.warning(f"Optimizer groups were restored without {sorted(filled)}; "
+                       "filled from the optimizer's configured values")
+
+
 def _state_dict_options(strict: bool = True) -> StateDictOptions:
     """Sharded, CPU-offloaded, trainable parameters only.
 
@@ -238,6 +253,7 @@ def maybe_resume(
     ckpt_path  = str(candidates[-1])
     start_step = int(_STEP_RE.search(ckpt_path).group(1))
     logger.info(f"Resuming from {ckpt_path} (step {start_step})")
+    fresh_hyperparameters = [{k: v for k, v in g.items() if k != "params"} for g in optimizer.param_groups]
 
     options  = _state_dict_options()
     model_sd = get_model_state_dict(_unwrap_ddp(model), options=options)
@@ -255,6 +271,7 @@ def maybe_resume(
         optim_state_dict=optim_sd,
         options=options,
     )
+    _fill_missing_hyperparameters(optimizer, fresh_hyperparameters)
 
     # Read step from meta.json (ground truth)
     meta_path = os.path.join(ckpt_path, "meta.json")
