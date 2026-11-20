@@ -8,6 +8,8 @@ How to cut a release: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-20
+
 ### Added
 - **All running jobs in one place.** `bhaskera-dashboard ray` now runs a small hub on the login node. It picks
   up every running Bhaskera job by itself, also jobs that start later. Everything is behind one address,
@@ -133,6 +135,7 @@ are supported.
 - Training gpt-oss (MXFP4) models is not supported.
 
 [Unreleased]: https://github.com/kishoryd/Bhaskera/compare/v1.1.0...HEAD
+[1.1.2]: https://github.com/kishoryd/Bhaskera/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/kishoryd/Bhaskera/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/kishoryd/Bhaskera/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/kishoryd/Bhaskera/releases/tag/v1.0.0

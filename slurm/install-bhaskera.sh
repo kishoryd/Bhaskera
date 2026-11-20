@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install Bhaskera centrally for all PARAM Rudra users (run once, by the maintainer, on a login node).
 #
-#   bash install-bhaskera.sh                      # installs to /home/apps/bhaskera/1.1.1
+#   bash install-bhaskera.sh                      # installs to /home/apps/bhaskera/1.1.2
 #   PREFIX=/some/other/path bash install-bhaskera.sh
 #
 # Layout created under $PREFIX:
@@ -10,13 +10,13 @@
 #   venv/       Python 3.11 environment: torch 2.6.0+cu124, flash-attn 2.7.3 (prebuilt), bitsandbytes
 #   observability/  Prometheus and Grafana (charts in the Ray Dashboard; skip with WITH_CHARTS=0)
 #   share/kit/  train.sbatch, tokenize.sbatch, submit.sh, make-quickstart.py, recipes/  (users copy this to /scratch)
-# Then install the modulefile:  bhaskera/1.1.1.lua  ->  <a MODULEPATH dir>/bhaskera/1.1.1.lua
+# Then install the modulefile:  bhaskera/1.1.2.lua  ->  <a MODULEPATH dir>/bhaskera/1.1.2.lua
 #
 # The environment is built at its final path on purpose: Python environments cannot be moved.
 set -euo pipefail
-PREFIX="${PREFIX:-/home/apps/bhaskera/1.1.1}"
+PREFIX="${PREFIX:-/home/apps/bhaskera/1.1.2}"
 REPO="${REPO:-https://github.com/kishoryd/Bhaskera.git}"
-REF="${REF:-v1.1.1}"                         # release tag to install
+REF="${REF:-v1.1.2}"                         # release tag to install
 KIT="$(cd "$(dirname "$0")" && pwd)"         # folder holding train.sbatch, submit.sh, recipes/
 FA_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
 
@@ -56,4 +56,4 @@ import torch, flash_attn, bitsandbytes, bhaskera, transformers, ray, peft
 print(f"OK  torch {torch.__version__} (CUDA {torch.version.cuda})  flash-attn {flash_attn.__version__}  "
       f"bitsandbytes {bitsandbytes.__version__}  transformers {transformers.__version__}  ray {ray.__version__}  peft {peft.__version__}")
 EOF
-echo "== done. Modulefile: set 'root' to $PREFIX in bhaskera/1.1.1.lua and place it in a MODULEPATH directory."
+echo "== done. Modulefile: set 'root' to $PREFIX in bhaskera/1.1.2.lua and place it in a MODULEPATH directory."

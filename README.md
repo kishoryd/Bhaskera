@@ -9,7 +9,7 @@ logs one line of metrics per step. It runs on **PARAM Rudra** (C-DAC, 2 × A100 
 benchmarked there from 8 to 128 nodes with models from 14 B to 235 B parameters. BharatGen Param models are
 supported too.
 
-**Version 1.1.1** · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57 ·
+**Version 1.1.2** · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57 ·
 [Changelog](CHANGELOG.md) · [Releasing](RELEASING.md) · [PARAM Rudra user manual](https://cdacindia.github.io/ParamRudra-20PF-UserManual/bhaskera/)
 
 ![Bhaskera architecture](docs/architecture.svg)
@@ -21,7 +21,7 @@ supported too.
 ### A. Shared install (PARAM Rudra: nothing to download or install)
 
 ```bash
-module load bhaskera/1.1.1
+module load bhaskera/1.1.2
 cp -r $BHASKERA_KIT /scratch/<project>/<username>/bhaskera-runs && cd /scratch/<project>/<username>/bhaskera-runs
 cp $BHASKERA_QUICKSTART/recipes/*.yaml recipes/        # recipes for the models on shared storage
 export SLURM_ACCOUNT=<your_account>
@@ -40,7 +40,7 @@ Install once on a login node, in your `/scratch` area (5 to 15 minutes, dependin
 CUDA version must be named, otherwise `setup.sh` installs a CPU-only PyTorch.
 
 ```bash
-git clone --branch v1.1.1 https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
+git clone --branch v1.1.2 https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
 BHASKERA_CUDA=12.4 bash setup.sh
 source .venv/bin/activate
 uv pip install "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
@@ -147,7 +147,7 @@ the same: it finds your running job (and waits if the job is still queued), so y
 which node it runs on.
 
 ```bash
-module load bhaskera/1.1.1
+module load bhaskera/1.1.2
 bhaskera-dashboard ray                  # or --job <jobid> when several jobs run
 bhaskera-dashboard ssh-config           # optional: an entry for ~/.ssh/config, then `ssh bhaskera-ray`
 ```
@@ -255,9 +255,9 @@ Bhaskera/
 
 ## Versions and releases
 
-Bhaskera follows [Semantic Versioning](https://semver.org/). Releases are tags (`v1.1.1`); every change
+Bhaskera follows [Semantic Versioning](https://semver.org/). Releases are tags (`v1.1.2`); every change
 is listed in the [Changelog](CHANGELOG.md), and [RELEASING.md](RELEASING.md) describes the branch model and
-how a release is cut. Use a tagged version for installs: `git clone --branch v1.1.1 ...`.
+how a release is cut. Use a tagged version for installs: `git clone --branch v1.1.2 ...`.
 
 ## Known limitations
 
