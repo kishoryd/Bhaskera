@@ -36,7 +36,7 @@ partition and time limit from the node count, and submits. Your own data and mod
 
 ### B. Your own install
 
-Install once on a login node, in your `/scratch` area (about 5 minutes). Login nodes have no GPU, so the
+Install once on a login node, in your `/scratch` area (5 to 15 minutes, depending on file-system load). Login nodes have no GPU, so the
 CUDA version must be named, otherwise `setup.sh` installs a CPU-only PyTorch.
 
 ```bash
