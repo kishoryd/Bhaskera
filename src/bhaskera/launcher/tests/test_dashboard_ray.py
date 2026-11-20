@@ -1,5 +1,4 @@
-"""bhaskera-dashboard ray: find the Bhaskera job (also while queued), wait for nodes, link its dashboard.
-No Slurm or network needed."""
+"""bhaskera-dashboard ray: command lines, ports and job selection. No Slurm or network needed."""
 from __future__ import annotations
 
 import pytest
@@ -24,29 +23,6 @@ def test_my_jobs_parses_squeue(monkeypatch):
     assert [(j["id"], j["state"], j["comment"]) for j in jobs] == [("128783", "RUNNING", "bhaskera"),
                                                                     ("128790", "PENDING", "")]
     assert jobs[1]["reason"] == "Priority"
-
-
-def test_only_bhaskera_jobs_are_considered_without_job_flag():
-    jobs = [_job("1", comment=""), _job("2", comment="bhaskera"), _job("3", comment="other")]
-    chosen, note = dashboard.choose_job(jobs, None)
-    assert chosen["id"] == "2" and note == ""
-
-
-def test_running_job_beats_a_queued_one_and_newest_wins():
-    jobs = [_job("5", "PENDING", nodes=""), _job("7"), _job("9")]
-    chosen, note = dashboard.choose_job(jobs, None)
-    assert chosen["id"] == "9" and "7" in note and "5" in note
-    only_queued, _ = dashboard.choose_job([_job("5", "PENDING", nodes="")], None)
-    assert only_queued["state"] == "PENDING"
-
-
-def test_job_flag_selects_any_job_and_reports_unknown_ones():
-    jobs = [_job("1", comment=""), _job("2")]
-    assert dashboard.choose_job(jobs, "1")[0]["id"] == "1"
-    chosen, msg = dashboard.choose_job(jobs, "99")
-    assert chosen is None and "99" in msg
-    none, msg = dashboard.choose_job([_job("1", comment="")], None)
-    assert none is None and "no Bhaskera job" in msg
 
 
 def test_head_node(monkeypatch):
@@ -103,54 +79,6 @@ class _FakeProc:
 
     def wait(self, timeout=None):
         return 0
-
-
-def test_waits_for_a_queued_job_then_links_its_head_node(monkeypatch, capsys):
-    monkeypatch.setattr(dashboard, "ensure_mlflow", lambda cfg: None)
-    states = iter([[_job("7", "PENDING", nodes="", reason="Priority")],
-                   [_job("7", "PENDING", nodes="", reason="Priority")],
-                   [_job("7")]])
-    last = {"jobs": [_job("7")]}
-
-    def jobs():
-        try:
-            last["jobs"] = next(states)
-        except StopIteration:
-            pass
-        return last["jobs"]
-
-    started = []
-    monkeypatch.setattr(dashboard, "my_jobs", jobs)
-    monkeypatch.setattr(dashboard, "head_node", lambda nodes: "cbgpu0241")
-    def sleep(seconds):
-        if started and started[0] and getattr(sleep, "after_link", 0) > 3:
-            raise KeyboardInterrupt
-        if started:
-            sleep.after_link = getattr(sleep, "after_link", 0) + 1
-
-    monkeypatch.setattr(dashboard.time, "sleep", sleep)
-    monkeypatch.setattr(dashboard.subprocess, "Popen", lambda cmd: started.append(cmd) or _FakeProc(cmd))
-    dashboard.cmd_ray(_cfg(), None)
-    out = capsys.readouterr().out
-    assert "job 7 (train) is pending (Priority); waiting for nodes" in out
-    assert "its Ray head is on cbgpu0241" in out
-    assert started and started[0][-1] == "cbgpu0241"
-
-
-def test_no_job_keeps_waiting_and_mlflow_open(monkeypatch, capsys):
-    monkeypatch.setattr(dashboard, "ensure_mlflow", lambda cfg: None)
-    monkeypatch.setattr(dashboard, "my_jobs", lambda: [])
-    calls = []
-
-    def sleep(seconds):
-        calls.append(seconds)
-        if len(calls) > 2:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(dashboard.time, "sleep", sleep)
-    dashboard.cmd_ray(_cfg(), None)
-    out = capsys.readouterr().out
-    assert "waiting for one" in out and len(calls) == 3
 
 
 def test_close_orphan_runs_marks_runs_of_finished_jobs(tmp_path, monkeypatch):
@@ -239,3 +167,11 @@ def test_ensure_mlflow_starts_it_once(monkeypatch, capsys):
 def test_ssh_config_block_forwards_mlflow(monkeypatch):
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
     assert "LocalForward 5055 localhost:40029" in dashboard.ssh_config_block(_cfg())
+
+
+def test_hub_jobs_are_the_running_bhaskera_jobs_or_the_one_asked_for():
+    jobs = [_job("1", comment=""), _job("2"), _job("3", state="PENDING", nodes=""), _job("4", comment="other"),
+            _job("5")]
+    assert [j["id"] for j in dashboard.hub_jobs(jobs)] == ["2", "5"]
+    assert [j["id"] for j in dashboard.hub_jobs(jobs, "4")] == ["4"]       # any running job, by id
+    assert dashboard.hub_jobs(jobs, "3") == []                              # queued: nothing to link yet

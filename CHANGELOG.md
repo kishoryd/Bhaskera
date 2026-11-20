@@ -8,6 +8,19 @@ How to cut a release: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **All running jobs in one place.** `bhaskera-dashboard ray` now runs a small hub on the login node. It picks
+  up every running Bhaskera job by itself, also jobs that start later, and links each job's Ray Dashboard
+  and Grafana. `http://localhost:8265` lists the jobs, `http://job-<id>.localhost:8265` is the Ray Dashboard
+  of one job and `http://job-<id>.localhost:3000` its Grafana charts. The laptop command is unchanged.
+  `--job <id>` limits it to one job. Jobs started from now on embed the charts under their own job address.
+
+### Fixed
+- MLflow runs carried no tags or params (`slurm_job`, host, nodes, the configuration): MLflow 3 takes no
+  `run_id` in `set_tag` and `log_param`, and the error was swallowed. Tags and params are written again.
+- The check that marks runs of ended jobs as KILLED read every run through MLflow and delayed the dashboard
+  link by about 30 seconds for 380 runs. It now reads the small status files and takes well under a second.
+
 ## [1.1.1] - 2026-11-20
 
 ### Fixed

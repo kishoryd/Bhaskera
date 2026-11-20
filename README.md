@@ -152,8 +152,9 @@ bhaskera-dashboard ray                  # or --job <jobid> when several jobs run
 bhaskera-dashboard ssh-config           # optional: an entry for ~/.ssh/config, then `ssh bhaskera-ray`
 ```
 
-On the laptop, open <http://localhost:8265> (Ray Dashboard), <http://localhost:3000> (Grafana charts) and
-<http://localhost:5055> (MLflow). The command also starts MLflow on the login node and keeps the connection
+On the laptop, open <http://localhost:8265>: it lists all your running Bhaskera jobs, with a link to the Ray
+Dashboard and the Grafana charts of each (`http://job-<id>.localhost:8265`, which browsers send to your laptop
+by themselves). Jobs that start later appear on their own. MLflow is at <http://localhost:5055>. The command also starts MLflow on the login node and keeps the connection
 open when the job ends, so the metrics of a finished or failed job stay available in MLflow (a failed run is
 marked FAILED, a killed one KILLED). The Ray Dashboard and Grafana exist only while the job runs.
 Ray numbers its jobs itself, so the IDs in the dashboard differ from the Slurm job ID, and a job shows

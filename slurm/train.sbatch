@@ -52,7 +52,7 @@ OBS_PID=""
 if [[ -n "$OBS" && -x "$OBS/prometheus/prometheus" && -x "$OBS/grafana/bin/grafana" ]]; then
     # Both listen on the first node only (127.0.0.1), like the Ray Dashboard, so other users of the cluster cannot reach them.
     export RAY_PROMETHEUS_HOST="http://127.0.0.1:9090" RAY_GRAFANA_HOST="http://127.0.0.1:3000" \
-           RAY_GRAFANA_IFRAME_HOST="http://localhost:3000"
+           RAY_GRAFANA_IFRAME_HOST="http://job-${SLURM_JOB_ID}.localhost:3000"
     (
         metrics="$RAY_TMPDIR/ray/session_latest/metrics"
         for _ in $(seq 1 120); do            # Ray writes its Prometheus and Grafana settings when the head starts
