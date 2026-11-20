@@ -8,6 +8,34 @@ How to cut a release: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-20
+
+### Added
+- **Monitoring of all nodes in MLflow.** The first rank of each node reads its node's GPUs and host, and
+  the readings are gathered to rank 0 every `monitoring.metrics.node_stats_every_n_steps` steps (default 10,
+  `0` turns it off) in both the FSDP/DDP loop and the pipeline loop. MLflow gets `cluster_*` curves
+  (minimum, mean and maximum GPU utilisation, memory and temperature over all GPUs, total power) and, for
+  jobs of at most `monitoring.metrics.node_stats_per_node_max` nodes (default 16), `node_<host>_*` curves
+  for every GPU and node. The job log gets a matching `[step N] nodes=...` summary line.
+- `bhaskera-dashboard ray [--job <id>]` makes the Ray Dashboard of a running job reachable from a laptop.
+  It finds your job by itself (jobs started with `submit.sh` carry the Slurm comment `bhaskera`), waits
+  while the job is still queued, and links the first node of the job to a port of your own on the login
+  node. The laptop command is always the same and contains no node name. The dashboard lists every node
+  of the job with its CPU, memory and GPU load.
+- `bhaskera-dashboard ssh-config` prints an entry for the laptop's `~/.ssh/config`, so that
+  `ssh bhaskera-ray` replaces the long command, including the port forwards.
+- **Charts in the Ray Dashboard.** `slurm/install-observability.sh` installs Prometheus and Grafana without
+  root (checksums verified), `install-bhaskera.sh` runs it by default (`WITH_CHARTS=0` skips it), and
+  `train.sbatch` starts both on the first node of a job when they are installed. Both listen on that node
+  only. The "Cluster utilization" panel and Ray's Grafana dashboards then show GPU, CPU and memory over
+  time for every node. Without them the dashboard still lists every node.
+- The modulefile sets `BHASKERA_KIT`, `BHASKERA_OBSERVABILITY`, `BHASKERA_LOGIN_HOST`,
+  `BHASKERA_LOGIN_PORT` and `BHASKERA_MODULE`.
+- `submit.sh` marks its jobs with the Slurm comment `bhaskera` and honours `BHASKERA_EXCLUDE` (nodes to avoid).
+
+### Changed
+- The MLflow GPU and host curves used to cover only the node of rank 0.
+
 ## [1.0.0] - 2026-11-20
 
 First release. Earlier development builds carried version numbers 2.1.0 to 2.2.0 in `pyproject.toml` but
@@ -75,5 +103,6 @@ are supported.
   attention and without packing.
 - Training gpt-oss (MXFP4) models is not supported.
 
-[Unreleased]: https://github.com/kishoryd/Bhaskera/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/kishoryd/Bhaskera/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/kishoryd/Bhaskera/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/kishoryd/Bhaskera/releases/tag/v1.0.0

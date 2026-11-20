@@ -9,7 +9,7 @@ logs one line of metrics per step. It runs on **PARAM Rudra** (C-DAC, 2 × A100 
 benchmarked there from 8 to 128 nodes with models from 14 B to 235 B parameters. BharatGen Param models are
 supported too.
 
-**Version 1.0.0** · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57 ·
+**Version 1.1.0** · Python ≥ 3.11 · PyTorch 2.6 (CUDA 12.4) · transformers 4.57 ·
 [Changelog](CHANGELOG.md) · [Releasing](RELEASING.md) · [PARAM Rudra user manual](https://cdacindia.github.io/ParamRudra-20PF-UserManual/bhaskera/)
 
 ![Bhaskera architecture](docs/architecture.svg)
@@ -21,7 +21,7 @@ supported too.
 ### A. Shared install (PARAM Rudra: nothing to download or install)
 
 ```bash
-module load bhaskera/1.0.0
+module load bhaskera/1.1.0
 cp -r $BHASKERA_KIT /scratch/<project>/<username>/bhaskera-runs && cd /scratch/<project>/<username>/bhaskera-runs
 cp $BHASKERA_QUICKSTART/recipes/*.yaml recipes/        # recipes for the models on shared storage
 export SLURM_ACCOUNT=<your_account>
@@ -40,7 +40,7 @@ Install once on a login node, in your `/scratch` area (5 to 15 minutes, dependin
 CUDA version must be named, otherwise `setup.sh` installs a CPU-only PyTorch.
 
 ```bash
-git clone --branch v1.0.0 https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
+git clone --branch v1.1.0 https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
 BHASKERA_CUDA=12.4 bash setup.sh
 source .venv/bin/activate
 uv pip install "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
@@ -105,7 +105,7 @@ from the log of that first job.
 | Evaluation | Held-out loss and next-token accuracy |
 | Checkpoints | Sharded (DCP), trained LoRA weights and optimizer state only (Qwen3-14B QLoRA: 942 MB); a resubmitted job resumes from the latest checkpoint with the learning-rate schedule in step |
 | Preflight | `python -m bhaskera.launcher.preflight` checks model, libraries, data and GPU-memory fit on the login node (accurate to about 15% of the measured peak) |
-| Metrics | One log line per step (loss, tok/s, MFU, peak GPU memory, step-time breakdown), MLflow |
+| Monitoring | One log line per step, MLflow curves for the model and for every node, Ray Dashboard with all nodes and GPUs |
 
 ### Choosing a strategy
 
@@ -133,6 +133,31 @@ Effect of switching each one off on its own: Qwen3-14B, QLoRA, 5 nodes (10 A100s
 The Triton kernels cut peak memory by 46% and steps by 10%; packing gives 1.75× more real tokens per
 second (42.5% of an unpacked batch is padding); flash-attention makes steps 1.26× faster and is what makes
 packing possible.
+
+## Monitoring a job
+
+| Where | What you see |
+|---|---|
+| Job log | One line per step; every 10 steps a summary of all nodes: `[step 30] nodes=5 gpus=10 gpu_util=94/98/99% (min/mean/max) gpu_mem_max=17.7GiB temp_max=58C` |
+| MLflow (`bhaskera-dashboard start`) | One run per job: loss, accuracy, speed, step-time spread over the ranks, GPU curves over the whole job (`cluster_...`) and per node (`node_<host>_...`, up to 16 nodes) |
+| Ray Dashboard (`bhaskera-dashboard ray`) | Every node of the running job with CPU, memory and per-GPU load, and the logs of each worker, at any number of nodes |
+
+To open the Ray Dashboard, run this on a login node. It prints one command for your laptop that is always
+the same: it finds your running job (and waits if the job is still queued), so you never need to know
+which node it runs on.
+
+```bash
+module load bhaskera/1.1.0
+bhaskera-dashboard ray                  # or --job <jobid> when several jobs run
+bhaskera-dashboard ssh-config           # optional: an entry for ~/.ssh/config, then `ssh bhaskera-ray`
+```
+
+On the laptop, open <http://localhost:8265> (Ray Dashboard) and <http://localhost:3000> (Grafana charts).
+Ray numbers its jobs itself, so the IDs in the dashboard differ from the Slurm job ID, and a job shows
+two entries: the cluster launcher (no tasks) and the training. The charts need Prometheus and Grafana
+(`slurm/install-observability.sh`); without them the node list still works. The `monitoring.metrics`
+section of a recipe controls the node readings: `node_stats_every_n_steps` (default 10, `0` turns them off)
+and `node_stats_per_node_max` (default 16).
 
 ## Data formats
 
@@ -171,6 +196,7 @@ Full tables for every strategy and node count: the PARAM Rudra user manual, *LLM
 | `bhaskera-tokenize --config <yaml> --split both` | Tokenise train and validation data into the Parquet cache |
 | `bhaskera-train --config <yaml> --num-workers <N>` | Training driver (started by `slurm/train.sbatch`) |
 | `bhaskera-dashboard start --port <port>` | MLflow UI on the login node (`stop`, `status`, `tunnel`) |
+| `bhaskera-dashboard ray [--job <id>]` | Tunnel commands for the Ray Dashboard of a running job |
 
 Set `BHASKERA_EXCLUDE=cbgpuXXXX,...` before `submit.sh` to keep jobs off faulty nodes.
 
@@ -226,9 +252,9 @@ Bhaskera/
 
 ## Versions and releases
 
-Bhaskera follows [Semantic Versioning](https://semver.org/). Releases are tags (`v1.0.0`); every change
+Bhaskera follows [Semantic Versioning](https://semver.org/). Releases are tags (`v1.1.0`); every change
 is listed in the [Changelog](CHANGELOG.md), and [RELEASING.md](RELEASING.md) describes the branch model and
-how a release is cut. Use a tagged version for installs: `git clone --branch v1.0.0 ...`.
+how a release is cut. Use a tagged version for installs: `git clone --branch v1.1.0 ...`.
 
 ## Known limitations
 

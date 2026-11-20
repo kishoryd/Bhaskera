@@ -40,6 +40,8 @@ from bhaskera.trainer.eval_metrics import token_accuracy_from_hidden
 from bhaskera.distributed.pipeline import _DTYPES, PipelineInfo, Stage, canonical_name
 from bhaskera.utils.throughput import ThroughputTracker
 from bhaskera.utils.peak_mem import peak_mem_gib
+from bhaskera.utils.node_stats import (flatten as flatten_node_reports, gather_node_reports,
+                                       summary_line as node_summary_line)
 
 from .optim import build_optimizer, build_scheduler
 
@@ -271,6 +273,8 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
     dist.all_reduce(n_train, group=info.pp_group)
 
     metrics_cfg = getattr(getattr(cfg, "monitoring", None), "metrics", None)
+    node_every = int(getattr(metrics_cfg, "node_stats_every_n_steps", 10)) if metrics_cfg else 10
+    node_per_max = int(getattr(metrics_cfg, "node_stats_per_node_max", 16)) if metrics_cfg else 16
     throughput = ThroughputTracker(
         params_for_flops=info.flops_params or info.total_params,
         world_size=world_size,
@@ -408,6 +412,18 @@ def train_pipeline(*, stage: Stage, info: PipelineInfo, dataset, cfg, val_datase
                                  "time/pipeline_s": t1 - t0, "time/dp_sync_s": t2 - t1,
                                  "cuda/max_allocated_mib": torch.cuda.max_memory_allocated() / 2**20,
                                  **tm}, step=step)
+            # GPU and host readings of every node, gathered to rank 0 (all ranks take part in the gather)
+            if node_every > 0 and step % node_every == 0:
+                node_reports = gather_node_reports(
+                    local_rank,
+                    gpu=bool(getattr(metrics_cfg, "gpu", True)) if metrics_cfg else True,
+                    cpu=bool(getattr(metrics_cfg, "cpu", True)) if metrics_cfg else True,
+                )
+                if node_reports and rank == 0:
+                    node_metrics = flatten_node_reports(node_reports, node_per_max)
+                    logger.info(node_summary_line(step, node_metrics))
+                    if tracker:
+                        tracker.log(node_metrics, step=step)
             if val_dataset is not None and eval_steps > 0 and step % eval_steps == 0:
                 te = time.perf_counter()
                 eval_loss, eval_acc = _run_eval_pipeline(stage, info, val_dataset, cfg, device, rank, act_dtype)

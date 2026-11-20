@@ -13,7 +13,8 @@ Design
   any network plumbing.
 * Config persists to ``~/.bhaskera/mlflow-ui.json`` so subsequent runs
   need zero arguments.
-* Subcommands: ``start`` (default), ``stop``, ``status``, ``tunnel``.
+* Subcommands: ``start`` (default), ``stop``, ``status``, ``tunnel``, and ``ray`` (the commands for
+  the Ray Dashboard of a running job).
 
 Typical workflow
 ----------------
@@ -74,6 +75,7 @@ class DashboardConfig:
     host:       str  = "0.0.0.0"
     login_node: str  = ""      # e.g. login08.cluster.example.edu
     user:       str  = ""      # remote SSH user, if different from $USER
+    login_port: int  = 0       # SSH port of the login address, 0 for the default (22)
 
     # ── persistence ───────────────────────────────────────────────────────
 
@@ -244,12 +246,28 @@ def cmd_tunnel(cfg: DashboardConfig) -> None:
 # Tunnel helper
 # ---------------------------------------------------------------------------
 
+def ssh_target(cfg: DashboardConfig) -> str:
+    """`user@host` to log in to from a laptop: the saved config first, then $BHASKERA_LOGIN_HOST (set by the
+    module) and $USER, and the name of the node we are on as a last resort."""
+    user = cfg.user or os.environ.get("USER", "")
+    host = cfg.login_node or os.environ.get("BHASKERA_LOGIN_HOST", "") or socket.gethostname()
+    return f"{user}@{host}" if user else host
+
+
+def ssh_options(cfg: DashboardConfig) -> str:
+    """`-p <port> ` when logging in to the cluster needs a non-default SSH port, otherwise an empty string."""
+    port = cfg.login_port
+    if not port:
+        try:
+            port = int(os.environ.get("BHASKERA_LOGIN_PORT", "0") or 0)
+        except ValueError:
+            port = 0
+    return f"-p {port} " if port else ""
+
+
 def _print_tunnel(cfg: DashboardConfig, *, verbose: bool = False) -> None:
-    hostname = socket.gethostname()
-    node = cfg.login_node or hostname
-    user_prefix = f"{cfg.user}@" if cfg.user else ""
     local_url  = f"http://localhost:{cfg.port}"
-    tunnel_cmd = f"ssh -L {cfg.port}:localhost:{cfg.port} {user_prefix}{node}"
+    tunnel_cmd = f"ssh {ssh_options(cfg)}-L {cfg.port}:localhost:{cfg.port} {ssh_target(cfg)}"
 
     if verbose:
         print()
@@ -259,6 +277,186 @@ def _print_tunnel(cfg: DashboardConfig, *, verbose: bool = False) -> None:
     if verbose:
         print()
 
+
+
+# ---------------------------------------------------------------------------
+# Ray Dashboard of a Bhaskera job
+# ---------------------------------------------------------------------------
+#
+# The Ray head (and with it the dashboard) runs on the first node of a job, and nobody knows in advance when
+# a job will start or on which nodes. `bhaskera-dashboard ray` therefore finds the job itself, waits for it to
+# get nodes, and forwards the dashboard of its first node to a fixed port of the login node. The laptop only
+# ever forwards two fixed ports to the login node (derived from the user id, so users who share a login node
+# do not collide), which is why the command to type never changes.
+
+_RAY_DASHBOARD_PORT = 8265          # Ray Dashboard, on the job's first node
+_GRAFANA_PORT = 3000                # Grafana (the dashboard's time-series charts), on the job's first node
+_JOB_COMMENT = "bhaskera"           # submit.sh puts this in the Slurm job comment
+
+
+def _slurm(cmd: list[str]) -> str:
+    """Output of a Slurm command, or an empty string when it is unavailable or fails."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def user_ports() -> tuple[int, int]:
+    """Login-node ports for the Ray Dashboard and Grafana: fixed for a user, different between users."""
+    base = 20000 + os.getuid() % 10000
+    return base, base + 10000
+
+
+def my_jobs() -> list[dict]:
+    """The current user's running and pending jobs."""
+    fmt = "%i|%j|%T|%N|%r|%k"
+    rows = []
+    for line in _slurm(["squeue", "-h", "-u", os.environ.get("USER", ""), "-t", "R,PD", "-o", fmt]).splitlines():
+        parts = line.rstrip("\n").split("|")
+        if len(parts) >= 6:
+            rows.append({"id": parts[0], "name": parts[1], "state": parts[2], "nodes": parts[3],
+                         "reason": parts[4], "comment": parts[5].strip()})
+    return rows
+
+
+def choose_job(jobs: list[dict], job_id: Optional[str]) -> tuple[Optional[dict], str]:
+    """The job to show: the one asked for, else the newest Bhaskera job. Returns (job or None, message)."""
+    if job_id:
+        found = [j for j in jobs if j["id"] == job_id]
+        return (found[0], "") if found else (None, f"job {job_id} is not running or pending")
+    mine = [j for j in jobs if j["comment"] == _JOB_COMMENT]
+    if not mine:
+        return None, ("no Bhaskera job is running or queued (jobs submitted with ./submit.sh are found "
+                      "automatically; for another job use --job <id>)")
+    running = [j for j in mine if j["state"] == "RUNNING"]
+    pool = running or mine
+    chosen = max(pool, key=lambda j: int(j["id"]) if j["id"].isdigit() else 0)
+    others = [j["id"] for j in mine if j is not chosen]
+    note = f"also found: {', '.join(others)} (use --job <id> for another)" if others else ""
+    return chosen, note
+
+
+def head_node(node_list: str) -> str:
+    """First node of a job: the one that runs the Ray head and its dashboard."""
+    hosts = _slurm(["scontrol", "show", "hostnames", node_list]).split()
+    if hosts:
+        return hosts[0]
+    if "[" in node_list:                      # scontrol unavailable: read 'cbgpu[0241-0245]' ourselves
+        prefix, inside = node_list.split("[", 1)
+        first = inside.split(",")[0].split("-")[0].rstrip("]")
+        return prefix + first
+    return node_list.split(",")[0]
+
+
+def _remote_command() -> str:
+    """What the laptop runs on the login node: load the module, or call this tool by its full path when the
+    copy in use was installed by the user and there is no module."""
+    module = os.environ.get("BHASKERA_MODULE", "")
+    if module:
+        return f"bash -lc 'module load {module} && bhaskera-dashboard ray'"
+    tool = shutil.which("bhaskera-dashboard") or "bhaskera-dashboard"
+    return f"bash -lc '{tool} ray'"
+
+
+def laptop_command(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> str:
+    """The one command to run on a laptop: it logs in and runs this tool, which does the rest."""
+    ray_port, grafana_port = user_ports()
+    remote = _remote_command()
+    return (f"ssh {ssh_options(cfg)}-L {local_port}:localhost:{ray_port} -L {_GRAFANA_PORT}:localhost:{grafana_port} "
+            f"{ssh_target(cfg)} \"{remote}\"")
+
+
+def ssh_config_block(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> str:
+    """A `~/.ssh/config` entry for the laptop, so that `ssh bhaskera-ray` replaces the long command."""
+    ray_port, grafana_port = user_ports()
+    target = ssh_target(cfg)
+    user, _, host = target.rpartition("@")
+    lines = ["Host bhaskera-ray", f"    HostName {host}"]
+    if user:
+        lines.append(f"    User {user}")
+    opts = ssh_options(cfg).split()
+    if opts:
+        lines.append(f"    Port {opts[1]}")
+    lines += [f"    LocalForward {local_port} localhost:{ray_port}",
+              f"    LocalForward {_GRAFANA_PORT} localhost:{grafana_port}",
+              f"    RemoteCommand {_remote_command()}",
+              "    RequestTTY yes", "    ServerAliveInterval 30"]
+    return "\n".join(lines)
+
+
+def cmd_ssh_config(cfg: DashboardConfig, local_port: int = _RAY_DASHBOARD_PORT) -> None:
+    print("Add this to ~/.ssh/config on your laptop (once):")
+    print()
+    print(ssh_config_block(cfg, local_port))
+    print()
+    print("From then on, this is all you type; it finds your job and keeps the dashboard link open:")
+    print()
+    print("    ssh bhaskera-ray")
+    print("    open http://localhost:8265        # Grafana charts: http://localhost:3000")
+
+
+def forward_command(head: str, ray_port: int, grafana_port: int) -> list[str]:
+    """The ssh command, run on the login node, that links the login-node ports to the first node of the job."""
+    return ["ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "BatchMode=yes",
+            "-L", f"{ray_port}:localhost:{_RAY_DASHBOARD_PORT}",
+            "-L", f"{grafana_port}:localhost:{_GRAFANA_PORT}", head]
+
+
+def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_port: int = _RAY_DASHBOARD_PORT) -> None:
+    ray_port, grafana_port = user_ports()
+    print()
+    print("From your laptop, this one command logs in and keeps the dashboard link open")
+    print("(the command is always the same; it finds your job and its nodes by itself):")
+    print()
+    print(f"    {laptop_command(cfg, local_port)}")
+    print(f"    open http://localhost:{local_port}")
+    print()
+    if info:
+        return
+
+    waited, shown = False, ""
+    while True:
+        chosen, note = choose_job(my_jobs(), job)
+        if chosen is None:
+            _die(note)
+        if chosen["state"] == "RUNNING" and chosen["nodes"]:
+            break
+        line = f"job {chosen['id']} ({chosen['name']}) is {chosen['state'].lower()}"
+        if chosen["reason"] and chosen["reason"] != "None":
+            line += f" ({chosen['reason']})"
+        if line != shown:
+            print(f"{line}; waiting for nodes ...", flush=True)
+            shown = line
+        waited = True
+        time.sleep(10)
+    if note:
+        print(note)
+    head = head_node(chosen["nodes"])
+    print(f"job {chosen['id']} ({chosen['name']}) is running; its Ray head is on {head}"
+          + ("" if not waited else " (it has just started, the dashboard needs a minute or two to come up)"))
+    print(f"Dashboard link is up. Keep this window open; it closes by itself when the job ends. Ctrl-C closes it now.")
+    print(flush=True)
+
+    proc = subprocess.Popen(forward_command(head, ray_port, grafana_port))
+    try:
+        while proc.poll() is None:
+            time.sleep(15)
+            running = [j for j in my_jobs() if j["id"] == chosen["id"] and j["state"] == "RUNNING"]
+            if not running:
+                print(f"job {chosen['id']} is no longer running; closing the dashboard link.")
+                break
+        else:
+            print(f"the link to {head} closed (ssh exited with {proc.returncode}).")
+    except KeyboardInterrupt:
+        print()
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 # ---------------------------------------------------------------------------
 # Arg parsing
@@ -278,8 +476,32 @@ def _build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="start",
-        choices=["start", "stop", "status", "tunnel"],
-        help="Subcommand (default: start)",
+        choices=["start", "stop", "status", "tunnel", "ray", "ssh-config"],
+        help="Subcommand (default: start). 'ray' prints the commands for the Ray Dashboard of a running job; 'ssh-config' prints a laptop SSH entry that shortens them.",
+    )
+    p.add_argument(
+        "--login-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="SSH port used to log in to the cluster (saved by 'start'; env: BHASKERA_LOGIN_PORT).",
+    )
+    p.add_argument(
+        "--job",
+        default=None,
+        metavar="ID",
+        help="Slurm job id for the 'ray' subcommand (default: your newest Bhaskera job, running or queued).",
+    )
+    p.add_argument(
+        "--ray-port",
+        type=int,
+        default=_RAY_DASHBOARD_PORT,
+        help="Port on your laptop for the Ray Dashboard in the printed command (default: 8265).",
+    )
+    p.add_argument(
+        "--info",
+        action="store_true",
+        help="With 'ray': only print the laptop command, do not wait for a job.",
     )
     p.add_argument(
         "--store",
@@ -368,6 +590,7 @@ def main() -> None:
     if args.port         is not None: cfg.port        = args.port
     if args.login_node   is not None: cfg.login_node  = args.login_node
     if args.user         is not None: cfg.user        = args.user
+    if args.login_port   is not None: cfg.login_port  = args.login_port
 
     # Apply defaults for any still-empty fields
     if not cfg.store:
@@ -387,6 +610,10 @@ def main() -> None:
         cmd_status(cfg)
     elif args.action == "tunnel":
         cmd_tunnel(cfg)
+    elif args.action == "ssh-config":
+        cmd_ssh_config(cfg, args.ray_port)
+    elif args.action == "ray":
+        cmd_ray(cfg, args.job, args.info, args.ray_port)
 
 
 if __name__ == "__main__":

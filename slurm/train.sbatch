@@ -43,6 +43,42 @@ if [[ -z "$head_ip" ]]; then
 fi
 port=$(( 6379 + SLURM_JOB_ID % 1000 ))
 export RAY_ADDRESS="${head_ip}:${port}" RAY_TMPDIR="/tmp/ray_${SLURM_JOB_ID}" RAY_raylet_start_wait_time_s=300
+
+# Time-series charts in the Ray Dashboard (optional). Prometheus collects the metrics of every node and Grafana
+# draws them inside the dashboard. install-observability.sh installs both; without them the dashboard still
+# lists every node and GPU, only the charts are missing. They run on the first node, next to the Ray head.
+OBS="${BHASKERA_OBSERVABILITY:-${BHASKERA_HOME:+$BHASKERA_HOME/observability}}"
+OBS_PID=""
+if [[ -n "$OBS" && -x "$OBS/prometheus/prometheus" && -x "$OBS/grafana/bin/grafana" ]]; then
+    # Both listen on the first node only (127.0.0.1), like the Ray Dashboard, so other users of the cluster cannot reach them.
+    export RAY_PROMETHEUS_HOST="http://127.0.0.1:9090" RAY_GRAFANA_HOST="http://127.0.0.1:3000" \
+           RAY_GRAFANA_IFRAME_HOST="http://localhost:3000"
+    (
+        metrics="$RAY_TMPDIR/ray/session_latest/metrics"
+        for _ in $(seq 1 120); do            # Ray writes its Prometheus and Grafana settings when the head starts
+            [[ -f "$metrics/prometheus/prometheus.yml" && -f "$metrics/grafana/grafana.ini" ]] && break
+            sleep 5
+        done
+        if [[ ! -f "$metrics/grafana/grafana.ini" ]]; then
+            echo "=== charts: Ray wrote no Prometheus/Grafana settings, skipped ==="
+            exit 0
+        fi
+        "$OBS/prometheus/prometheus" --config.file="$metrics/prometheus/prometheus.yml" \
+            --web.listen-address=127.0.0.1:9090 --storage.tsdb.path="$RAY_TMPDIR/prometheus-data" \
+            --storage.tsdb.retention.time=3d > "$RAY_TMPDIR/prometheus.log" 2>&1 &
+        GF_PATHS_DATA="$RAY_TMPDIR/grafana-data" GF_PATHS_LOGS="$RAY_TMPDIR/grafana-logs" \
+        GF_PATHS_PLUGINS="$RAY_TMPDIR/grafana-plugins" GF_SERVER_HTTP_ADDR=127.0.0.1 GF_SERVER_HTTP_PORT=3000 \
+        GF_ANALYTICS_REPORTING_ENABLED=false GF_ANALYTICS_CHECK_FOR_UPDATES=false \
+            "$OBS/grafana/bin/grafana" server --homepath "$OBS/grafana" --config "$metrics/grafana/grafana.ini" \
+            > "$RAY_TMPDIR/grafana.log" 2>&1 &
+        echo "=== charts: Prometheus and Grafana started on $(hostname) ==="
+        wait
+    ) &
+    OBS_PID=$!
+    trap '[[ -n "$OBS_PID" ]] && { pkill -P "$OBS_PID" 2>/dev/null; kill "$OBS_PID" 2>/dev/null; }' EXIT
+else
+    echo "=== charts: Prometheus/Grafana not installed (see install-observability.sh); the Ray Dashboard still lists every node ==="
+fi
 GPUS_PER_NODE=2
 WORKERS=$(( SLURM_NNODES * GPUS_PER_NODE ))
 

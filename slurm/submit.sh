@@ -52,7 +52,7 @@ if ! python -m bhaskera.launcher.preflight --config "$cfg" --num-gpus $(( 2 * no
 fi
 
 name=$(basename "$cfg" .yaml)
-jid=$(sbatch --parsable -A "$SLURM_ACCOUNT" "${EXCL[@]}" --job-name="$name" --nodes="$nodes" \
+jid=$(sbatch --parsable -A "$SLURM_ACCOUNT" "${EXCL[@]}" --comment=bhaskera --job-name="$name" --nodes="$nodes" \
       --partition="$part" --time="${hours}:00:00" train.sbatch "$cfg")
 echo "submitted job $jid: $name on $nodes nodes ($((2*nodes)) GPUs), $part, ${hours} h"
 echo "follow it:  tail -f logs/${name}_${jid}.out | grep --line-buffered -E '\[step|eval|exit code'"

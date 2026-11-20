@@ -305,6 +305,10 @@ class MetricsConfig:
     # slowest rank and host. 0 disables the straggler check.
     step_timing: bool = True
     straggler_every_n_steps: int = 10
+    # GPU and host readings of every node, gathered to rank 0 (utils/node_stats.py); 0 disables it.
+    # Per-node curves are logged only while the job has at most node_stats_per_node_max nodes.
+    node_stats_every_n_steps: int = 10
+    node_stats_per_node_max: int = 16
 
 @dataclass
 class MonitoringConfig:
@@ -549,6 +553,8 @@ def _dict_to_config(raw: dict) -> Config:
                 throughput_warmup=int(metrics_raw.get("throughput_warmup", 5)),
                 step_timing=bool(metrics_raw.get("step_timing", True)),
                 straggler_every_n_steps=int(metrics_raw.get("straggler_every_n_steps", 10)),
+                node_stats_every_n_steps=int(metrics_raw.get("node_stats_every_n_steps", 10)),
+                node_stats_per_node_max=int(metrics_raw.get("node_stats_per_node_max", 16)),
             ),
         ),
     )

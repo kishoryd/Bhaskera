@@ -21,6 +21,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from bhaskera.introspect import ModelProfile
 from bhaskera.utils import ThroughputTracker
 from bhaskera.utils.system_stats import system_stats, cuda_memory_stats
+from bhaskera.utils.node_stats import (flatten as flatten_node_reports, gather_node_reports,
+                                       summary_line as node_summary_line)
 from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
 from bhaskera.utils.startup_timer import mark as startup_mark
 from bhaskera.utils.peak_mem import peak_mem_gib
@@ -429,6 +431,8 @@ def _run_epoch(
     sys_every   = int(getattr(metrics_cfg, "system_every_n_steps", 10)) if metrics_cfg else 10
     cuda_every  = int(getattr(metrics_cfg, "cuda_every_n_steps", 10))   if metrics_cfg else 10
     sys_on      = bool(getattr(metrics_cfg, "enabled", True))           if metrics_cfg else True
+    node_every  = int(getattr(metrics_cfg, "node_stats_every_n_steps", 10)) if metrics_cfg else 10
+    node_per_max = int(getattr(metrics_cfg, "node_stats_per_node_max", 16)) if metrics_cfg else 16
 
     if startup_watchdog is not None:
         startup_watchdog.phase("first batch + first step")
@@ -777,6 +781,20 @@ def _run_epoch(
                         sysm.update(cuda_memory_stats(device))
                 if sysm:
                     tracker.log(sysm, step=step)
+
+        # GPU and host readings of every node, gathered to rank 0 (all ranks take part in the gather)
+        with nvtx_range("node_stats"):
+            if sys_on and node_every > 0 and step % node_every == 0:
+                node_reports = gather_node_reports(
+                    local_rank,
+                    gpu=bool(getattr(metrics_cfg, "gpu", True)) if metrics_cfg else True,
+                    cpu=bool(getattr(metrics_cfg, "cpu", True)) if metrics_cfg else True,
+                )
+                if node_reports and rank == 0:
+                    node_metrics = flatten_node_reports(node_reports, node_per_max)
+                    logger.info(node_summary_line(step, node_metrics))
+                    if tracker:
+                        tracker.log(node_metrics, step=step)
 
         # ── Periodic eval / MLPerf-style convergence early-stop ──────
         eval_steps = train_cfg.eval_steps
