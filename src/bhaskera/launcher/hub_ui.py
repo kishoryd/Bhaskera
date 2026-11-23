@@ -133,7 +133,8 @@ td a.run:hover{text-decoration:underline;text-underline-offset:3px}
 .quiet{padding:20px 0;color:var(--muted);border-top:1px solid var(--ink);border-bottom:1px solid var(--border)}
 footer{color:var(--muted);font-size:12.5px;margin-top:40px;padding-top:14px;border-top:1px solid var(--border)}
 footer a{text-decoration:underline;text-underline-offset:3px}
-dialog{width:min(900px,94vw);max-height:88vh;padding:0;border:1px solid var(--ink);border-radius:3px;background:var(--bg);color:var(--text);box-shadow:6px 6px 0 rgba(31,28,23,.18)}
+dialog{width:min(980px,96vw);height:min(860px,92vh);display:none;flex-direction:column;overflow:hidden;padding:0;border:1px solid var(--ink);border-radius:3px;background:var(--bg);color:var(--text);box-shadow:6px 6px 0 rgba(31,28,23,.18)}
+dialog[open]{display:flex}
 dialog::backdrop{background:rgba(31,28,23,.45)}
 .dlg-head{display:flex;align-items:center;gap:10px;padding:12px 22px;border-bottom:1px solid var(--border)}
 .dlg-head b{font:500 18px var(--serif)}
@@ -173,17 +174,23 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 .result{margin:12px 22px 0;padding:11px 14px;border-left:3px solid var(--border);background:var(--surface);font:12.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto}
 .result.ok{border-left-color:var(--ok)} .result.bad{border-left-color:var(--bad)}
 .result b{font-family:var(--sans)}
-.dlg-foot{display:flex;gap:10px;justify-content:flex-end;padding:16px 22px}
+.dlg-foot{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:12px 22px;border-top:1px solid var(--border);flex:none;background:var(--bg)}
+.dlg-foot .ssum{margin:0 auto 0 0;flex:1;min-width:0;padding:6px 11px;font-size:12.5px}
 .h2row{display:flex;align-items:baseline;gap:14px;margin-top:30px}.h2row h2{margin:0}.h2row .btn{margin:0;align-self:center}.h2row .muted{font-size:13px}
 .nodebox{margin:4px 0 14px}.nodebox>summary,.opt>summary{cursor:pointer;color:var(--muted);font-size:12.5px}
 .nodebox>summary:hover,.opt>summary:hover{color:var(--text)}
 .opt{position:relative}.opt>div{position:absolute;right:0;z-index:2;display:flex;flex-direction:column;gap:10px;padding:12px 14px;margin-top:6px;background:var(--bg);border:1px solid var(--ink);border-radius:3px;min-width:230px}
-.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:16px 22px 4px}
-.choice{text-align:left;border:1px solid var(--border);background:transparent;border-radius:3px;padding:11px 13px;display:flex;flex-direction:column;gap:3px}
-.choice b{font-size:14px}.choice span{font-size:12.5px;color:var(--muted)}
-.choice:hover{border-color:var(--ink)}
-.choice[aria-pressed=true]{border-color:var(--ink);box-shadow:inset 3px 0 0 var(--accent);background:var(--surface)}
-.sfields,#f-resume{padding:6px 22px 0;display:flex;flex-direction:column;gap:16px}#f-resume{padding:0}
+/*tabs*/.choices{display:flex;gap:2px;padding:0 22px;border-bottom:1px solid var(--border);overflow-x:auto;flex:none}
+/*tab*/.choice{border:0;background:transparent;padding:11px 14px 10px;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+/*tabs*/.choice b{font-size:14px;font-weight:500;color:var(--muted)}.choice span{display:none}
+/*tabs*/.choice:hover b{color:var(--text)}
+/*tabs*/.choice[aria-pressed=true]{border-bottom-color:var(--accent)}.choice[aria-pressed=true] b{color:var(--ink);font-weight:600}
+.startdesc{padding:10px 22px 0;color:var(--muted);font-size:13px;flex:none}
+.dlgbody{flex:1;overflow:auto;padding-bottom:10px}
+.sec{grid-column:1/-1;font:500 15px var(--serif);margin:14px 0 -4px;padding-top:12px;border-top:1px solid var(--border)}
+.sec:first-child{border-top:0;margin-top:0;padding-top:0}
+.sfields{padding:14px 22px 0;display:grid;grid-template-columns:1fr 1fr;gap:16px 22px}.sfields>.srow{grid-column:1/-1}.sfields>.srow.half{grid-column:auto}#f-resume{padding:0;display:flex;flex-direction:column;gap:16px}
+@media(max-width:700px){.sfields{grid-template-columns:1fr}.sfields>.srow.half{grid-column:1/-1}}
 .srow label.lbl{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em}
 .srow select,.srow input[type=number],.srow input[type=text]{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:3px;padding:7px 10px;font:inherit}
 .srow select{width:100%}.srow input[type=number]{width:90px}.srow input[type=text]{width:100%}
@@ -294,19 +301,21 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 
 <dialog id="startbox">
   <div class="dlg-head"><b>Start a job</b><span class="spacer" style="flex:1"></span><button class="btn" id="startclose" type="button">Close</button></div>
-  <div class="choices" id="startkind" role="group" aria-label="What to start">
-    <button type="button" class="choice" data-k="recipe"><b>Create a recipe</b><span>Describe a training run in a few choices; no YAML to write</span></button>
-    <button type="button" class="choice" data-k="train"><b>Train a model</b><span>Fine-tune with one of your recipes</span></button>
-    <button type="button" class="choice" data-k="serve"><b>Chat with a trained model</b><span>Ask the tuned model, the base model, or both</span></button>
-    <button type="button" class="choice" data-k="eval"><b>Benchmark a trained model</b><span>Compare it with its base on standard tests</span></button>
-    <button type="button" class="choice" data-k="resume"><b>Resume a stopped run</b><span>Continue from its last checkpoint after a failure</span></button>
-    <button type="button" class="choice" data-k="register"><b>Register a model</b><span>Save a trained model under a name in the model registry</span></button>
+  <div class="choices" id="startkind" role="tablist" aria-label="What to start">
+    <button type="button" class="choice" data-k="recipe"><b>Create recipe</b><span>Describe a training run in a few choices, or write it yourself</span></button>
+    <button type="button" class="choice" data-k="train"><b>Train</b><span>Fine-tune with one of your recipes</span></button>
+    <button type="button" class="choice" data-k="resume"><b>Resume</b><span>Continue a stopped run from its last checkpoint</span></button>
+    <button type="button" class="choice" data-k="serve"><b>Chat</b><span>Talk to the tuned model, the base model, or both</span></button>
+    <button type="button" class="choice" data-k="eval"><b>Benchmark</b><span>Test one or more models, with the standard tests or your own</span></button>
+    <button type="button" class="choice" data-k="register"><b>Register</b><span>Keep a trained model under a name in the model registry</span></button>
   </div>
-  <div id="startnote" class="startnote" hidden></div>
-  <div class="sfields" id="startfields"></div>
-  <div class="ssum" id="startsum"></div>
-  <pre class="result" id="startout" hidden></pre>
-  <div class="dlg-foot"><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the recipe check; submits nothing">Check first</button>
+  <div class="startdesc" id="startdesc"></div>
+  <div class="dlgbody">
+    <div id="startnote" class="startnote" hidden></div>
+    <div class="sfields" id="startfields"></div>
+    <pre class="result" id="startout" hidden></pre>
+  </div>
+  <div class="dlg-foot"><div class="ssum" id="startsum"></div><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the recipe check; submits nothing">Check first</button>
     <button class="btn primary" id="startgo" type="button">Start</button></div>
 </dialog>
 <div class="toast" id="toast" role="status" hidden></div>
@@ -792,6 +801,7 @@ function renderStart(){
   var o=L.opts, k=L.kind, h="";
   L.confirm=false;
   Array.prototype.forEach.call($("#startkind").querySelectorAll(".choice"), function(b){ b.setAttribute("aria-pressed", b.getAttribute("data-k")===k?"true":"false"); });
+  var ds=$("#startkind .choice[data-k="+k+"] span"); $("#startdesc").textContent=ds?ds.textContent:"";
   var note=$("#startnote"); note.hidden=o.enabled; note.textContent=o.reason||"";
   $("#startout").hidden=true; $("#startgo").classList.remove("confirm"); $("#startgo").textContent=goLabel(k);
   if(k==="recipe"){
@@ -875,24 +885,25 @@ function recipeForm(o){
   var methods=Object.keys(o.methods||{}).filter(function(m){return methodOk(o,m,r.kind)});
   if(methods.indexOf(r.method)<0) r.method=methods[0]||"fsdp";
   var multi=r.kind==="multimodal", custom=r.method==="custom";
-  var h='<div class="srow"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">It is saved as <code>recipes/'+esc(r.name||"name")+'.yaml</code> and also names the run in MLflow.</div></div>'+
-    '<div class="srow"><label class="lbl">Kind of model</label><div class="chips">'+chip("Text",!multi,'data-kind="text"')+chip("Multimodal (images, video, audio)",multi,'data-kind="multimodal"')+'</div></div>'+
+  var h='<div class="sec">The model</div><div class="srow half"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">Saved as <code>recipes/'+esc(r.name||"name")+'.yaml</code>; it also names the run in MLflow.</div></div>'+
+    '<div class="srow half"><label class="lbl">Kind of model</label><div class="chips">'+chip("Text",!multi,'data-kind="text"')+chip("Multimodal (images, video, audio)",multi,'data-kind="multimodal"')+'</div></div>'+
     (multi?'<div class="srow"><label class="lbl">The data holds</label><div class="chips">'+["image","video","audio"].map(function(m){return chip(m,r.mods.indexOf(m)>=0,'data-mod="'+m+'"')}).join("")+'<span class="muted">besides text</span></div></div>':"")+
     '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label,r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div></div>';
-  if(custom){ h+=customForm(o,r); }
+  if(custom){ h+='<div class="sec">The recipe</div>'+customForm(o,r); }
   else {
     h+='<div class="srow"><label class="lbl" for="f-rmodel">Model folder</label><input id="f-rmodel" type="text" list="f-rmodels" value="'+esc(r.model)+'" placeholder="/scratch/<project>/<username>/models/'+(multi?"Qwen3-VL-8B-Instruct":"Qwen3-14B")+'">'+
       '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">A downloaded Hugging Face model folder (compute nodes have no internet).</div></div>';
+    h+='<div class="sec">The data</div>';
     if(caches.length){
-      h+='<div class="srow"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select></div>'+
-         '<div class="srow"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select></div>';
+      h+='<div class="srow half"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select></div>'+
+         '<div class="srow half"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select></div>';
     } else {
       h+='<div class="srow"><div class="sub">No tokenised data was found yet. Open <b>My data is not tokenised yet</b> below to prepare your files; they appear here when that job has finished.</div></div>';
     }
-    h+='<div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
+    h+='<div class="sec">The training</div><div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div></div>'+
-       '<div class="srow"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div></div>'+
-       '<div class="srow"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Larger learns more and uses a little more memory.</div></div>'+
+       '<div class="srow half"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div></div>'+
+       '<div class="srow half"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Larger learns more and uses a little more memory.</div></div>'+
        det(r,"more","More options",'<div class="chips" style="margin-top:8px">'+
          '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
          '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
@@ -902,7 +913,7 @@ function recipeForm(o){
          (r.method==="pipeline"?'<label class="muted">Stages <input id="f-rstages" type="number" min="2" value="'+esc(r.stages)+'" placeholder="4"></label><label class="muted">Micro-batches <input id="f-rmicro" type="number" min="1" value="'+esc(r.micro)+'" placeholder="2 x stages"></label>':"")+'</div>'+
          (r.method==="hsdp"||r.method==="pipeline"?'<div class="sub">'+(r.method==="hsdp"?"The shard group must divide the number of GPUs you start with.":"The number of GPUs must divide by the stages.")+' The check on the Train page tells you if it does not.</div>':""));
   }
-  h+=det(r,"all","All settings ("+((o.schema||[]).reduce(function(n,g){return n+g.fields.length},0))+" options)",allSettings(o,r));
+  h+='<div class="sec">'+(custom?"Settings on top":"More")+'</div>'+det(r,"all","All settings ("+((o.schema||[]).reduce(function(n,g){return n+g.fields.length},0))+" options)",allSettings(o,r));
   if(!custom) h+=det(r,"raw","My data is not tokenised yet",'<div style="margin-top:8px">'+
        '<div class="sub">Give the JSONL files (one conversation per line'+(multi?", with the paths of the images, video or audio in each row":"")+'). A CPU job tokenises them once; then they show up as training data above.</div>'+
        '<input id="f-rawtrain" type="text" value="'+esc(r.raw.train)+'" placeholder="training file: /scratch/<project>/<username>/data/train.jsonl" style="margin-top:8px">'+
