@@ -291,6 +291,13 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
       </table></div>
     </div>
   </section>
+  <section id="modsec">
+    <h2>Models <span class="count" id="modcount">0</span></h2>
+    <div class="card tablebox"><div class="scroll"><table>
+      <thead><tr><th>Model</th><th>Version</th><th>Trained from</th><th>Alias</th><th class="num">Eval loss</th><th></th></tr></thead>
+      <tbody id="models"></tbody>
+    </table></div></div>
+  </section>
   <section id="cmpsec" hidden>
     <h2>Compare models</h2>
     <div class="card" id="cmp" style="padding:14px 16px"></div>
@@ -498,6 +505,21 @@ function renderRuns(){
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
 }
 
+/* ---- registered models ---- */
+var regModels=null;
+function loadModels(){
+  fetch("/api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; renderModels(); }).catch(function(){});
+}
+function renderModels(){
+  var rows=[]; (regModels||[]).forEach(function(m){ (m.refs||[]).forEach(function(v){ rows.push({name:m.name,v:v}); }); });
+  $("#modcount").textContent=(regModels||[]).length;
+  var ok={}; (state&&state.runs||[]).forEach(function(r){ if(r.has_adapter) ok[r.run_id]=1; });
+  $("#models").innerHTML=rows.length?rows.map(function(x){
+    var v=x.v, act=ok[v.run_id]?'<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(v.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(v.run_id)+'">Benchmark</button></div>':'<span class="muted">run not in this store</span>';
+    return '<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc(v.version)+'</td><td class="muted">'+esc(v.run_name||v.run_id.slice(0,8))+'</td><td>'+(v.aliases||[]).map(function(a){return '<span class="chip">'+esc(a)+'</span>'}).join(" ")+'</td><td class="num">'+esc(v.eval_loss||"–")+'</td><td>'+act+'</td></tr>';
+  }).join(""):'<tr><td colspan="6" class="muted" style="text-align:center;padding:22px">'+(regModels===null?"Loading …":"No model is registered yet. Train one, then press Start a job and choose Register.")+'</td></tr>';
+}
+
 /* ---- compare benchmarked models ---- */
 var cmpSel={};
 function renderCompare(){
@@ -524,9 +546,9 @@ $("#cmp").addEventListener("click", function(e){ var b=e.target.closest("[data-c
 /* ---- side panel ---- */
 function renderSide(){
   var s=state, first=(s.jobs||[]).filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
-  var items=[["MLflow",MLFLOW],["Models",MLFLOW+"#/models"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
+  var items=[["MLflow",MLFLOW],["Models","#modsec"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
   $("#nav").innerHTML=items.map(function(l){
-    return '<a'+(l[1]?' href="'+esc(l[1])+'" target="_blank" rel="noopener"':' class="off" title="Opens when a job runs"')+'>'+esc(l[0])+'</a>';
+    return '<a'+(l[1]?' href="'+esc(l[1])+'"'+(l[1].charAt(0)==="#"?"":' target="_blank" rel="noopener"'):' class="off" title="Opens when a job runs"')+'>'+esc(l[0])+'</a>';
   }).join("");
   var parts=(s.partitions||[]).filter(function(p){return p.max_submitted!=null});
   var h='<h3>Your job slots</h3>'+(parts.length ? parts.map(function(p){
@@ -560,7 +582,7 @@ function render(){
   var jobs=(s.jobs||[]).slice().sort(function(a,b){ return ((order[a.state]||0)-(order[b.state]||0)) || (Number(b.id)-Number(a.id)); });
   $("#jobcount").textContent=jobs.length;
   $("#jobs").innerHTML=jobs.length ? jobs.map(jobCard).join("") : emptyJobs();
-  renderRuns(); renderCompare(); renderSide(); renderChat();
+  renderRuns(); renderCompare(); renderModels(); renderSide(); renderChat();
   $("#foot").innerHTML='Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a>';
 }
 function clock(){
@@ -1033,7 +1055,7 @@ function send(action){
     }
     if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
     if(r.j.ok&&L.kind==="register"){
-      toast(r.j.output.split("\n")[0]+". It is under Models in the header."); $("#startbox").close(); return;
+      toast(r.j.output.split("\n")[0]+". It is listed under Models."); $("#startbox").close(); loadModels(); return;
     }
     if(r.j.ok){
       var what=L.kind==="train"?"Training":L.kind==="serve"?"Chat server":L.kind==="resume"?"Resumed run":"Benchmark";
@@ -1174,7 +1196,7 @@ $("#startfields").addEventListener("toggle", function(e){
 $("#startcheck").addEventListener("click", function(){ send("check"); });
 $("#startgo").addEventListener("click", function(){ send("start"); });
 
-refresh(); setInterval(refresh, 8000); setInterval(clock, 1000);
+refresh(); loadModels(); setInterval(loadModels, 30000); setInterval(refresh, 8000); setInterval(clock, 1000);
 })();
 </script>
 </body>

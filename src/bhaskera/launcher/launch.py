@@ -172,7 +172,9 @@ class Launcher:
         try:
             from . import register
             return [{"name": m["name"], "versions": len(m["versions"]), "aliases": sorted({a for v in m["versions"] for a in v["aliases"]}),
-                     "refs": [{"ref": f"{m['name']}:{v['version']}", "run_id": v["run_id"], "aliases": v["aliases"]} for v in m["versions"]]}
+                     "refs": [{"ref": f"{m['name']}:{v['version']}", "version": v["version"], "run_id": v["run_id"], "aliases": v["aliases"],
+                               "run_name": v["tags"].get("run_name", ""), "base_model": v["tags"].get("base_model", ""),
+                               "eval_loss": v["tags"].get("eval_loss", ""), "eval_accuracy": v["tags"].get("eval_accuracy", "")} for v in m["versions"]]}
                     for m in register.listing(register.make_client(self._store or register._store_default()))]
         except Exception:
             return []
