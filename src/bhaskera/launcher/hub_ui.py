@@ -239,6 +239,25 @@ dialog::backdrop{background:rgba(31,28,23,.5);backdrop-filter:blur(2px)}
 .msg .files img{max-height:130px;max-width:200px;border-radius:4px;border:1px solid rgba(255,255,255,.25)}
 .msg .files span{font:12px var(--mono);opacity:.85;border:1px solid rgba(255,255,255,.35);padding:1px 7px;border-radius:4px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+#path{margin-top:22px}
+.path-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;font-size:13px}.path-head b{font:500 15px var(--serif)}
+.linkbtn{border:0;background:transparent;color:var(--muted);font-size:12.5px;text-decoration:underline;text-underline-offset:3px;padding:2px 4px}.linkbtn:hover{color:var(--text)}
+.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.step{display:flex;flex-direction:column;gap:3px;text-align:left;width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);transition:border-color .12s,background .12s}
+.step:hover{border-color:var(--border-strong);background:var(--surface-2)}
+.step .n{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600}
+.step .n i{font-style:normal;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surface-2);font-size:11px;color:var(--muted)}
+.step .d{font-size:12px;color:var(--muted);line-height:1.4}
+.step.done .n i{background:var(--ok-soft);color:var(--ok)}
+.step.next{border-color:var(--accent);box-shadow:var(--ring)}
+.step.next .n i{background:var(--accent);color:#fff}
+.step.next .d{color:var(--text)}
+.step.off{opacity:.55}
+.step .tag{font-size:11px;color:var(--accent-ink);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+@media (max-width:980px){.steps{grid-template-columns:repeat(3,1fr)}}@media (max-width:560px){.steps{grid-template-columns:repeat(2,1fr)}}
+.intro{padding:11px 14px;background:var(--info-soft);border-radius:var(--radius-sm);font-size:13px;line-height:1.55}
+dialog.small{width:min(640px,94vw);height:auto;max-height:86vh}
+.gloss{margin:0}.gloss dt{font-weight:600;margin-top:14px}.gloss dd{margin:2px 0 0;color:var(--muted);line-height:1.55}
 /* polish: focus, motion, small screens */
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-shadow:var(--ring)}
@@ -277,6 +296,10 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
 </div></header>
 
 <main class="wrap">
+  <section id="path" hidden>
+    <div class="path-head"><b>Your path</b><span class="muted">from your data to a model you can use</span><span class="spacer"></span><button class="linkbtn" id="pathhide" type="button">Hide</button></div>
+    <ol class="steps" id="steps"></ol>
+  </section>
   <div class="h2row"><h2>Jobs <span class="count" id="jobcount">0</span></h2><span class="muted" id="stats"></span></div>
   <div id="jobs"><div class="skeleton"></div></div>
 
@@ -357,6 +380,24 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
   </div>
   <div class="dlg-foot"><div class="ssum" id="startsum"></div><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the recipe check; submits nothing">Check first</button>
     <button class="btn primary" id="startgo" type="button">Start</button></div>
+</dialog>
+<dialog id="guide" class="small">
+  <div class="dlg-head"><b>Words used on this page</b><span class="spacer" style="flex:1"></span><button class="btn" id="guideclose" type="button">Close</button></div>
+  <div class="dlgbody" style="padding:6px 22px 18px"><dl class="gloss">
+    <dt>Run</dt><dd>One training session. Each one is a row under Runs.</dd>
+    <dt>Recipe</dt><dd>The saved list of choices for one training run: which model, which examples, how long. Make one under Create recipe.</dd>
+    <dt>Fine-tuning</dt><dd>Teaching a model that already exists more about your subject or your style, instead of building one from nothing.</dd>
+    <dt>Tokenised data</dt><dd>Your examples turned into the numbers a model reads. It is done once, with Prepare data, and reused by every run.</dd>
+    <dt>LoRA and adapter</dt><dd>LoRA trains a small add-on instead of the whole model. That add-on is the adapter: it is what a run produces, and what you chat with, test and register.</dd>
+    <dt>QLoRA</dt><dd>LoRA with the original model squeezed to 4 bits, so it needs much less memory.</dd>
+    <dt>Method (DDP, FSDP2, HSDP, Pipeline)</dt><dd>How the model is spread over the GPUs. QLoRA is the usual start. The Create recipe page says when each of the others fits.</dd>
+    <dt>Step</dt><dd>One update of the model from one batch of examples. A run is a number of steps.</dd>
+    <dt>Validation data and eval loss</dt><dd>Examples kept aside to check progress. Eval loss is the score on them: lower is better.</dd>
+    <dt>Checkpoint</dt><dd>A snapshot saved during training. If a run stops, Resume continues from the last one.</dd>
+    <dt>Node and GPU</dt><dd>A node is one machine; a GPU is one of the chips in it that does the work.</dd>
+    <dt>Benchmark</dt><dd>A set of questions with known answers used to score a model, so you can compare it with its base model or with another one.</dd>
+    <dt>Registry and alias</dt><dd>The registry is a named, numbered list of your trained models. An alias is a label you choose for one version, such as the one you use.</dd>
+  </dl></div>
 </dialog>
 <div class="toast" id="toast" role="status" hidden></div>
 
@@ -539,10 +580,39 @@ function renderRuns(){
 }
 
 /* ---- registered models ---- */
-var regModels=null;
+var regModels=null, pathOpts=null;
 function loadModels(){
-  fetch("/api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; renderModels(); }).catch(function(){});
+  fetch("/api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); }).catch(function(){});
 }
+/* ---- the path from data to a usable model ---- */
+function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
+function renderPath(){
+  var sec=$("#path"); if(!sec) return;
+  if(!pathOpts||!pathOpts.enabled||pathHidden()){ sec.hidden=true; return; }
+  var runs=(state&&state.runs)||[], mine=(pathOpts.recipes||[]).filter(function(r){return r.ready});
+  var adapter=runs.some(function(r){return r.has_adapter}), bench=runs.some(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length});
+  var steps=[
+    {t:"Prepare data",d:"Turn your examples into numbers the model reads",tab:"recipe",raw:true,done:(pathOpts.caches||[]).length>0},
+    {t:"Create recipe",d:"Choose the model, the data and how long",tab:"recipe",done:mine.length>0},
+    {t:"Train",d:"Run the recipe on the cluster",tab:"train",done:runs.length>0},
+    {t:"Chat",d:"Talk to the model you trained",tab:"serve",done:false,off:!adapter},
+    {t:"Benchmark",d:"Score it on questions with known answers",tab:"eval",done:bench,off:!adapter},
+    {t:"Register",d:"Keep it under a name you can find again",tab:"register",done:(regModels||[]).length>0,off:!adapter}
+  ];
+  var nxt=-1; for(var i=0;i<steps.length;i++){ if(!steps[i].done&&!steps[i].off){ nxt=i; break; } }
+  $("#steps").innerHTML=steps.map(function(x,i){
+    return '<li><button type="button" class="step'+(x.done?" done":"")+(i===nxt?" next":"")+(x.off?" off":"")+'" data-path="'+x.tab+'"'+(x.raw?' data-raw="1"':"")+(x.off?' title="Needs a finished run first"':"")+'><span class="n"><i>'+(x.done?"&#10003;":(i+1))+'</i>'+esc(x.t)+'</span><span class="d">'+esc(x.d)+'</span>'+(i===nxt?'<span class="tag">Next</span>':"")+'</button></li>';
+  }).join("");
+  sec.hidden=false;
+}
+$("#steps").addEventListener("click", function(e){
+  var b=e.target.closest("[data-path]"); if(!b) return;
+  if(b.hasAttribute("data-raw")) L.rc.open.raw=true;
+  L.hours=""; openStart(b.getAttribute("data-path"));
+});
+$("#nav").addEventListener("click", function(e){ var a=e.target.closest("a"); if(a&&a.getAttribute("href")==="#guide"){ e.preventDefault(); $("#guide").showModal(); } });
+$("#pathhide").addEventListener("click", function(){ try{ localStorage.setItem("bhaskera-path","hidden"); }catch(e){} renderPath(); toast("The path is hidden. Open the Guide at the top any time to read the words used here."); });
+$("#guideclose").addEventListener("click", function(){ $("#guide").close(); });
 function renderModels(){
   var rows=[]; (regModels||[]).forEach(function(m){ (m.refs||[]).forEach(function(v){ rows.push({name:m.name,v:v}); }); });
   $("#modcount").textContent=(regModels||[]).length;
@@ -579,7 +649,7 @@ $("#cmp").addEventListener("click", function(e){ var b=e.target.closest("[data-c
 /* ---- side panel ---- */
 function renderSide(){
   var s=state, first=(s.jobs||[]).filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
-  var items=[["MLflow",MLFLOW],["Models","#modsec"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
+  var items=[["MLflow",MLFLOW],["Models","#modsec"],["Guide","#guide"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
   $("#nav").innerHTML=items.map(function(l){
     return '<a'+(l[1]?' href="'+esc(l[1])+'"'+(l[1].charAt(0)==="#"?"":' target="_blank" rel="noopener"'):' class="off" title="Opens when a job runs"')+'>'+esc(l[0])+'</a>';
   }).join("");
@@ -615,7 +685,7 @@ function render(){
   var jobs=(s.jobs||[]).slice().sort(function(a,b){ return ((order[a.state]||0)-(order[b.state]||0)) || (Number(b.id)-Number(a.id)); });
   $("#jobcount").textContent=jobs.length;
   $("#jobs").innerHTML=jobs.length ? jobs.map(jobCard).join("") : emptyJobs();
-  renderRuns(); renderCompare(); renderModels(); renderSide(); renderChat();
+  renderRuns(); renderCompare(); renderModels(); renderPath(); renderSide(); renderChat();
   $("#foot").innerHTML='Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a>';
 }
 function clock(){
@@ -865,12 +935,12 @@ function renderStart(){
     var rs=o.recipes||[], ready=rs.filter(function(r){return r.ready}), blocked=rs.filter(function(r){return !r.ready&&!r.tokenize});
     if(ready.length&&!ready.some(function(r){return r.file===L.recipe})) L.recipe=ready[0].file;
     h+='<div class="srow"><label class="lbl" for="f-recipe">Recipe</label>'+(ready.length ?
-        '<select id="f-recipe">'+ready.map(function(r){return '<option value="'+esc(r.file)+'"'+(r.file===L.recipe?" selected":"")+'>'+esc(recipeName(r.file))+'</option>'}).join("")+'</select><div class="sub" id="f-recipe-info"></div>' :
-        '<div class="sub">No recipe is ready. Put one in the <code>recipes</code> folder next to submit.sh, or in a folder listed in $BHASKERA_RECIPES.</div>')+
+        '<select id="f-recipe">'+ready.map(function(r){return '<option value="'+esc(r.file)+'"'+(r.file===L.recipe?" selected":"")+'>'+esc(recipeName(r.file))+'</option>'}).join("")+'</select><div class="sub" id="f-recipe-info"></div><div class="sub">A recipe is the saved list of choices for one training run. Make a new one under Create recipe.</div>' :
+        '<div class="sub">No recipe is ready yet. Use <b>Create recipe</b> in the Start menu to make one.</div>')+
       (blocked.length?'<div class="sub">'+blocked.length+' more '+(blocked.length>1?"need":"needs")+' editing first (they still have <code>&lt;project&gt;/&lt;username&gt;</code> placeholders): '+blocked.slice(0,3).map(function(r){return esc(recipeName(r.file))}).join(", ")+(blocked.length>3?", …":"")+'</div>':'')+'</div>'+
       '<div class="srow"><label class="lbl">Nodes</label><div class="chips">'+[1,2,4,8,16,32].filter(function(n){return n<=o.max_nodes}).map(function(n){return chip(n,L.nodes===n,'data-n="'+n+'"')}).join("")+
-        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-nodes" type="number" min="1" max="'+o.max_nodes+'" value="'+L.nodes+'"></div></div>'+
-      '<div class="srow"><label class="lbl">How long</label>'+hoursRow(["",1,2,6,12,24],"")+'</div>';
+        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-nodes" type="number" min="1" max="'+o.max_nodes+'" value="'+L.nodes+'"></div><div class="sub">A node is one machine'+(o.gpus_per_node?" with "+o.gpus_per_node+" GPUs":"")+'. More nodes train faster but may wait longer in the queue. One or two is plenty for a first run.</div></div>'+
+      '<div class="srow"><label class="lbl">Time limit</label>'+hoursRow(["",1,2,6,12,24],"")+'<div class="sub">The job is stopped when this runs out. Checkpoints are saved along the way, so a stopped run can be resumed.</div></div>';
   } else if(k==="resume"){
     h+='<div class="srow"><label class="lbl">Stopped run</label>'+stoppedList()+'</div><div id="f-resume"></div>';
   } else if(k==="register"){
@@ -940,25 +1010,25 @@ function recipeForm(o){
   var methods=Object.keys(o.methods||{}).filter(function(m){return methodOk(o,m,r.kind)});
   if(methods.indexOf(r.method)<0) r.method=methods[0]||"fsdp";
   var multi=r.kind==="multimodal", custom=r.method==="custom";
-  var h='<div class="sec">The model</div><div class="srow half"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">Saved as <code>recipes/'+esc(r.name||"name")+'.yaml</code>; it also names the run in MLflow.</div></div>'+
-    '<div class="srow half"><label class="lbl">Kind of model</label><div class="chips">'+chip("Text",!multi,'data-kind="text"')+chip("Multimodal (images, video, audio)",multi,'data-kind="multimodal"')+'</div></div>'+
+  var h='<div class="srow intro"><b>What is a recipe?</b> It is the saved list of choices for one training run: which model to teach, which examples to teach it with, and for how long. You make it once here, then <b>Train</b> runs it on the cluster. Unsure about a choice? Leave it as it is: the defaults suit a first run.</div><div class="sec">The model</div><div class="srow half"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">A short name for this run. It is the file name (<code>recipes/'+esc(r.name||"name")+'.yaml</code>) and the name you will see in MLflow.</div></div>'+
+    '<div class="srow half"><label class="lbl">Kind of model</label><div class="chips">'+chip("Text",!multi,'data-kind="text"')+chip("Multimodal (images, video, audio)",multi,'data-kind="multimodal"')+'</div><div class="sub">Text models read and write words. Multimodal models also look at images, video or audio.</div></div>'+
     (multi?'<div class="srow"><label class="lbl">The data holds</label><div class="chips">'+["image","video","audio"].map(function(m){return chip(m,r.mods.indexOf(m)>=0,'data-mod="'+m+'"')}).join("")+'<span class="muted">besides text</span></div></div>':"")+
-    '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label,r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div></div>';
+    '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label+(m===(multi?"fsdp":"qlora")?" · start here":""),r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div><div class="sub">The method decides how the model is spread over the GPUs. If you are new, keep the one marked start here.</div></div>';
   if(custom){ h+='<div class="sec">The recipe</div>'+customForm(o,r); }
   else {
     h+='<div class="srow"><label class="lbl" for="f-rmodel">Model folder</label><input id="f-rmodel" type="text" list="f-rmodels" value="'+esc(r.model)+'" placeholder="/scratch/<project>/<username>/models/'+(multi?"Qwen3-VL-8B-Instruct":"Qwen3-14B")+'">'+
-      '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">A downloaded Hugging Face model folder (compute nodes have no internet).</div></div>';
+      '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">The base model you want to teach: a Hugging Face model folder that is already downloaded. The cluster machines that run training have no internet, so it has to be on disk.</div></div>';
     h+='<div class="sec">The data</div>';
     if(caches.length){
-      h+='<div class="srow half"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select></div>'+
-         '<div class="srow half"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select></div>';
+      h+='<div class="srow half"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select><div class="sub">The examples the model learns from, already turned into the numbers it reads (this is called tokenised).</div></div>'+
+         '<div class="srow half"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select><div class="sub">Examples kept aside to check progress. The model never learns from them, so a better score here means it is really improving. Optional.</div></div>';
     } else {
-      h+='<div class="srow"><div class="sub">No tokenised data was found yet. Open <b>My data is not tokenised yet</b> below to prepare your files; they appear here when that job has finished.</div></div>';
+      h+='<div class="srow"><div class="sub">No tokenised data was found yet. The model reads numbers, not text, so your files have to be converted once. Open <b>My data is not tokenised yet</b> at the bottom and press Prepare data; it appears here when that job has finished.</div></div>';
     }
     h+='<div class="sec">The training</div><div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
-       '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div></div>'+
-       '<div class="srow half"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div></div>'+
-       '<div class="srow half"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Larger learns more and uses a little more memory.</div></div>'+
+       '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div><div class="sub">One step teaches the model one batch of examples. 100 to 300 steps is a quick trial; use 1000 or more for a real run.</div></div>'+
+       '<div class="srow half"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div><div class="sub">How big each learning step is. The usual value suits most runs; try a lower one if the loss jumps around.</div></div>'+
+       '<div class="srow half"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Instead of changing the whole model, LoRA trains a small add-on. A larger rank can learn more and uses a little more memory.</div></div>'+
        det(r,"more","More options",'<div class="chips" style="margin-top:8px">'+
          '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
          '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
@@ -966,6 +1036,7 @@ function recipeForm(o){
          '<label class="muted">Evaluate every <input id="f-revals" type="number" min="0" value="'+esc(r.evals)+'" placeholder="auto"> steps</label>'+
          (r.method==="hsdp"?'<label class="muted">GPUs per shard group <input id="f-rhsdp" type="number" min="0" value="'+esc(r.hsdp)+'" placeholder="one node"></label>':"")+
          (r.method==="pipeline"?'<label class="muted">Stages <input id="f-rstages" type="number" min="2" value="'+esc(r.stages)+'" placeholder="4"></label><label class="muted">Micro-batches <input id="f-rmicro" type="number" min="1" value="'+esc(r.micro)+'" placeholder="2 x stages"></label>':"")+'</div>'+
+         '<div class="sub">Batch size: examples each GPU handles per step. Gradient accumulation: gather several batches before each update. Save every: how often a checkpoint is written, so a stopped run can continue from it. Evaluate every: how often to check against the validation data.</div>'+
          (r.method==="hsdp"||r.method==="pipeline"?'<div class="sub">'+(r.method==="hsdp"?"The shard group must divide the number of GPUs you start with.":"The number of GPUs must divide by the stages.")+' The check on the Train page tells you if it does not.</div>':""));
   }
   h+='<div class="sec">'+(custom?"Settings on top":"More")+'</div>'+det(r,"all","All settings ("+((o.schema||[]).reduce(function(n,g){return n+g.fields.length},0))+" options)",allSettings(o,r));
@@ -1018,7 +1089,8 @@ function showSum(){
   var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, bits=[], warn=false;
   if(L.kind==="recipe"){
     var rc=L.rc; el.className="ssum"; var lab=(o.methods&&o.methods[rc.method]?o.methods[rc.method].label:"")+(rc.kind==="multimodal"?" · multimodal":"");
-    el.textContent=rc.method==="custom"?lab+" · the recipe is saved as you wrote it":lab+" · "+rc.steps+" steps · learning rate "+rc.lr+" · LoRA rank "+rc.rank+" · the adapter is saved, with a checkpoint every few hundred steps"; return;
+    var tc=(o.caches||[]).filter(function(c){return c.path===rc.train})[0], mname=(rc.model||"").split("/").filter(Boolean).pop()||"the model";
+    el.textContent=rc.method==="custom"?"Saves the recipe exactly as you wrote it. Nothing runs until you start it under Train.":"Saves a recipe that teaches "+mname+(tc&&tc.rows!=null?" with "+Number(tc.rows).toLocaleString()+" examples":"")+" for "+rc.steps+" steps ("+lab+"). Nothing runs yet: start it afterwards under Train."; return;
   }
   if(L.kind==="register"){
     var rr=runInfo(L.run); el.className="ssum"; el.textContent=rr.name?"Registers the adapter of "+rr.name+" as a new version"+(L.alias?", and points "+L.alias+" at it":""):""; return;
@@ -1083,7 +1155,7 @@ function send(action){
     if(r.j.error){ showResult("bad","Not started",r.j.error); return; }
     if(r.j.dry&&L.kind==="recipe"){ showResult("ok","This is the recipe that would be written. Nothing was saved yet.",r.j.output); return; }
     if(r.j.ok&&L.kind==="recipe"){
-      L.recipe=r.j.recipe; toast("Created "+r.j.recipe+". It is selected under Train a model: choose the nodes and press Start.");
+      L.recipe=r.j.recipe; toast("Saved the recipe "+r.j.recipe+". Next: choose how many nodes and press Start to train it.");
       L.kind="train"; L.step=0; api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(o){ L.opts=o.j; renderStart(); }); return;
     }
     if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }

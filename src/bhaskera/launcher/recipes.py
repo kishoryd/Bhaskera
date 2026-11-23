@@ -23,17 +23,17 @@ from typing import Any, Optional
 NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,60}$")
 METHODS = {
     "qlora": {"label": "QLoRA + DDP", "quantization": "qlora", "strategy": "ddp", "batch_size": 2, "kinds": ("text",),
-              "about": "Fastest for dense models up to about 123B: the frozen model is stored in 4 bits. Text models only."},
+              "about": "The usual starting point. The base model is squeezed to 4 bits so it needs far less memory, and only a small add-on is trained on top. Text models only."},
     "ddp": {"label": "DDP", "quantization": "none", "strategy": "ddp", "batch_size": 1, "kinds": ("text", "multimodal"),
-            "about": "The whole model on every GPU, in bf16: for models that fit on one GPU (around 14B)."},
+            "about": "Every GPU keeps a full copy of the model. Simple and fast when the model fits on one GPU, up to about 14 billion parameters."},
     "fsdp": {"label": "FSDP2", "quantization": "none", "strategy": "fsdp", "batch_size": 1, "kinds": ("text", "multimodal"),
-             "about": "The model is split over all GPUs: when it does not fit on one and nothing else works."},
+             "about": "The model is split across all the GPUs, so it can be bigger than one GPU holds. Pick this when DDP runs out of memory."},
     "hsdp": {"label": "HSDP", "quantization": "none", "strategy": "fsdp", "batch_size": 1, "kinds": ("text", "multimodal"),
-             "about": "Split inside a node, copied across nodes: gathers stay on the fast links. Needs more than one node to matter."},
+             "about": "Like FSDP2, but the model is split only inside each machine and copied between machines, which keeps the busiest traffic on the fastest links."},
     "pipeline": {"label": "Pipeline", "quantization": "none", "strategy": "pipeline", "batch_size": 1, "kinds": ("text",),
-                 "about": "The frozen model is cut by layers across GPUs, for the largest models. Text models only."},
+                 "about": "The model is cut into consecutive pieces, one piece per group of GPUs. For the very largest text models. Text models only."},
     "custom": {"label": "Custom", "quantization": "none", "strategy": "", "batch_size": 1, "kinds": ("text", "multimodal"),
-               "about": "Write or paste the whole recipe yourself, or start from a starter or one of your recipes and edit it."},
+               "about": "For people who already know the settings: write or paste the whole recipe, or start from a starter or one of your recipes and edit it."},
 }
 KINDS = {"text": "Text model", "multimodal": "Multimodal model"}
 MODALITIES = ("image", "video", "audio")
