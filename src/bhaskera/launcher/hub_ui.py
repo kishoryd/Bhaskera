@@ -200,6 +200,10 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 .ritem[aria-pressed=true]{background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
 .ritem b{font-weight:600}.ritem .m{margin-left:auto;font:12px var(--mono);color:var(--muted);white-space:nowrap}
 .srow details summary{cursor:pointer;color:var(--muted);font-size:13px}
+#f-setlist{max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:3px;padding:4px 10px}
+.setgroup{margin:10px 0}.settitle{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.setrow{display:grid;grid-template-columns:minmax(150px,1fr) minmax(120px,1fr);gap:4px 12px;align-items:center;padding:5px 0;border-top:1px solid var(--border)}
+.setrow .sub{grid-column:1/-1;margin:0}.setrow input,.setrow select{width:100%}
 .srow details label{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px}
 .ssum{margin:14px 22px 0;padding:10px 13px;border-left:3px solid var(--ink);background:var(--surface);font-size:13px;min-height:20px}
 .ssum.warn{border-left-color:var(--warn);background:var(--warn-soft)}
@@ -279,6 +283,10 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
         <tbody id="runs"></tbody>
       </table></div>
     </div>
+  </section>
+  <section id="cmpsec" hidden>
+    <h2>Compare models</h2>
+    <div class="card" id="cmp" style="padding:14px 16px"></div>
   </section>
   <details class="more" id="morebox"><summary>Cluster limits and node health <span id="morewarn"></span></summary><div id="cluster"></div></details>
   <footer id="foot"></footer>
@@ -481,6 +489,29 @@ function renderRuns(){
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
 }
 
+/* ---- compare benchmarked models ---- */
+var cmpSel={};
+function renderCompare(){
+  var runs=(state.runs||[]).filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length});
+  $("#cmpsec").hidden=!runs.length; if(!runs.length) return;
+  var chosen=runs.filter(function(r){return cmpSel[r.run_id]});
+  var keys=[]; chosen.forEach(function(r){ Object.keys(r.lm_scores).forEach(function(k){ if(keys.indexOf(k)<0) keys.push(k); }); }); keys.sort();
+  var h='<div class="chips">'+runs.map(function(r){ return '<button type="button" class="chipb" data-cmp="'+esc(r.run_id)+'" aria-pressed="'+(cmpSel[r.run_id]?"true":"false")+'">'+esc(r.name)+'</button>'; }).join("")+'</div>';
+  if(!chosen.length) h+='<div class="sub" style="margin-top:8px">Pick the models to put side by side. Each was benchmarked on its own with Benchmark; the score of the base model it started from is shown next to its own.</div>';
+  else {
+    var pct=function(v){ return v==null?"–":(100*v).toFixed(1); };
+    h+='<div class="scroll" style="margin-top:10px"><table><thead><tr><th>Test</th>'+chosen.map(function(r){return '<th class="num">'+esc(r.name)+'<div class="muted" style="font-weight:400">tuned (base)</div></th>'}).join("")+'</tr></thead><tbody>'+
+      keys.map(function(k){
+        var best=-1, vals=chosen.map(function(r){ var x=r.lm_scores[k]; return x&&x.tuned!=null?x.tuned:null; });
+        vals.forEach(function(v){ if(v!=null&&v>best) best=v; });
+        return '<tr><td>'+esc(k.replace(/_/g," "))+'</td>'+chosen.map(function(r,i){ var x=r.lm_scores[k]||{}; var top=vals[i]!=null&&vals[i]===best&&chosen.length>1;
+          return '<td class="num"'+(top?' style="font-weight:600"':"")+'>'+pct(x.tuned)+' <span class="muted">('+pct(x.base)+')</span></td>'; }).join("")+'</tr>'; }).join("")+'</tbody></table></div>'+
+      '<div class="sub" style="margin-top:6px">Scores are percent. The best tuned score in each row is bold. Models with different base models are comparable only on the same test and the same number of examples.</div>';
+  }
+  $("#cmp").innerHTML=h;
+}
+$("#cmp").addEventListener("click", function(e){ var b=e.target.closest("[data-cmp]"); if(!b) return; var id=b.getAttribute("data-cmp"); cmpSel[id]=!cmpSel[id]; renderCompare(); });
+
 /* ---- side panel ---- */
 function renderSide(){
   var s=state, first=(s.jobs||[]).filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
@@ -520,7 +551,7 @@ function render(){
   var jobs=(s.jobs||[]).slice().sort(function(a,b){ return ((order[a.state]||0)-(order[b.state]||0)) || (Number(b.id)-Number(a.id)); });
   $("#jobcount").textContent=jobs.length;
   $("#jobs").innerHTML=jobs.length ? jobs.map(jobCard).join("") : emptyJobs();
-  renderRuns(); renderSide(); renderChat();
+  renderRuns(); renderCompare(); renderSide(); renderChat();
   $("#foot").innerHTML='Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a>';
 }
 function clock(){
@@ -717,8 +748,8 @@ $("#jobs").addEventListener("click", function(e){ var b=e.target.closest("[data-
 $("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(chat.job,"Close server",$("#chat-close")); });
 
 /* ---- start a job ---- */
-var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, regname:"", alias:"champion",
-  rc:{name:"my-run",model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",raw:{train:"",val:"",format:"chatml",seq:"4096"}}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+var L = {opts:null, kind:"train", run:"", evalSel:[], own:{name:"",data:"",q:"question",a:"answer"}, shots:"", skipBase:false, rinfo:null, step:0, regname:"", alias:"",
+  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""}}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -736,13 +767,20 @@ function recipeName(f){ return f.replace(/\.ya?ml$/,""); }
 function runInfo(id){ return (state&&state.runs||[]).filter(function(r){return r.run_id===id})[0]||{}; }
 function runList(){
   var ok={}; (L.opts.runs||[]).forEach(function(r){ ok[r.run_id]=1; });
-  var rs=(state&&state.runs||[]).filter(function(r){return ok[r.run_id]});
+  var rs=(state&&state.runs||[]).filter(function(r){return ok[r.run_id]}), multi=L.kind==="eval";
   if(!rs.length) return '<div class="sub">No finished run has a saved adapter yet. Train with <code>logging.mlflow_log_adapter: true</code> in the recipe.</div>';
   if(!L.run||!ok[L.run]) L.run=rs[0].run_id;
-  return '<div class="rlist">'+rs.map(function(r){
-    return '<button type="button" class="ritem" data-run="'+esc(r.run_id)+'" aria-pressed="'+(r.run_id===L.run?"true":"false")+'"><b>'+esc(r.name)+'</b><span class="muted">'+ago(r.started)+'</span>'+
+  L.evalSel=L.evalSel.filter(function(id){return ok[id]}); if(multi&&!L.evalSel.length) L.evalSel=[L.run];
+  var on=function(id){ return multi?L.evalSel.indexOf(id)>=0:id===L.run; };
+  var h='<div class="rlist">'+rs.map(function(r){
+    return '<button type="button" class="ritem" data-run="'+esc(r.run_id)+'" aria-pressed="'+(on(r.run_id)?"true":"false")+'"><b>'+esc(r.name)+'</b><span class="muted">'+ago(r.started)+'</span>'+
       '<span class="m">'+(r.eval_loss!=null?"eval loss "+fx(r.eval_loss,3):"")+(r.lm_eval&&Object.keys(r.lm_eval).length?" · benchmarked":"")+'</span></button>';
-  }).join("")+'</div><input type="hidden" id="f-run" value="'+esc(L.run)+'">';
+  }).join("")+'</div>';
+  var refs=[]; (L.opts.models||[]).forEach(function(m){ (m.refs||[]).forEach(function(x){ if(ok[x.run_id]) refs.push({ref:x.ref,run:x.run_id,aliases:x.aliases||[],name:m.name}); }); });
+  if(L.kind!=="register"&&refs.length) h+='<div class="sub" style="margin-top:8px">Or a registered model:</div><div class="chips" style="margin-top:4px">'+refs.map(function(x){
+    return chip(x.ref+(x.aliases.length?" @"+x.aliases.join(" @"):""),on(x.run),'data-run="'+esc(x.run)+'"'); }).join("")+'</div>';
+  if(multi) h+='<div class="sub" style="margin-top:8px">'+(L.evalSel.length>1?L.evalSel.length+" models chosen: one benchmark job each, then put them side by side under Compare models.":"Choose more than one to compare models: each gets its own job.")+'</div>';
+  return h+'<input type="hidden" id="f-run" value="'+esc(L.run)+'">';
 }
 function hoursRow(opts,def){
   var cur=L.hours===""?def:L.hours;
@@ -776,16 +814,23 @@ function renderStart(){
     var known=(o.models||[]);
     h+='<div class="srow"><label class="lbl" for="f-name">Registry name</label><input id="f-name" type="text" value="'+esc(L.regname)+'" maxlength="64">'+
        (known.length?'<div class="chips" style="margin-top:8px">'+known.map(function(m){return chip(m.name+" ("+m.versions+(m.versions===1?" version":" versions")+")",L.regname===m.name,'data-name="'+esc(m.name)+'"')}).join("")+'</div><div class="sub">Pick one to add a new version to it.</div>':'<div class="sub">The first version creates the model.</div>')+'</div>'+
-       '<div class="srow"><label class="lbl">Alias</label><div class="chips">'+[["","none"],["champion","champion"],["staging","staging"]].map(function(a){return chip(a[1],L.alias===a[0],'data-alias="'+a[0]+'"')}).join("")+'</div>'+
-       '<div class="sub">An alias points at one version, for example <b>champion</b> for the one you trust; move it to a newer version later. Chat and benchmark accept <code>name@alias</code>.</div></div>';
+       '<div class="srow"><label class="lbl" for="f-alias">Alias (optional)</label><input id="f-alias" type="text" list="f-aliases" value="'+esc(L.alias)+'" maxlength="32" placeholder="a name of your choice, for example the stage it is in">'+
+       '<datalist id="f-aliases">'+aliasNames().map(function(a){return '<option value="'+esc(a)+'">'}).join("")+'</datalist>'+
+       '<div class="sub">An alias is a label you choose that points at one version; move it to a newer version later. '+(aliasNames().length?"Already in use: "+esc(aliasNames().join(", "))+". ":"")+'Chat and benchmark accept <code>name@alias</code>.</div></div>';
   } else {
     h+='<div class="srow"><label class="lbl">Trained model</label>'+runList()+'</div>';
     if(k==="eval") h+='<div class="srow"><label class="lbl">Tests</label><div class="chips">'+COMMON_TASKS.map(function(t){return chip(t,!!L.tasks[t],'data-t="'+t+'"')}).join("")+'</div>'+
+        (o.own_tests&&o.own_tests.length?'<div class="sub" style="margin-top:8px">Your own tests:</div><div class="chips" style="margin-top:4px">'+o.own_tests.map(function(t){return chip(t,!!L.tasks[t],'data-t="'+esc(t)+'"')}).join("")+'</div>':"")+
         '<div style="margin-top:8px"><input id="f-more" type="text" placeholder="other test names, separated by commas"></div>'+
+        '<div style="margin-top:8px"><details data-own="1"><summary>Add a test of your own</summary><div style="margin-top:8px"><div class="sub">A JSONL file with one question and its right answer per line. It becomes a test you can tick above and use on any model.</div>'+
+          '<input id="f-tname" type="text" value="'+esc(L.own.name)+'" placeholder="name of the test, for example my_support_questions" style="margin-top:8px">'+
+          '<input id="f-tdata" type="text" value="'+esc(L.own.data)+'" placeholder="/scratch/<project>/<username>/data/my_test.jsonl" style="margin-top:6px">'+
+          '<div class="chips" style="margin-top:8px"><label class="muted">Question field <input id="f-tq" type="text" value="'+esc(L.own.q)+'" style="width:110px"></label><label class="muted">Answer field <input id="f-ta" type="text" value="'+esc(L.own.a)+'" style="width:110px"></label>'+
+          '<button class="btn small" id="f-tgo" type="button">Add the test</button></div></div></details></div>'+
         '<div class="sub">The test data must be downloaded once: <code>python -m bhaskera.launcher.evaluate prepare --tasks &lt;names&gt;</code></div></div>'+
       '<div class="srow"><label class="lbl">How much</label><div class="chips">'+chip("Quick check: 200 examples per test",L.quick,'data-q="1"')+chip("Full test",!L.quick,'data-q="0"')+'</div></div>';
     h+='<div class="srow"><label class="lbl">Stop after</label>'+hoursRow([1,2,4,8],o.default_hours||2)+'</div>'+
-       '<div class="srow"><details'+(k==="eval"?' open':'')+'><summary>More options</summary>'+(k==="eval"?'<label><input id="f-samples" type="checkbox" checked> Keep every answer, to review the mistakes afterwards</label>':'')+'<label><input id="f-4bit" type="checkbox"> Load the model in 4-bit (as QLoRA trained it)</label></details></div>';
+       '<div class="srow"><details'+(k==="eval"?' open':'')+'><summary>More options</summary>'+(k==="eval"?'<label><input id="f-samples" type="checkbox" checked> Keep every answer, to review the mistakes afterwards</label>':'')+'<label><input id="f-4bit" type="checkbox"> Load the model in 4-bit (as QLoRA trained it)</label>'+(k==="eval"?'<label><input id="f-skipbase" type="checkbox"'+(L.skipBase?" checked":"")+'> Only the tuned model: skip the base model (quicker, but nothing to compare with)</label><label>Examples shown in each question <input id="f-shots" type="number" min="0" max="50" value="'+esc(L.shots)+'" placeholder="test default" style="width:110px"></label>':"")+'</details></div>';
   }
   $("#startfields").innerHTML=h; fillInfo(); showSum();
   var none = k==="recipe" ? false : k==="train" ? !(o.recipes||[]).some(function(r){return r.ready}) : k==="resume" ? !(o.stopped||[]).length : !(o.runs||[]).length;
@@ -796,38 +841,76 @@ function cacheLabel(c){ return c.name+" · "+(c.model||"?")+" · sequence "+(c.s
 function cacheOptions(list,sel,none){
   return (none?'<option value="">none (no evaluation during training)</option>':'')+list.map(function(c){ return '<option value="'+esc(c.path)+'"'+(c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join("");
 }
+function aliasNames(){ var out=[]; (L.opts.models||[]).forEach(function(m){ (m.aliases||[]).forEach(function(a){ if(out.indexOf(a)<0) out.push(a); }); }); return out; }
+function methodOk(o,m,kind){ var x=(o.methods||{})[m]; return !!x&&(x.kinds||["text","multimodal"]).indexOf(kind)>=0; }
+function det(r,key,title,body){ return '<div class="srow"><details data-od="'+key+'"'+(r.open[key]?" open":"")+'><summary>'+title+'</summary>'+body+'</details></div>'; }
+function settingRow(f,v){
+  var h=f.help?esc(f.help):"", d=f.default===null||f.default===undefined?"":(typeof f.default==="object"?JSON.stringify(f.default):String(f.default)), id="s-"+f.key, ctl;
+  if(f.type==="bool") ctl='<select data-set="'+esc(f.key)+'"><option value="">default ('+esc(d)+')</option><option value="true"'+(v==="true"?" selected":"")+'>true</option><option value="false"'+(v==="false"?" selected":"")+'>false</option></select>';
+  else ctl='<input type="text" data-set="'+esc(f.key)+'" value="'+esc(v||"")+'" placeholder="'+(d===""?(f.optional?"not set":"empty"):"default "+esc(d))+'">';
+  return '<div class="setrow" data-find="'+esc((f.key+" "+(f.help||"")).toLowerCase())+'"><div class="setkey"><code>'+esc(f.name)+'</code><span class="muted"> '+esc(f.type==="text-or-list"?"text or list":f.type)+'</span></div>'+ctl+(h?'<div class="sub">'+h+'</div>':"")+'</div>';
+}
+function allSettings(o,r){
+  if(!r.open.all) return '<div class="sub">Every option of a recipe, with what it does. Leave a box empty to keep the value above.</div>';
+  var n=Object.keys(r.settings).length;
+  return '<div class="sub">Every option of a recipe. Leave a box empty to keep the value the recipe above sets; what you type here wins. <span id="f-setcount">'+(n?n+" changed":"")+'</span></div>'+
+    '<input id="f-rfind" type="search" placeholder="Search the options, for example learning, offload, video" style="margin:8px 0">'+
+    '<div id="f-setlist">'+(o.schema||[]).map(function(g){
+      return '<div class="setgroup" data-section="'+esc(g.section)+'"><div class="settitle">'+esc(g.section)+'</div>'+g.fields.map(function(f){ return settingRow(f,r.settings[f.key]); }).join("")+'</div>';
+    }).join("")+'</div>';
+}
+function customForm(o,r){
+  var st=o.starters||[], rs=(o.recipes||[]).filter(function(x){return !x.tokenize});
+  var opts='<option value="">Start from …</option>'+(st.length?'<optgroup label="Starters shipped with Bhaskera">'+st.filter(function(x){return !x.tokenize}).map(function(x){return '<option value="starter:'+esc(x.file)+'"'+(r.base==="starter:"+x.file?" selected":"")+'>'+esc(x.label)+'</option>'}).join("")+'</optgroup>':"")+
+    (rs.length?'<optgroup label="Your recipes">'+rs.map(function(x){return '<option value="recipe:'+esc(x.file)+'"'+(r.base==="recipe:"+x.file?" selected":"")+'>'+esc(recipeName(x.file))+'</option>'}).join("")+'</optgroup>':"");
+  return '<div class="srow"><label class="lbl" for="f-rbase">The recipe</label><div class="chips"><select id="f-rbase">'+opts+'</select><button class="btn small" id="f-rload" type="button">Load it here</button></div>'+
+    '<textarea id="f-ryaml" rows="16" spellcheck="false" style="width:100%;margin-top:8px;font-family:var(--mono,monospace);font-size:12px" placeholder="model:\n  name: /path/to/model\ndata:\n  tokenized_path: /path/to/cache\ntraining:\n  max_steps: 300 …">'+esc(r.yaml)+'</textarea>'+
+    '<div class="sub">The whole recipe as YAML. A starter or recipe loaded here is saved under your name above, with its own run name and checkpoint folder. Fill every <code>&lt;project&gt;</code> placeholder before saving.</div></div>';
+}
 function recipeForm(o){
   var r=L.rc, caches=o.caches||[], tr=caches.filter(function(c){return c.side!=="val"}), va=caches.filter(function(c){return c.side!=="train"});
   if(!r.train||!caches.some(function(c){return c.path===r.train})) r.train=(tr[0]||{}).path||"";
   if(r.val!==""&&!caches.some(function(c){return c.path===r.val})) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
   if(r.val===""&&L.rcValTouched!==true) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
-  var methods=Object.keys(o.methods||{});
+  var methods=Object.keys(o.methods||{}).filter(function(m){return methodOk(o,m,r.kind)});
+  if(methods.indexOf(r.method)<0) r.method=methods[0]||"fsdp";
+  var multi=r.kind==="multimodal", custom=r.method==="custom";
   var h='<div class="srow"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">It is saved as <code>recipes/'+esc(r.name||"name")+'.yaml</code> and also names the run in MLflow.</div></div>'+
-    '<div class="srow"><label class="lbl" for="f-rmodel">Model folder</label><input id="f-rmodel" type="text" list="f-rmodels" value="'+esc(r.model)+'" placeholder="/scratch/<project>/<username>/models/Qwen3-14B">'+
-    '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">A downloaded Hugging Face model folder (compute nodes have no internet).</div></div>'+
+    '<div class="srow"><label class="lbl">Kind of model</label><div class="chips">'+chip("Text",!multi,'data-kind="text"')+chip("Multimodal (images, video, audio)",multi,'data-kind="multimodal"')+'</div></div>'+
+    (multi?'<div class="srow"><label class="lbl">The data holds</label><div class="chips">'+["image","video","audio"].map(function(m){return chip(m,r.mods.indexOf(m)>=0,'data-mod="'+m+'"')}).join("")+'<span class="muted">besides text</span></div></div>':"")+
     '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label,r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div></div>';
-  if(caches.length){
-    h+='<div class="srow"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select></div>'+
-       '<div class="srow"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select></div>';
-  } else {
-    h+='<div class="srow"><div class="sub">No tokenised data was found yet. Open <b>My data is not tokenised yet</b> below to prepare your files; they appear here when that job has finished.</div></div>';
+  if(custom){ h+=customForm(o,r); }
+  else {
+    h+='<div class="srow"><label class="lbl" for="f-rmodel">Model folder</label><input id="f-rmodel" type="text" list="f-rmodels" value="'+esc(r.model)+'" placeholder="/scratch/<project>/<username>/models/'+(multi?"Qwen3-VL-8B-Instruct":"Qwen3-14B")+'">'+
+      '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">A downloaded Hugging Face model folder (compute nodes have no internet).</div></div>';
+    if(caches.length){
+      h+='<div class="srow"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select></div>'+
+         '<div class="srow"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select></div>';
+    } else {
+      h+='<div class="srow"><div class="sub">No tokenised data was found yet. Open <b>My data is not tokenised yet</b> below to prepare your files; they appear here when that job has finished.</div></div>';
+    }
+    h+='<div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
+       '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div></div>'+
+       '<div class="srow"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div></div>'+
+       '<div class="srow"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Larger learns more and uses a little more memory.</div></div>'+
+       det(r,"more","More options",'<div class="chips" style="margin-top:8px">'+
+         '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
+         '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
+         '<label class="muted">Save every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto"> steps</label>'+
+         '<label class="muted">Evaluate every <input id="f-revals" type="number" min="0" value="'+esc(r.evals)+'" placeholder="auto"> steps</label>'+
+         (r.method==="hsdp"?'<label class="muted">GPUs per shard group <input id="f-rhsdp" type="number" min="0" value="'+esc(r.hsdp)+'" placeholder="one node"></label>':"")+
+         (r.method==="pipeline"?'<label class="muted">Stages <input id="f-rstages" type="number" min="2" value="'+esc(r.stages)+'" placeholder="4"></label><label class="muted">Micro-batches <input id="f-rmicro" type="number" min="1" value="'+esc(r.micro)+'" placeholder="2 x stages"></label>':"")+'</div>'+
+         (r.method==="hsdp"||r.method==="pipeline"?'<div class="sub">'+(r.method==="hsdp"?"The shard group must divide the number of GPUs you start with.":"The number of GPUs must divide by the stages.")+' The check on the Train page tells you if it does not.</div>':""));
   }
-  h+='<div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
-     '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div></div>'+
-     '<div class="srow"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div></div>'+
-     '<div class="srow"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Larger learns more and uses a little more memory.</div></div>'+
-     '<div class="srow"><details><summary>More options</summary><div class="chips" style="margin-top:8px">'+
-       '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
-       '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
-       '<label class="muted">Save every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto"> steps</label>'+
-       '<label class="muted">Evaluate every <input id="f-revals" type="number" min="0" value="'+esc(r.evals)+'" placeholder="auto"> steps</label></div></details></div>'+
-     '<div class="srow"><details><summary>My data is not tokenised yet</summary><div style="margin-top:8px">'+
-       '<div class="sub">Give the JSONL files (one conversation per line). A CPU job tokenises them once; then they show up as training data above.</div>'+
+  h+=det(r,"all","All settings ("+((o.schema||[]).reduce(function(n,g){return n+g.fields.length},0))+" options)",allSettings(o,r));
+  if(!custom) h+=det(r,"raw","My data is not tokenised yet",'<div style="margin-top:8px">'+
+       '<div class="sub">Give the JSONL files (one conversation per line'+(multi?", with the paths of the images, video or audio in each row":"")+'). A CPU job tokenises them once; then they show up as training data above.</div>'+
        '<input id="f-rawtrain" type="text" value="'+esc(r.raw.train)+'" placeholder="training file: /scratch/<project>/<username>/data/train.jsonl" style="margin-top:8px">'+
        '<input id="f-rawval" type="text" value="'+esc(r.raw.val)+'" placeholder="validation file (optional)" style="margin-top:6px">'+
+       (multi?'<input id="f-rawmedia" type="text" value="'+esc(r.raw.media)+'" placeholder="folder the media paths in the file are relative to (optional)" style="margin-top:6px">':"")+
        '<div class="chips" style="margin-top:8px">'+["chatml","alpaca","sharegpt"].map(function(f){return chip(f,r.raw.format===f,'data-fmt="'+f+'"')}).join("")+
-       '<label class="muted">Sequence length <input id="f-rawseq" type="number" min="128" value="'+esc(r.raw.seq)+'"></label>'+
-       '<button class="btn small" id="f-rawgo" type="button">Prepare data</button></div></div></details></div>';
+       '<label class="muted">Sequence length <input id="f-rawseq" type="number" min="128" value="'+esc(r.raw.seq)+'" placeholder="'+(multi?"1280":"4096")+'"></label>'+
+       '<button class="btn small" id="f-rawgo" type="button">Prepare data</button></div></div>');
   return h;
 }
 function goLabel(k){ return k==="register"?"Register":k==="recipe"?"Create recipe":"Start"; }
@@ -868,7 +951,8 @@ function fillInfo(){
 function showSum(){
   var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, bits=[], warn=false;
   if(L.kind==="recipe"){
-    var rc=L.rc; el.className="ssum"; el.textContent=(o.methods&&o.methods[rc.method]?o.methods[rc.method].label:"")+" · "+rc.steps+" steps · learning rate "+rc.lr+" · LoRA rank "+rc.rank+" · the adapter is saved, with a checkpoint every few hundred steps"; return;
+    var rc=L.rc; el.className="ssum"; var lab=(o.methods&&o.methods[rc.method]?o.methods[rc.method].label:"")+(rc.kind==="multimodal"?" · multimodal":"");
+    el.textContent=rc.method==="custom"?lab+" · the recipe is saved as you wrote it":lab+" · "+rc.steps+" steps · learning rate "+rc.lr+" · LoRA rank "+rc.rank+" · the adapter is saved, with a checkpoint every few hundred steps"; return;
   }
   if(L.kind==="register"){
     var rr=runInfo(L.run); el.className="ssum"; el.textContent=rr.name?"Registers the adapter of "+rr.name+" as a new version"+(L.alias?", and points "+L.alias+" at it":""):""; return;
@@ -897,14 +981,20 @@ function tasksValue(){
 function formData(action){
   var f={action:action,kind:L.kind};
   if(L.kind==="recipe"){
-    var r=L.rc; f.name=r.name; f.method=r.method; f.model=r.model; f.train_cache=r.train; f.val_cache=r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
-    if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; if(r.evals!=="") f.eval_steps=r.evals;
+    var r=L.rc; f.name=r.name; f.method=r.method; f.model_kind=r.kind; if(r.kind==="multimodal") f.modalities=r.mods;
+    f.settings=r.settings;
+    if(r.method==="custom"){ f.yaml=r.yaml; f.copy=r.copy; }
+    else {
+      f.model=r.model; f.train_cache=r.train; f.val_cache=r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
+      if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; if(r.evals!=="") f.eval_steps=r.evals;
+      if(r.method==="hsdp"&&r.hsdp!=="") f.hsdp_shard_size=r.hsdp; if(r.method==="pipeline"){ if(r.stages) f.stages=r.stages; if(r.micro) f.microbatches=r.micro; }
+    }
   }
   else if(L.kind==="register"){ f.run=val("f-run"); f.name=val("f-name"); f.alias=L.alias; }
   else if(L.kind==="resume"){ f.run=L.run; f.step=L.step||""; f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
   else if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
   else { f.run=val("f-run"); f.hours=val("f-hours")||L.hours||String(L.opts.default_hours||2); f.four_bit=$("#f-4bit").checked;
-    if(L.kind==="eval"){ f.tasks=tasksValue(); f.limit=L.quick?"200":""; f.samples=$("#f-samples").checked; } }
+    if(L.kind==="eval"){ f.tasks=tasksValue(); f.limit=L.quick?"200":""; f.samples=$("#f-samples").checked; f.skip_base=$("#f-skipbase").checked; if($("#f-shots").value.trim()!=="") f.num_fewshot=$("#f-shots").value.trim(); } }
   return f;
 }
 function showResult(cls,title,body){
@@ -912,7 +1002,9 @@ function showResult(cls,title,body){
 }
 function toast(msg){ var t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(function(){ t.hidden=true; },6000); }
 function send(action){
-  if(L.busy) return; var f=formData(action);
+  if(L.busy) return;
+  if(L.kind==="eval"&&L.evalSel.length>1){ sendEvalMany(action); return; }
+  var f=formData(action);
   if(action==="start"&&(L.kind==="train"||L.kind==="resume")&&!L.confirm){
     L.confirm=true; var g=L.opts.gpus_per_node, n=parseInt(f.nodes,10)||0;
     $("#startgo").textContent="Yes, start on "+n+(n===1?" node":" nodes")+(g?" ("+n*g+" GPUs)":""); $("#startgo").classList.add("confirm");
@@ -940,8 +1032,46 @@ function send(action){
     } else showResult("bad","Not submitted",r.j.output);
   }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); }).then(function(){ L.busy=false; if(L.opts) $("#startcheck").disabled=$("#startgo").disabled=!L.opts.enabled; });
 }
+function addOwnTest(){
+  var o=L.own, f={kind:"evaltask",action:"start",name:o.name,data:o.data,question_field:o.q||"question",answer_field:o.a||"answer"};
+  showResult("","Writing the test …","");
+  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
+    if(x.j.error){ showResult("bad","Not added",x.j.error); return; }
+    if(!x.j.ok){ showResult("bad","Not added",x.j.output); return; }
+    L.tasks[o.name]=1; L.own={name:"",data:"",q:"question",a:"answer"};
+    api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; renderStart(); toast("Added the test "+o.name+" and ticked it."); });
+  }).catch(function(){ showResult("bad","Not added","The page could not reach the hub."); });
+}
+function sendEvalMany(action){
+  var runs=L.evalSel.slice(), base=formData(action), jobs=[], notes=[];
+  L.busy=true; $("#startcheck").disabled=$("#startgo").disabled=true; showResult("",action==="check"?"Checking …":"Submitting "+runs.length+" jobs …","");
+  var step=function(i){
+    if(i>=runs.length) return Promise.resolve();
+    var f=Object.assign({},base,{run:runs[i]});
+    return api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
+      var nm=runInfo(runs[i]).name||runs[i].slice(0,8);
+      if(r.j.error){ notes.push(nm+": "+r.j.error); return; }
+      if(r.j.ok&&!r.j.dry) jobs.push(r.j.job);
+      notes.push(nm+": "+(r.j.ok?(r.j.dry?"checks out":"job #"+r.j.job):"not submitted"));
+      if(!r.j.ok&&r.j.output) notes.push("  "+r.j.output.split("\n").slice(-2).join(" "));
+    }).then(function(){ return new Promise(function(res){ setTimeout(res,2200); }); }).then(function(){ return step(i+1); });
+  };
+  step(0).then(function(){
+    if(action==="check") showResult(notes.some(function(n){return /not submitted|^[^:]+: [A-Z]/.test(n)&&!/checks out/.test(n)})?"bad":"ok","Checked "+runs.length+" models. Nothing was submitted.",notes.join("\n"));
+    else if(jobs.length===runs.length){ toast(jobs.length+" benchmark jobs submitted. Compare them on this page when they finish."); $("#startbox").close(); refresh(); }
+    else showResult("bad",jobs.length+" of "+runs.length+" submitted",notes.join("\n"));
+  }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); }).then(function(){ L.busy=false; if(L.opts) $("#startcheck").disabled=$("#startgo").disabled=!L.opts.enabled; });
+}
+function loadBase(){
+  var base=val("f-rbase"); if(!base){ showResult("bad","Pick something to start from",""); return; }
+  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify({kind:"recipe",action:"show",base:base})}).then(function(x){
+    if(x.j.error){ showResult("bad","Could not load it",x.j.error); return; }
+    L.rc.yaml=x.j.output; L.rc.base=base; L.rc.copy=true; $("#startout").hidden=true; renderStart();
+  });
+}
 function prepareData(){
-  var r=L.rc, f={action:"start",kind:"tokenize",name:r.name,model:r.model,train_path:r.raw.train,val_path:r.raw.val,format:r.raw.format,seq_len:r.raw.seq};
+  var r=L.rc, f={action:"start",kind:"tokenize",name:r.name,model:r.model,train_path:r.raw.train,val_path:r.raw.val,format:r.raw.format,seq_len:r.raw.seq,model_kind:r.kind};
+  if(r.kind==="multimodal"){ f.modalities=r.mods; f.media_root=r.raw.media; }
   showResult("","Submitting the tokenising job …","");
   api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
     if(x.j.error){ showResult("bad","Not started",x.j.error); return; }
@@ -964,21 +1094,30 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
   else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
   else if(b.hasAttribute("data-method")){ L.rc.method=b.getAttribute("data-method"); renderStart(); }
+  else if(b.hasAttribute("data-kind")){ L.rc.kind=b.getAttribute("data-kind"); renderStart(); }
+  else if(b.hasAttribute("data-mod")){ var mm=b.getAttribute("data-mod"), ix=L.rc.mods.indexOf(mm); if(ix>=0){ if(L.rc.mods.length>1) L.rc.mods.splice(ix,1); } else L.rc.mods.push(mm); renderStart(); }
+  else if(b.id==="f-rload"){ loadBase(); }
   else if(b.hasAttribute("data-steps")){ L.rc.steps=b.getAttribute("data-steps"); renderStart(); }
   else if(b.hasAttribute("data-lr")){ L.rc.lr=b.getAttribute("data-lr"); renderStart(); }
   else if(b.hasAttribute("data-rank")){ L.rc.rank=b.getAttribute("data-rank"); renderStart(); }
   else if(b.hasAttribute("data-fmt")){ L.rc.raw.format=b.getAttribute("data-fmt"); renderStart(); }
   else if(b.id==="f-rawgo"){ prepareData(); }
   else if(b.hasAttribute("data-name")){ L.regname=b.getAttribute("data-name"); L.regnameFor=L.run; renderStart(); }
-  else if(b.hasAttribute("data-alias")){ L.alias=b.getAttribute("data-alias"); renderStart(); }
   else if(b.hasAttribute("data-step")){ L.step=parseInt(b.getAttribute("data-step"),10); showResume(); }
-  else if(b.hasAttribute("data-run")){ L.run=b.getAttribute("data-run"); renderStart(); }
+  else if(b.hasAttribute("data-run")){
+    var rid=b.getAttribute("data-run");
+    if(L.kind==="eval"){ var at=L.evalSel.indexOf(rid); if(at>=0){ if(L.evalSel.length>1) L.evalSel.splice(at,1); } else L.evalSel.push(rid); L.run=L.evalSel[L.evalSel.length-1]; }
+    else L.run=rid;
+    renderStart();
+  }
+  else if(b.id==="f-tgo"){ addOwnTest(); }
 });
 $("#startfields").addEventListener("input", function(e){
   if(e.target.id==="f-nodes"){ var n=parseInt(e.target.value,10); L.nodes=n||L.nodes; showSum(); }
   else if(e.target.id==="f-hours"){ L.hours=e.target.value.trim(); showSum(); }
   if(L.kind==="resume") showSum();
   else if(e.target.id==="f-recipe"){ L.recipe=e.target.value; fillInfo(); }
+  else if(e.target.id==="f-alias"){ L.alias=e.target.value.trim(); showSum(); }
   else if(e.target.id==="f-name"){ L.regname=e.target.value.trim(); L.regnameFor=L.run; }
   else if(e.target.id==="f-rname"){ L.rc.name=e.target.value.trim(); }
   else if(e.target.id==="f-rmodel"){ L.rc.model=e.target.value.trim(); }
@@ -992,7 +1131,35 @@ $("#startfields").addEventListener("input", function(e){
   else if(e.target.id==="f-rawtrain"){ L.rc.raw.train=e.target.value.trim(); }
   else if(e.target.id==="f-rawval"){ L.rc.raw.val=e.target.value.trim(); }
   else if(e.target.id==="f-rawseq"){ L.rc.raw.seq=e.target.value.trim(); }
+  else if(e.target.id==="f-tname"){ L.own.name=e.target.value.trim(); }
+  else if(e.target.id==="f-tdata"){ L.own.data=e.target.value.trim(); }
+  else if(e.target.id==="f-tq"){ L.own.q=e.target.value.trim(); }
+  else if(e.target.id==="f-ta"){ L.own.a=e.target.value.trim(); }
+  else if(e.target.id==="f-skipbase"){ L.skipBase=e.target.checked; }
+  else if(e.target.id==="f-shots"){ L.shots=e.target.value.trim(); }
+  else if(e.target.id==="f-rawmedia"){ L.rc.raw.media=e.target.value.trim(); }
+  else if(e.target.id==="f-rhsdp"){ L.rc.hsdp=e.target.value.trim(); }
+  else if(e.target.id==="f-rstages"){ L.rc.stages=e.target.value.trim(); }
+  else if(e.target.id==="f-rmicro"){ L.rc.micro=e.target.value.trim(); }
+  else if(e.target.id==="f-ryaml"){ L.rc.yaml=e.target.value; L.rc.copy=L.rc.copy&&!!L.rc.base; }
+  else if(e.target.id==="f-rbase"){ L.rc.base=e.target.value; }
+  else if(e.target.id==="f-rfind"){ filterSettings(e.target.value); }
+  else if(e.target.hasAttribute("data-set")){ setSetting(e.target); }
 });
+function setSetting(el){
+  var k=el.getAttribute("data-set"), v=el.value.trim(); if(v==="") delete L.rc.settings[k]; else L.rc.settings[k]=v;
+  var n=Object.keys(L.rc.settings).length, c=$("#f-setcount"); if(c) c.textContent=n?n+" changed":"";
+}
+function filterSettings(q){
+  q=q.trim().toLowerCase(); var groups=document.querySelectorAll("#f-setlist .setgroup");
+  Array.prototype.forEach.call(groups,function(g){ var any=false;
+    Array.prototype.forEach.call(g.querySelectorAll(".setrow"),function(r){ var on=!q||r.getAttribute("data-find").indexOf(q)>=0; r.hidden=!on; if(on) any=true; });
+    g.hidden=!any; });
+}
+$("#startfields").addEventListener("toggle", function(e){
+  var k=e.target.getAttribute&&e.target.getAttribute("data-od"); if(!k||L.kind!=="recipe") return;
+  var was=!!L.rc.open[k]; L.rc.open[k]=e.target.open; if(k==="all"&&e.target.open&&!was) renderStart();
+}, true);
 $("#startcheck").addEventListener("click", function(){ send("check"); });
 $("#startgo").addEventListener("click", function(){ send("start"); });
 

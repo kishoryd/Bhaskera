@@ -78,7 +78,7 @@ def test_bad_inputs(server):
     srv, _hub, calls = server
     assert _post(srv, b"not json")[0] == 400
     assert _post(srv, b"[1,2]")[0] == 400
-    assert _post(srv, b"x" * 20000)[0] == 413
+    assert _post(srv, b"x" * 300000)[0] == 413
     code, out = _post(srv, {"action": "start", "kind": "train", "recipe": "ok.yaml", "nodes": "1; ls"})
     assert code == 400 and "whole number" in out["error"] and calls == []
 

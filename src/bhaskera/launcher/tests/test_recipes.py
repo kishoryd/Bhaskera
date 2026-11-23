@@ -146,7 +146,7 @@ def test_the_page_offers_caches_models_and_methods(world):
     (work / "recipes" / "ready.yaml").write_text(yaml.safe_dump({"model": {"name": str(model)}}))
     o = launcher(work, Fake()).options()
     assert {c["name"] for c in o["caches"]} == {"local_train_aaaa", "local_val_bbbb"} and o["model_folders"] == [str(model)]
-    assert set(o["methods"]) == {"qlora", "ddp", "fsdp"} and o["methods"]["qlora"]["label"] == "QLoRA + DDP"
+    assert set(o["methods"]) == {"qlora", "ddp", "fsdp", "hsdp", "pipeline", "custom"} and o["methods"]["qlora"]["label"] == "QLoRA + DDP"
 
 
 def test_creating_a_recipe_from_the_page(world):
@@ -173,3 +173,47 @@ def test_preparing_data_from_the_page(world, tmp_path):
     argv = fake.calls[-1][0]
     assert argv[0] == "bash" and argv[2:] == ["tokenize", str(work / "recipes" / "tokenize-d1.yaml")] and out["job"] == "31"
     assert (work / "recipes" / "tokenize-d1.yaml").is_file()
+
+
+def test_hsdp_and_pipeline_set_their_own_keys(world):
+    work, model, cache = world
+    h = recipes.build(form(model, cache, method="hsdp", hsdp_shard_size="4"), work)
+    assert h["training"]["distributed"] == {"strategy": "fsdp", "fsdp": {"sharding_strategy": "HYBRID_SHARD", "hsdp_shard_size": 4, "activation_checkpointing": True}}
+    p = recipes.build(form(model, cache, method="pipeline", stages="4"), work)
+    assert p["training"]["distributed"]["pipeline"]["stages"] == 4 and p["training"]["distributed"]["pipeline"]["microbatches"] == 8
+    recipes.validate(recipes.render(h))
+
+
+def test_multimodal_recipe_has_media_and_refuses_what_cannot_work(world):
+    work, model, cache = world
+    r = recipes.build(form(model, cache, method="fsdp", model_kind="multimodal", modalities=["image", "audio"]), work)
+    assert r["model"]["kind"] == "multimodal" and r["data"]["modalities"] == ["text", "image", "audio"] and "runtime_packing" not in r["data"]
+    for method in ("qlora", "pipeline"):
+        with pytest.raises(recipes.RecipeError, match="not available for multimodal"):
+            recipes.build(form(model, cache, method=method, model_kind="multimodal"), work)
+    with pytest.raises(recipes.RecipeError, match="image, video and audio"):
+        recipes.build(form(model, cache, method="fsdp", model_kind="multimodal", modalities=["smell"]), work)
+
+
+def test_every_setting_can_be_set_and_typos_are_refused(world):
+    work, model, cache = world
+    r = recipes.build(form(model, cache, method="fsdp", settings={"training.weight_decay": "0.01", "training.distributed.fsdp.cpu_offload": "yes",
+                                                                    "logging.tags": "a, b", "monitoring.dashboard_host": "0.0.0.0"}), work)
+    assert r["training"]["weight_decay"] == 0.01 and r["training"]["distributed"]["fsdp"]["cpu_offload"] is True and r["logging"]["tags"] == ["a", "b"]
+    assert r["monitoring"]["dashboard_host"] == "127.0.0.1"
+    with pytest.raises(recipes.RecipeError, match="did you mean 'training.lr'"):
+        recipes.build(form(model, cache, method="fsdp", settings={"training.lrr": "1"}), work)
+    with pytest.raises(recipes.RecipeError, match="whole number"):
+        recipes.build(form(model, cache, method="fsdp", settings={"training.max_steps": "x"}), work)
+    assert len(recipes.fields()) > 100 and all(g["fields"] for g in recipes.schema())
+
+
+def test_custom_recipe_from_yaml(world):
+    work, model, cache = world
+    text = yaml.safe_dump({"model": {"name": str(model)}, "checkpoint": {"save_dir": "/elsewhere"}, "logging": {"run_name": "old"}})
+    r = recipes.build({"name": "mine", "method": "custom", "yaml": text, "copy": True}, work)
+    assert r["logging"]["run_name"] == "mine" and r["checkpoint"]["save_dir"].endswith("checkpoints/mine")
+    with pytest.raises(recipes.RecipeError, match="placeholder"):
+        recipes.build({"name": "mine", "method": "custom", "yaml": "model:\n  name: /scratch/<project>/m\n"}, work)
+    with pytest.raises(recipes.RecipeError, match="not valid YAML"):
+        recipes.build({"name": "mine", "method": "custom", "yaml": "a: [1"}, work)

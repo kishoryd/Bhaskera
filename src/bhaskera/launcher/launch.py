@@ -27,8 +27,10 @@ RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
 RECIPE_FILE = re.compile(r"^[A-Za-z0-9_.\-]{1,100}\.ya?ml$")
 SUBMITTED = re.compile(r"submitted job (\d+)")
+TEST_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,40}$")
+FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 PLACEHOLDER = re.compile(r"<project>|<username>|REPLACE_")
-KINDS = ("train", "serve", "eval", "resume", "register", "cancel", "recipe", "tokenize")
+KINDS = ("train", "serve", "eval", "resume", "register", "cancel", "recipe", "tokenize", "evaltask")
 MAX_NODES, MAX_HOURS, MAX_LIMIT = 1024, 720, 100000
 STARTS_PER_HOUR = 12
 MIN_GAP_S = 2.0
@@ -145,7 +147,8 @@ class Launcher:
         recipes = list_recipes(self.kit, self._env) if self.kit else []
         runs = [{"run_id": r["run_id"], "name": r["name"], "status": r["status"]} for r in self._runs() if r.get("has_adapter")]
         return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "models": self._models(),
-                "caches": self._caches(), "model_folders": self._model_folders(), "methods": {k: {"label": v["label"], "about": v["about"]} for k, v in _methods().items()},
+                "caches": self._caches(), "model_folders": self._model_folders(), "methods": {k: {"label": v["label"], "about": v["about"], "kinds": list(v["kinds"])} for k, v in _methods().items()},
+                "starters": self._starters(), "schema": self._schema(), "own_tests": self._own_tests(),
                 "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
 
@@ -168,7 +171,8 @@ class Launcher:
         """The models already in the registry (name, number of versions, aliases), to offer when registering another version."""
         try:
             from . import register
-            return [{"name": m["name"], "versions": len(m["versions"]), "aliases": sorted({a for v in m["versions"] for a in v["aliases"]})}
+            return [{"name": m["name"], "versions": len(m["versions"]), "aliases": sorted({a for v in m["versions"] for a in v["aliases"]}),
+                     "refs": [{"ref": f"{m['name']}:{v['version']}", "run_id": v["run_id"], "aliases": v["aliases"]} for v in m["versions"]]}
                     for m in register.listing(register.make_client(self._store or register._store_default()))]
         except Exception:
             return []
@@ -215,9 +219,96 @@ class Launcher:
         except Exception:
             return []
 
+    def _tasks_dir(self) -> Optional[Path]:
+        """The folder with your own tests: $BHASKERA_TASKS_DIR, or the tasks folder next to submit.sh when it exists."""
+        d = self._env.get("BHASKERA_TASKS_DIR")
+        if d and Path(d).is_dir():
+            return Path(d).resolve()
+        return (self.kit / "tasks").resolve() if self.kit and (self.kit / "tasks").is_dir() else None
+
+    def _own_tests(self) -> list[str]:
+        d = self._tasks_dir()
+        names: list[str] = []
+        for f in sorted(d.glob("*.yaml")) if d else []:
+            try:
+                m = re.search(r"^task:\s*([A-Za-z0-9_\-]+)\s*$", f.read_text(), re.M)
+            except OSError:
+                continue
+            if m and m.group(1) not in names:
+                names.append(m.group(1))
+        return names
+
+    def _evaltask(self, form: dict, dry: bool) -> dict:
+        """Write a test of your own (a question/answer JSONL file) into the tasks folder. Quick, so no Slurm job."""
+        name = form.get("name")
+        if not isinstance(name, str) or not TEST_NAME.match(name):
+            raise LaunchError("a test name is letters, digits and _, starting with a letter")
+        data = Path(str(form.get("data") or "")).expanduser()
+        if not data.is_absolute() or not data.is_file():
+            raise LaunchError("the data must be the full path of a JSONL file that exists")
+        q, a = form.get("question_field") or "question", form.get("answer_field") or "answer"
+        if not (isinstance(q, str) and FIELD_NAME.match(q) and isinstance(a, str) and FIELD_NAME.match(a)):
+            raise LaunchError("a field name is letters, digits and _")
+        if name in self._own_tests():
+            raise LaunchError(f"a test called {name} exists already: pick another name")
+        folder = self._tasks_dir() or (self.kit / "tasks")
+        if dry:
+            return {"ok": True, "job": None, "dry": True, "output": f"Looks fine: {name} would be written to {folder}"}
+        cmd = [sys.executable, "-m", "bhaskera.launcher.evaluate", "init-task", "--name", name, "--data", str(data.resolve()),
+               "--question-field", q, "--answer-field", a, "--out", str(folder)]
+        try:
+            done = self._run(cmd, cwd=str(self.kit), env={k: v for k, v in self._env.items()}, capture_output=True, text=True, timeout=60,
+                             stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "job": None, "dry": False, "output": "writing the test took too long; try again"}
+        return {"ok": done.returncode == 0, "job": None, "dry": False, "output": ((done.stdout or "") + (done.stderr or "")).strip()[-2000:], "test": name}
+
+    def _starters(self) -> list[dict]:
+        """The ready-made configs shipped with Bhaskera (configs/text, configs/multimodal), to start a custom recipe from."""
+        out = []
+        for base in self._starter_dirs():
+            for f in sorted(base.glob("*/*.yaml")):
+                if f.parent.name in ("text", "multimodal"):
+                    out.append({"file": f"{f.parent.name}/{f.name}", "label": f"{f.parent.name}/{f.stem}", "tokenize": f.stem.startswith("tokenize")})
+            if out:
+                break
+        return out
+
+    def _starter_dirs(self) -> list[Path]:
+        dirs = []
+        if self._env.get("BHASKERA_DIR"):
+            dirs.append(Path(self._env["BHASKERA_DIR"]) / "configs")
+        if self.kit:
+            dirs += [self.kit.parent / "configs", self.kit / "configs"]
+        return [d for d in dirs if d.is_dir()]
+
+    def _schema(self) -> list[dict]:
+        try:
+            from . import recipes
+            return recipes.schema()
+        except Exception:
+            return []
+
+    def _recipe_text(self, base) -> str:
+        """The text of a starter ('starter:text/fsdp.yaml') or of one of your recipes ('recipe:name.yaml'), to edit in the Custom box."""
+        if not isinstance(base, str) or ":" not in base:
+            raise LaunchError("pick what to start from")
+        what, name = base.split(":", 1)
+        if what == "starter" and re.fullmatch(r"(text|multimodal)/[A-Za-z0-9_.\-]{1,80}\.ya?ml", name):
+            for d in self._starter_dirs():
+                if (d / name).is_file():
+                    return (d / name).read_text()
+        elif what == "recipe" and RECIPE_FILE.match(name):
+            for d in recipe_dirs(self.kit, self._env):
+                if (d / name).is_file():
+                    return (d / name).read_text()
+        raise LaunchError("that one is not in the list")
+
     def _recipe(self, form: dict, dry: bool) -> dict:
         """Write recipes/<name>.yaml from a few choices (dry: only show it). It is loaded with the training job's own loader first."""
         from . import recipes
+        if form.get("action") == "show":
+            return {"ok": True, "job": None, "dry": True, "output": self._recipe_text(form.get("base"))}
         try:
             recipe = recipes.build(form, self.kit)
             text = recipes.render(recipe)
@@ -335,7 +426,15 @@ class Launcher:
             limit = _int(form.get("limit"), "examples per task", 1, MAX_LIMIT, required=False)
             if limit:
                 args += ["--limit", str(limit)]
-        return args, {"EVAL_HOURS" if kind == "eval" else "SERVE_HOURS": str(hours)}
+            shots = _int(form.get("num_fewshot"), "examples shown in each question", 0, 50, required=False)
+            if shots is not None:
+                args += ["--num-fewshot", str(shots)]
+            if form.get("skip_base") is True:
+                args.append("--skip-base")
+        extra = {"EVAL_HOURS" if kind == "eval" else "SERVE_HOURS": str(hours)}
+        if kind == "eval" and self._tasks_dir():
+            extra["BHASKERA_TASKS_DIR"] = str(self._tasks_dir())
+        return args, extra
 
     def _guard(self, now: float) -> None:
         self._starts = [t for t in self._starts if now - t < 3600]
@@ -358,6 +457,8 @@ class Launcher:
             return self._recipe(form, dry)
         if form.get("kind") == "tokenize":
             return self._tokenize(form, dry)
+        if form.get("kind") == "evaltask":
+            return self._evaltask(form, dry)
         args, extra = self.build(form)
         if not self._lock.acquire(blocking=False):
             raise LaunchError("another start is still running; wait for it to finish")

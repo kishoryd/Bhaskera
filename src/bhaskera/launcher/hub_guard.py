@@ -25,7 +25,7 @@ ALLOWED_HOST = re.compile(r"^(localhost|127\.0\.0\.1|\[::1\]|job-\d+\.localhost|
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 MAX_BODY = 10 * 1024 * 1024
 MAX_CHAT_BODY = 100 * 1024 * 1024        # a conversation with attached images, video or audio (the chat server checks each file)
-MAX_FORM_BODY = 16 * 1024
+MAX_FORM_BODY = 256 * 1024
 MAX_CONNECTIONS = 64
 
 # Added to every page and answer the hub itself produces (not to what it relays from Ray, Grafana or MLflow).

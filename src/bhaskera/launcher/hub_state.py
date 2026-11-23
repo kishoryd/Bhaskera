@@ -168,6 +168,22 @@ def _lm_eval_deltas(metrics: Path) -> dict:
     return out
 
 
+def _lm_eval_scores(metrics: Path) -> dict:
+    """{task_metric: {base, tuned}} scores stored by bhaskera.launcher.evaluate (files lmeval_*_base and lmeval_*_tuned)."""
+    out: dict = {}
+    try:
+        for entry in os.scandir(metrics):
+            if entry.name.startswith("lmeval_"):
+                for side in ("base", "tuned"):
+                    if entry.name.endswith("_" + side):
+                        value = _last_value(Path(entry.path))
+                        if value is not None:
+                            out.setdefault(entry.name[len("lmeval_"):-len(side) - 1], {})[side] = value
+    except OSError:
+        pass
+    return out
+
+
 def _newest_mtime(metrics: Path, fallback: Path) -> float:
     """When a run last wrote a number (older versions never closed their runs, so 'running' can be a long time ago)."""
     newest = 0.0
@@ -213,7 +229,7 @@ def recent_runs(store: str | Path, limit: int = 40, now: Optional[float] = None)
         stale = status == "RUNNING" and now - _newest_mtime(metrics, meta) > STALE_AFTER_S
         adapter = (run / "artifacts" / "adapter" / "adapter_config.json").exists()
         runs.append({
-            "has_adapter": adapter, "lm_eval": _lm_eval_deltas(metrics),
+            "has_adapter": adapter, "lm_eval": _lm_eval_deltas(metrics), "lm_scores": _lm_eval_scores(metrics),
             "run_id": run.name, "experiment_id": run.parent.name, "name": info["run_name"], "status": status,
             "started": started, "duration_s": int((ended or now) - started) if started else None, "stale": stale,
             "job": _tag(run, "slurm_job"), "group": _tag(run, "group"),
