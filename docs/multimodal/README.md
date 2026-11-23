@@ -69,12 +69,14 @@ Checked before anything starts (`check_multimodal_settings`): the pipeline strat
 
 ```bash
 # 1. tokenise once (CPU; decodes media only to count their tokens)
-PYTHONPATH=src python -m bhaskera.launcher.tokenize --config configs/multimodal/tokenize_vision.yaml --split both
-# 2. put the two printed cache paths into the training config, then
-sbatch scripts/submit_multimodal.sh configs/multimodal/fsdp.yaml
+python -m bhaskera.launcher.tokenize --config configs/multimodal/tokenize_vision.yaml --split both
+# 2. put the two printed cache paths into the training config, then submit it like any other recipe
+./submit.sh configs/multimodal/fsdp.yaml <nodes> <hours>
 ```
 
-`submit_multimodal.sh` defaults to 5 nodes on `gpu-small`, the minimum that partition accepts on PARAM Rudra; change it with `sbatch --nodes=...`.
+Multimodal jobs go through the same `submit.sh` as text jobs: the partition, GPUs per node and network come from the cluster profile, and
+the checks run first. Video and audio need PyAV and soundfile (`pip install av soundfile`; the central install has them). The home page's
+**Start a job** works for these recipes too, and a multimodal run that stops is continued with `./submit.sh resume --run <run id>`.
 
 Starters, one per input type, in `configs/multimodal/`:
 

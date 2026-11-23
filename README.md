@@ -139,5 +139,5 @@ folder it belongs to: `data/`, `models/`, `distributed/`, `trainer/` and `utils/
 checkpoint writing and resuming, node checks, choosing the partition, and the home page. These are in `src/bhaskera/`, and you do not
 need to touch them.
 
-`scripts/` has a few tools: multimodal job submission and sample data, adapter export, and the MXFP4 converter. The history is in
+`scripts/` has a few tools: multimodal sample data, adapter export, and the MXFP4 converter. The history is in
 [CHANGELOG.md](CHANGELOG.md).
