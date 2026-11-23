@@ -3,6 +3,8 @@
 #
 #   ./submit.sh <recipe.yaml> <nodes> [hours]      training (runs bhaskera-preflight first)
 #   ./submit.sh tokenize <tokenize.yaml>           tokenise data (gpu-debug, 1 node)
+#   ./submit.sh resume --run <run id> [--step N] [--nodes N] [--hours H]
+#                                                  continue a run that stopped, from its last (or an earlier) checkpoint
 #
 # Needs:  export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera
 #         export SLURM_ACCOUNT=<your_account>      (your project account, used as sbatch -A)
@@ -31,6 +33,18 @@ if [[ "${1:-}" == "tokenize" ]]; then
     cfg="${2:?usage: ./submit.sh tokenize <tokenize.yaml>}"
     sbatch -A "$SLURM_ACCOUNT" "${EXCL[@]}" tokenize.sbatch "$cfg"
     exit
+fi
+
+if [[ "${1:-}" == "resume" ]]; then
+    shift
+    [[ $# -gt 0 ]] || { echo "usage: ./submit.sh resume --run <mlflow run id> [--step N] [--nodes N] [--hours H]"; exit 1; }
+    source "$BHASKERA_DIR/bhaskera-activate.sh"
+    # the recipe, nodes and time of the stopped job, and the checkpoint to continue from (or the reason it cannot be done)
+    plan="$(python -m bhaskera.launcher.resume plan "$@" --submit-dir "$PWD")" || exit 1
+    read -r r_recipe r_nodes r_hours r_step r_run <<< "$plan"
+    [[ "$r_step" != "0" ]] && export BHASKERA_RESUME_STEP="$r_step"
+    export BHASKERA_RESUME_OF="$r_run"
+    set -- "$r_recipe" "$r_nodes" "$r_hours"
 fi
 
 if [[ "${1:-}" == "eval" || "${1:-}" == "serve" ]]; then

@@ -183,7 +183,7 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 .choice b{font-size:14px}.choice span{font-size:12.5px;color:var(--muted)}
 .choice:hover{border-color:var(--ink)}
 .choice[aria-pressed=true]{border-color:var(--ink);box-shadow:inset 3px 0 0 var(--accent);background:var(--surface)}
-.sfields{padding:6px 22px 0;display:flex;flex-direction:column;gap:16px}
+.sfields,#f-resume{padding:6px 22px 0;display:flex;flex-direction:column;gap:16px}#f-resume{padding:0}
 .srow label.lbl{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em}
 .srow select,.srow input[type=number],.srow input[type=text]{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:3px;padding:7px 10px;font:inherit}
 .srow select{width:100%}.srow input[type=number]{width:90px}.srow input[type=text]{width:100%}
@@ -278,6 +278,7 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
     <button type="button" class="choice" data-k="train"><b>Train a model</b><span>Fine-tune with one of your recipes</span></button>
     <button type="button" class="choice" data-k="serve"><b>Chat with a trained model</b><span>Ask the tuned model, the base model, or both</span></button>
     <button type="button" class="choice" data-k="eval"><b>Benchmark a trained model</b><span>Compare it with its base on standard tests</span></button>
+    <button type="button" class="choice" data-k="resume"><b>Resume a stopped run</b><span>Continue from its last checkpoint after a failure</span></button>
   </div>
   <div id="startnote" class="startnote" hidden></div>
   <div class="sfields" id="startfields"></div>
@@ -453,7 +454,8 @@ function renderRuns(){
   var all=state.runs||[], hasEval=all.some(function(r){return r.eval_loss!=null}), hasBench=all.some(function(r){return r.lm_eval&&Object.keys(r.lm_eval).length});
   $("#runhead").innerHTML='<tr><th>Run</th><th>Status</th><th>Started</th>'+(hasEval?'<th class="num">Eval loss</th>':'')+(hasBench?'<th>Benchmarks</th>':'')+'<th></th></tr>';
   $("#runs").innerHTML = rows.length ? rows.map(function(r){
-    var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' : "";
+    var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
+          ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
     return '<tr><td><a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>'+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
       '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
@@ -642,7 +644,7 @@ $("#runs").addEventListener("click", function(e){
 });
 
 /* ---- start a job ---- */
-var L = {opts:null, kind:"train", run:"", nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -690,6 +692,8 @@ function renderStart(){
       '<div class="srow"><label class="lbl">Nodes</label><div class="chips">'+[1,2,4,8,16,32].filter(function(n){return n<=o.max_nodes}).map(function(n){return chip(n,L.nodes===n,'data-n="'+n+'"')}).join("")+
         '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-nodes" type="number" min="1" max="'+o.max_nodes+'" value="'+L.nodes+'"></div></div>'+
       '<div class="srow"><label class="lbl">How long</label>'+hoursRow(["",1,2,6,12,24],"")+'</div>';
+  } else if(k==="resume"){
+    h+='<div class="srow"><label class="lbl">Stopped run</label>'+stoppedList()+'</div><div id="f-resume"></div>';
   } else {
     h+='<div class="srow"><label class="lbl">Trained model</label>'+runList()+'</div>';
     if(k==="eval") h+='<div class="srow"><label class="lbl">Tests</label><div class="chips">'+COMMON_TASKS.map(function(t){return chip(t,!!L.tasks[t],'data-t="'+t+'"')}).join("")+'</div>'+
@@ -700,7 +704,37 @@ function renderStart(){
        '<div class="srow"><details'+(k==="eval"?' open':'')+'><summary>More options</summary>'+(k==="eval"?'<label><input id="f-samples" type="checkbox" checked> Keep every answer, to review the mistakes afterwards</label>':'')+'<label><input id="f-4bit" type="checkbox"> Load the model in 4-bit (as QLoRA trained it)</label></details></div>';
   }
   $("#startfields").innerHTML=h; fillInfo(); showSum();
-  $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||(k!=="train"&&!(o.runs||[]).length)||(k==="train"&&!(o.recipes||[]).some(function(r){return r.ready}));
+  var none = k==="train" ? !(o.recipes||[]).some(function(r){return r.ready}) : k==="resume" ? !(o.stopped||[]).length : !(o.runs||[]).length;
+  $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||none;
+  if(k==="resume") loadResume();
+}
+function stoppedList(){
+  var rs=L.opts.stopped||[];
+  if(!rs.length) return '<div class="sub">No run has stopped half way.</div>';
+  if(!rs.some(function(r){return r.run_id===L.run})) L.run=rs[0].run_id;
+  return '<div class="rlist">'+rs.map(function(r){
+    var full=runInfo(r.run_id);
+    return '<button type="button" class="ritem" data-run="'+esc(r.run_id)+'" aria-pressed="'+(r.run_id===L.run?"true":"false")+'"><b>'+esc(r.name)+'</b><span class="muted">'+(full.started?ago(full.started):"")+'</span><span class="m">'+esc(r.status.toLowerCase())+'</span></button>';
+  }).join("")+'</div>';
+}
+function loadResume(){
+  var run=L.run, box=$("#f-resume"); if(!box||!run) return;
+  box.innerHTML='<div class="sub">Looking at what the run left behind …</div>'; L.rinfo=null; L.step=0;
+  api("/api/resume?run="+encodeURIComponent(run),{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){
+    if(L.run!==run||L.kind!=="resume") return; L.rinfo=r.j; showResume();
+  }).catch(function(){ if($("#f-resume")) $("#f-resume").innerHTML='<div class="sub">The page could not reach the hub.</div>'; });
+}
+function showResume(){
+  var box=$("#f-resume"), i=L.rinfo; if(!box||!i) return;
+  if(i.error){ box.innerHTML='<div class="sub" style="color:var(--bad)">'+esc(i.error)+'</div>'; return; }
+  if(!i.resumable){ box.innerHTML='<div class="sub" style="color:var(--bad)">Cannot be resumed: '+esc(i.why)+'</div>'; $("#startcheck").disabled=$("#startgo").disabled=true; showSum(); return; }
+  var steps=(i.steps||[]).slice(-6).reverse();
+  box.innerHTML='<div class="srow"><div class="sub">'+esc(i.recipe)+' · '+i.nodes+(i.nodes===1?" node":" nodes")+' · '+i.hours+' h · checkpoints at step'+(i.steps.length>1?"s ":" ")+esc(i.steps.join(", "))+(i.max_steps?" of "+esc(i.max_steps):"")+'</div></div>'+
+    '<div class="srow"><label class="lbl">Continue from</label><div class="chips">'+steps.map(function(s,k){ return chip(k===0?"Latest (step "+s+")":"Step "+s, (L.step||i.latest)===s, 'data-step="'+s+'"'); }).join("")+'</div>'+
+    '<div class="sub">An earlier step is for going back before a problem such as a loss spike. The checkpoints after it are set aside, not deleted.</div></div>'+
+    '<div class="srow"><label class="lbl">Nodes and time</label><div class="chips"><input id="f-nodes" type="number" min="1" max="'+L.opts.max_nodes+'" value="'+i.nodes+'"><span class="muted">nodes</span> <input id="f-hours" type="number" min="1" max="'+L.opts.max_hours+'" value="'+i.hours+'"><span class="muted">hours</span></div>'+
+    '<div class="sub">The recipe is read again when the job starts: change it first to change something, for example a lower learning rate.</div></div>';
+  $("#startcheck").disabled=$("#startgo").disabled=!L.opts.enabled; showSum();
 }
 function fillInfo(){
   var el=$("#f-recipe-info"); if(!el) return;
@@ -708,7 +742,15 @@ function fillInfo(){
   el.textContent=r?[r.model,r.method,r.strategy].filter(Boolean).join(" · "):"";
 }
 function showSum(){
-  var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, n=L.kind==="train"?(parseInt(val("f-nodes"),10)||0):1, bits=[], warn=false;
+  var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, bits=[], warn=false;
+  if(L.kind==="resume"){
+    var ri=L.rinfo; if(!ri||!ri.resumable){ el.className="ssum"; el.textContent=""; return; }
+    var rn=parseInt(val("f-nodes"),10)||ri.nodes, rp=planFor(rn);
+    bits.push("from step "+(L.step||ri.latest)); bits.push(rn+(rn===1?" node":" nodes")+(g?" · "+(rn*g)+" GPUs":""));
+    if(rp){ bits.push(rp.partition); var rs=slotsFor(rp.partition); if(rs){ bits.push(rs.free+" of "+rs.max+" job slots free"); if(!rs.free) warn=true; } }
+    el.className="ssum"+(warn?" warn":""); el.textContent=bits.join("  ·  "); return;
+  }
+  var n=L.kind==="train"?(parseInt(val("f-nodes"),10)||0):1;
   if(!n){ el.className="ssum"; el.textContent=""; return; }
   var p=planFor(n);
   bits.push(n+(n===1?" node":" nodes")+(g?" · "+(n*g)+" GPUs":""));
@@ -724,7 +766,8 @@ function tasksValue(){
 }
 function formData(action){
   var f={action:action,kind:L.kind};
-  if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
+  if(L.kind==="resume"){ f.run=L.run; f.step=L.step||""; f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
+  else if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
   else { f.run=val("f-run"); f.hours=val("f-hours")||L.hours||String(L.opts.default_hours||2); f.four_bit=$("#f-4bit").checked;
     if(L.kind==="eval"){ f.tasks=tasksValue(); f.limit=L.quick?"200":""; f.samples=$("#f-samples").checked; } }
   return f;
@@ -735,7 +778,7 @@ function showResult(cls,title,body){
 function toast(msg){ var t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(function(){ t.hidden=true; },6000); }
 function send(action){
   if(L.busy) return; var f=formData(action);
-  if(action==="start"&&L.kind==="train"&&!L.confirm){
+  if(action==="start"&&(L.kind==="train"||L.kind==="resume")&&!L.confirm){
     L.confirm=true; var g=L.opts.gpus_per_node, n=parseInt(f.nodes,10)||0;
     $("#startgo").textContent="Yes, start on "+n+(n===1?" node":" nodes")+(g?" ("+n*g+" GPUs)":""); $("#startgo").classList.add("confirm");
     setTimeout(function(){ if(L.confirm){ L.confirm=false; $("#startgo").textContent="Start"; $("#startgo").classList.remove("confirm"); } },6000);
@@ -747,7 +790,7 @@ function send(action){
     if(r.j.error){ showResult("bad","Not started",r.j.error); return; }
     if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
     if(r.j.ok){
-      var what=L.kind==="train"?"Training":L.kind==="serve"?"Chat server":"Benchmark";
+      var what=L.kind==="train"?"Training":L.kind==="serve"?"Chat server":L.kind==="resume"?"Resumed run":"Benchmark";
       toast(what+" submitted as job #"+r.j.job+(L.kind==="serve"?". The chat opens on this page when the model is loaded.":"."));
       $("#startbox").close(); refresh();
       setTimeout(function(){ var c=document.querySelector('[data-job-card="'+r.j.job+'"]'); if(c){ c.scrollIntoView({block:"center",behavior:"smooth"}); c.classList.add("flash"); } },1500);
@@ -768,11 +811,13 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-h")){ L.hours=b.getAttribute("data-h"); renderStart(); }
   else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
   else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
+  else if(b.hasAttribute("data-step")){ L.step=parseInt(b.getAttribute("data-step"),10); showResume(); }
   else if(b.hasAttribute("data-run")){ L.run=b.getAttribute("data-run"); renderStart(); }
 });
 $("#startfields").addEventListener("input", function(e){
   if(e.target.id==="f-nodes"){ var n=parseInt(e.target.value,10); L.nodes=n||L.nodes; showSum(); }
   else if(e.target.id==="f-hours"){ L.hours=e.target.value.trim(); showSum(); }
+  if(L.kind==="resume") showSum();
   else if(e.target.id==="f-recipe"){ L.recipe=e.target.value; fillInfo(); }
 });
 $("#startcheck").addEventListener("click", function(){ send("check"); });

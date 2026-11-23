@@ -100,3 +100,18 @@ def test_no_launcher_means_off(server):
     srv, hub, _ = server
     hub.launcher = None
     assert _post(srv, {"kind": "train"})[0] == 404
+
+
+def test_resume_route(server):
+    srv, hub, calls = server
+    hub.launcher._runs = lambda: [{"run_id": "e" * 32, "name": "crashed", "status": "FAILED", "job": "55"}]
+    hub.launcher._describe = lambda store, run: {"run_id": run, "name": "crashed", "status": "FAILED", "recipe": "r.yaml", "nodes": 2, "hours": 1,
+                                                  "steps": [50], "latest": 50, "max_steps": "100", "resumable": True, "why": ""}
+    c = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=10)
+    c.request("GET", "/api/resume?run=" + "e" * 32, headers={"Host": "localhost:8265"})
+    r = c.getresponse()
+    assert r.status == 200 and json.loads(r.read())["steps"] == [50]
+    c.request("GET", "/api/resume?run=nope", headers={"Host": "localhost:8265"})
+    assert c.getresponse().status == 400
+    code, out = _post(srv, {"action": "start", "kind": "resume", "run": "e" * 32, "step": 50})
+    assert code == 200 and out["ok"] and calls[-1][2:] == ["resume", "--run", "e" * 32, "--step", "50"]

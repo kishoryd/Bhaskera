@@ -84,6 +84,10 @@ To test a model on your own questions, `python -m bhaskera.launcher.evaluate ini
 `./submit.sh eval ... --tasks <your test> --save-samples` runs it, and `evaluate review` shows what tuning fixed, what it broke and what
 is still wrong, with a file of the examples to correct in your training data.
 
+If a job stops half way, `./submit.sh resume --run <run id>` (or the **Resume** button) submits the same recipe, nodes and time again and
+continues from the last checkpoint, skipping the data already used; `--step N` goes back to an earlier checkpoint, for example before a loss
+spike. A checkpoint is saved every 500 steps by default (`checkpoint.save_every_steps`), so a failure loses little.
+
 MLflow keeps about 20 curves per run by default, and can store the trained adapter in standard PEFT format. Before each job
 every node is checked, and a failed job ends with a plain explanation of what went wrong and on which node.
 

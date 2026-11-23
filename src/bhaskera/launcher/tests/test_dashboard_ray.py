@@ -6,6 +6,15 @@ import pytest
 from bhaskera.launcher import dashboard
 
 
+@pytest.fixture(autouse=True)
+def _no_site_settings(monkeypatch, tmp_path):
+    """These tests must not depend on the shell they run in (the module sets BHASKERA_LOGIN_*) or on settings saved in ~/.bhaskera."""
+    for var in ("BHASKERA_LOGIN_HOST", "BHASKERA_LOGIN_PORT", "BHASKERA_MODULE"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(dashboard, "_CONFIG_DIR", tmp_path / ".bhaskera")
+    monkeypatch.setattr(dashboard, "_CONFIG_PATH", tmp_path / ".bhaskera" / "mlflow-ui.json")
+
+
 def _cfg(login_node="paramrudra.cdacb.in", user="dlapp", login_port=4422):
     c = dashboard.DashboardConfig()
     c.login_node, c.user, c.login_port = login_node, user, login_port

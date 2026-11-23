@@ -296,8 +296,11 @@ class TrainingConfig:
 class CheckpointConfig:
     enabled: bool = True
     save_dir: str = "./checkpoints"
-    save_interval: int = 1
-    keep_last_n: int = 2
+    save_interval: int = 1           # epochs between checkpoints (steps for the pipeline strategy)
+    save_every_steps: int = 500      # also save every N steps, so a failed job loses at most that much (0: only at the end of an epoch)
+    keep_last_n: int = 2             # keep the newest N checkpoints (0: all); raise it to be able to roll back further
+    resume_step: int = 0             # resume from this step instead of the latest checkpoint (0: the latest)
+    resume_skip_data: bool = True    # when resuming, skip the training data that earlier steps already used
 
 
 @dataclass
@@ -564,7 +567,10 @@ def _dict_to_config(raw: dict) -> Config:
             enabled=bool(ckpt_raw.get("enabled", True)),
             save_dir=str(ckpt_raw.get("save_dir", "./checkpoints")),
             save_interval=int(ckpt_raw.get("save_interval", 1)),
+            save_every_steps=int(ckpt_raw.get("save_every_steps", 500)),
             keep_last_n=int(ckpt_raw.get("keep_last_n", 2)),
+            resume_step=int(ckpt_raw.get("resume_step", 0)),
+            resume_skip_data=bool(ckpt_raw.get("resume_skip_data", True)),
         ),
         logging=LoggingConfig(
             tracker=log_raw.get("tracker"),

@@ -480,7 +480,7 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
         hub, cfg.store, os.environ.get("USER", ""), version=_bhaskera_version,
         docs_url=os.environ.get("BHASKERA_DOCS_URL", "https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/"))
     hub.state_provider, hub.log_provider = builder.build, builder.log
-    hub.launcher = launch.Launcher(launch.find_kit(), runs=lambda: hub_state.recent_runs(cfg.store))
+    hub.launcher = launch.Launcher(launch.find_kit(), runs=lambda: hub_state.recent_runs(cfg.store), store=cfg.store)
     try:
         server = ray_hub.serve(hub, hub_port())
     except OSError as e:

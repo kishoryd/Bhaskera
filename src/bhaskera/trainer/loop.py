@@ -27,7 +27,8 @@ from bhaskera.utils.nvtx_prof import capture_end, capture_window, nvtx_range
 from bhaskera.utils.startup_timer import mark as startup_mark
 from bhaskera.utils.peak_mem import peak_mem_gib
 
-from .checkpointing import build_resumed_scheduler, maybe_resume, save_and_prune
+from .checkpointing import (build_resumed_scheduler, final_save_due, maybe_resume, requested_resume_step, save_and_prune,
+                            step_save_due)
 from .eval_metrics import token_accuracy_counts
 from .eval_samples import capture_rows, load_tokenizer, render_rows
 from bhaskera.utils.loggers.base import phase_span
@@ -248,7 +249,7 @@ def train(
     if ckpt_cfg.enabled:
         if startup_watchdog is not None:
             startup_watchdog.phase("resume checkpoint")
-        step = maybe_resume(model, optimizer, ckpt_cfg.save_dir)
+        step = maybe_resume(model, optimizer, ckpt_cfg.save_dir, requested_resume_step(ckpt_cfg))
         model.train()
     # built after the resume so the schedule continues from the resumed step (see build_resumed_scheduler)
     scheduler = build_resumed_scheduler(optimizer, train_cfg, step)
@@ -284,6 +285,8 @@ def train(
             "model/world_size":       float(world_size),
         }, step=0)
 
+    start_step = step
+    resume_skip = start_step * train_cfg.grad_accum if (start_step and getattr(ckpt_cfg, "resume_skip_data", True)) else 0
     for epoch in range(train_cfg.num_epochs):
         step, best_ckpts, stop_early, grad_skip_count = _run_epoch(
             model=model, dataset=dataset, val_dataset=val_dataset,
@@ -294,9 +297,15 @@ def train(
             best_ckpts=best_ckpts, throughput=throughput,
             world_size=world_size, grad_skip_count=grad_skip_count,
             startup_watchdog=startup_watchdog,
+            skip_batches=resume_skip if epoch == 0 else 0,
         )
         if step >= train_cfg.max_steps or stop_early:
             break
+
+    if final_save_due(ckpt_cfg, step, start_step):      # the end of the run, when it does not fall on a saved step
+        with phase_span(tracker, "checkpoint", step=step, epoch=-1):
+            best_ckpts = save_and_prune(model=model, optimizer=optimizer, step=step, avg_loss=0.0, ckpt_cfg=ckpt_cfg,
+                                        rank=rank, best_ckpts=best_ckpts)
 
     _publish_adapter(model, cfg, tracker, rank, step)
     if tracker:
@@ -462,6 +471,7 @@ def _run_epoch(
     throughput: Optional[ThroughputTracker], world_size: int,
     grad_skip_count: int = 0,
     startup_watchdog=None,
+    skip_batches: int = 0,
 ):
     train_cfg  = cfg.training
     ckpt_cfg   = cfg.checkpoint
@@ -572,6 +582,12 @@ def _run_epoch(
     #   safely falls back when neither applies (single-GPU, static_graph DDP).
     loader_iter = iter(loader)
     stop_early  = False
+    if skip_batches > 0:        # resumed run: do not train again on the data the earlier steps already used
+        skipped = 0
+        while skipped < skip_batches and next(loader_iter, None) is not None:
+            skipped += 1
+        if rank == 0:
+            logger.info(f"Resume: skipped {skipped} batches that earlier steps already trained on")
 
     while step < train_cfg.max_steps and not stop_early:
         capture_window(step)   # no-op unless BHASKERA_NSYS=1
@@ -918,6 +934,14 @@ def _run_epoch(
                             f"eval_loss {eval_loss:.4f} <= target_eval_loss {target} "
                             "— stopping early (convergence target reached)"
                         )
+
+        if step_save_due(ckpt_cfg, step, train_cfg.max_steps) and not stop_early:
+            with phase_span(tracker, "checkpoint", step=step, epoch=epoch):
+                best_ckpts = save_and_prune(
+                    model=model, optimizer=optimizer, step=step,
+                    avg_loss=epoch_loss / max(1, epoch_steps), ckpt_cfg=ckpt_cfg,
+                    rank=rank, best_ckpts=best_ckpts,
+                )
 
     capture_end()   # close the Nsight Systems window if training ended early
     if epoch_steps == 0:

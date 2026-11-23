@@ -17,7 +17,7 @@ Under `training.distributed` in a recipe:
 | `ddp.find_unused_parameters`, `static_graph`, `gradient_as_bucket_view`, `broadcast_buffers` | DDP settings |
 | `pipeline.stages` | Pipeline: layers are split into this many stages |
 
-And in the `checkpoint` section: `save_dir`, `save_interval` (counted in epochs for DDP, QLoRA and FSDP, and in steps for Pipeline), and `keep_last_n`. A relative `save_dir` is resolved against the folder you submitted from.
+And in the `checkpoint` section: `save_dir`, `save_interval` (counted in epochs for DDP, QLoRA and FSDP, and in steps for Pipeline), `save_every_steps` (also save every N steps; default 500), `keep_last_n`, `resume_step` (resume from this step instead of the latest) and `resume_skip_data` (skip the data earlier steps used; default on). A relative `save_dir` is resolved against the folder you submitted from.
 
 Which strategy to choose is in the main README.
 
@@ -29,5 +29,5 @@ Which strategy to choose is in the main README.
 - **Start-up guards.** A rank waits for `torch.distributed` to come up, and a probe all-reduce confirms every rank is alive, so a missing rank fails loudly instead of hanging later.
 - **Checkpoints** (`checkpoint.py`). Sharded with torch's distributed checkpoint. All ranks write to `step_N.tmp`; after a barrier rank 0 renames it, writes `meta.json`, and writes an empty `.complete` file last. A folder without `.complete` is ignored.
 - **Keeping the newest.** After a save the newest `keep_last_n` completed checkpoints stay (`0` keeps all); the newest is never removed, and checkpoints left by an earlier run of the same job count.
-- **Resuming.** The latest complete checkpoint is loaded into the model and optimizer, and the learning-rate schedule is replayed to that step. The data iterator starts again from the beginning of the training set.
+- **Resuming.** The latest complete checkpoint (or the one at `resume_step`) is loaded into the model and optimizer, and the learning-rate schedule is replayed to that step. The trainer then skips the batches the earlier steps used (exactly in the first epoch). When resuming from an earlier step, the checkpoints after it are renamed `rolledback-<step>`, not deleted. `./submit.sh resume --run <id>` does all of this from a run id; see `launcher/resume.py`.
 - **Pipeline** (`pipeline.py`) splits the frozen model by layers; only activations cross a stage boundary, and only adapter gradients are averaged across copies.

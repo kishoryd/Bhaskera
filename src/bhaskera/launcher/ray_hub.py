@@ -315,6 +315,16 @@ def _handler(hub: Hub):
             except launch.LaunchError as e:
                 return self._json({"error": str(e)}, 400)
 
+        def _resume(self, query: str) -> None:
+            """/api/resume?run=ID: what a stopped run left behind, and whether it can be resumed."""
+            if hub.launcher is None or self.command != "GET":
+                return self._json({"error": "not available"}, 404)
+            args = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+            try:
+                return self._json(hub.launcher.resume_info(args.get("run", "")))
+            except launch.LaunchError as e:
+                return self._json({"error": str(e)}, 400)
+
         def _handle(self) -> None:
             if not hub.peer_check(self.client_address, self.server.server_address):
                 return self._send(403, "This page is private to the user who started it.")
@@ -329,6 +339,8 @@ def _handler(hub: Hub):
                     return self._json(hub.state_provider())
                 if path == "/api/launch":
                     return self._launch()
+                if path == "/api/resume":
+                    return self._resume(query)
                 if path in ("/api/chat", "/api/serve"):
                     return self._chat(path, query)
                 if path == "/api/log" and hub.log_provider is not None:

@@ -213,17 +213,32 @@ def save_checkpoint(
 
 # Resume (fix #13 — .complete guard)
 
+def list_checkpoints(save_dir: str) -> list[int]:
+    """The steps of the complete checkpoints in save_dir, oldest first."""
+    if not os.path.isdir(save_dir):
+        return []
+    return sorted(int(_STEP_RE.search(p.name).group(1)) for p in Path(save_dir).iterdir()
+                  if p.is_dir() and _STEP_RE.search(p.name) and (p / ".complete").exists())
+
+
 def maybe_resume(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     save_dir: str,
+    step: int = 0,
 ) -> int:
     """
-    Scan save_dir for the latest checkpoint that has a .complete sentinel.
-    Load it in-place and return the step to resume from.
+    Scan save_dir for the latest checkpoint that has a .complete sentinel (or the one at ``step`` when given: a
+    way back after a loss spike). Load it in-place and return the step to resume from.
 
-    Returns 0 if no valid checkpoint is found (fresh start).
+    Returns 0 if no valid checkpoint is found (fresh start). A requested step that does not exist is an error that
+    lists the steps that do.
     """
+    if step:
+        have = list_checkpoints(save_dir)
+        if step not in have:
+            raise FileNotFoundError(f"no checkpoint at step {step} in {save_dir}; the checkpoints there are at steps "
+                                    f"{', '.join(map(str, have)) or '(none)'}")
     if not os.path.isdir(save_dir):
         logger.info("No checkpoint directory found. Starting from step 0.")
         return 0
@@ -239,6 +254,8 @@ def maybe_resume(
         logger.info("No valid checkpoints found (missing .complete sentinel). Starting from step 0.")
         return 0
 
+    if step:
+        candidates = [p for p in candidates if int(_STEP_RE.search(p.name).group(1)) == step]
     ckpt_path  = str(candidates[-1])
     start_step = int(_STEP_RE.search(ckpt_path).group(1))
     logger.info(f"Resuming from {ckpt_path} (step {start_step})")
@@ -269,8 +286,26 @@ def maybe_resume(
             meta = json.load(f)
         start_step = int(meta.get("step", start_step))
 
+    if step:
+        _set_aside_later(save_dir, start_step)
     logger.info(f"Resume complete — starting from step {start_step}")
     return start_step
+
+
+def _set_aside_later(save_dir: str, step: int) -> None:
+    """After resuming from an earlier step, the checkpoints after it belong to the abandoned run of those steps. They are
+    renamed (rolledback-<step>), not deleted, so they cannot be taken for the newest or be pruned over the new ones."""
+    if dist.is_available() and dist.is_initialized() and dist.get_rank() != 0:
+        return
+    for p in Path(save_dir).iterdir():
+        m = _STEP_RE.fullmatch(p.name)
+        if p.is_dir() and m and int(m.group(1)) > step:
+            target = p.with_name(f"rolledback-{m.group(1)}")
+            try:
+                p.rename(target)
+                logger.info(f"Set aside {p.name} (it came after the step resumed from): now {target.name}")
+            except OSError as e:
+                logger.warning(f"Could not set aside {p}: {e}")
 
 
 # Legacy save_and_prune wrapper (used by trainer/checkpointing.py)

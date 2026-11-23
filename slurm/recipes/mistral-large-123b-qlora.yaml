@@ -76,7 +76,8 @@ training:
 checkpoint:
   enabled: true
   save_dir: /scratch/<project>/<username>/bhaskera-runs/checkpoints/mistral-large-123b-qlora
-  save_interval: 1                 # DDP/QLoRA: counted in EPOCHS - saves when the run ends (max_steps or epoch end)
+  save_interval: 1                 # epochs between checkpoints
+  save_every_steps: 500            # and one every 500 steps, so a failed job loses little: continue it with ./submit.sh resume
   keep_last_n: 2
 logging:
   tracker: mlflow

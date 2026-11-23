@@ -68,3 +68,12 @@ def test_shipped_recipes_have_no_ignored_options(path):
     if "tokenize" in os.path.basename(path):
         pytest.skip("the tokenize recipe is read by the tokenizer, not the training parser")
     assert load_config_checked(path)[1] == []
+
+
+def test_checkpoint_options_for_resuming_are_read(tmp_path):
+    f = tmp_path / "r.yaml"
+    f.write_text("checkpoint:\n  save_every_steps: 200\n  keep_last_n: 5\n  resume_step: 400\n  resume_skip_data: false\n")
+    cfg, unknown = load_config_checked(str(f))
+    assert unknown == []
+    c = cfg.checkpoint
+    assert (c.save_every_steps, c.keep_last_n, c.resume_step, c.resume_skip_data) == (200, 5, 400, False)

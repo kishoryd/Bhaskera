@@ -133,3 +133,51 @@ def test_find_kit(kit, tmp_path_factory):
     assert launch.find_kit({"BHASKERA_WORKDIR": str(kit)}, tmp_path_factory.mktemp("c")) == kit.resolve()
     assert launch.find_kit({}, tmp_path_factory.mktemp("d")) is None
     assert launch.find_kit({"BHASKERA_KIT": str(kit)}, tmp_path_factory.mktemp("e")) == kit.resolve()
+
+
+STOPPED = "e" * 32
+
+
+def make_with_stopped(kit, fake=None, describe=None):
+    runs = lambda: [{"run_id": STOPPED, "name": "crashed", "status": "FAILED", "job": "55"},
+                    {"run_id": "f" * 32, "name": "slow", "status": "RUNNING", "stale": True, "job": "56"},
+                    {"run_id": "1" * 32, "name": "fine", "status": "FINISHED", "job": "57"},
+                    {"run_id": "2" * 32, "name": "unknown-job", "status": "FAILED", "job": ""}]
+    return launch.Launcher(kit, runs=runs, env={"BHASKERA_DIR": "/x", "SLURM_ACCOUNT": "a"}, run=fake or Fake(), describe=describe)
+
+
+def test_stopped_runs_are_listed_and_resumed(kit):
+    fake = Fake()
+    m = make_with_stopped(kit, fake)
+    assert [(r["name"], r["status"]) for r in m.options()["stopped"]] == [("crashed", "FAILED"), ("slow", "STALLED")]
+    m.launch({"action": "start", "kind": "resume", "run": STOPPED})
+    assert fake.calls[-1][0][2:] == ["resume", "--run", STOPPED]
+    m._last = 0
+    m.launch({"action": "start", "kind": "resume", "run": STOPPED, "step": "200", "nodes": 8, "hours": "6"})
+    assert fake.calls[-1][0][2:] == ["resume", "--run", STOPPED, "--step", "200", "--nodes", "8", "--hours", "6"]
+
+
+@pytest.mark.parametrize("form", [
+    {"kind": "resume", "run": "1" * 32}, {"kind": "resume", "run": "nope"}, {"kind": "resume"}, {"kind": "resume", "run": STOPPED, "step": "-1"},
+    {"kind": "resume", "run": STOPPED, "nodes": "9999"}, {"kind": "resume", "run": STOPPED + "; ls"},
+])
+def test_only_stopped_runs_can_be_resumed(kit, form):
+    fake = Fake()
+    with pytest.raises(launch.LaunchError):
+        make_with_stopped(kit, fake).launch({"action": "start", **form})
+    assert fake.calls == []
+
+
+def test_resume_info_reports_what_the_run_left(kit):
+    info = {"run_id": STOPPED, "name": "crashed", "status": "FAILED", "recipe": "r.yaml", "nodes": 4, "hours": 12, "steps": [100, 200],
+            "latest": 200, "max_steps": "400", "resumable": True, "why": "", "recipe_path": "/secret/path", "save_dir": "/secret/ckpt"}
+    out = make_with_stopped(kit, describe=lambda store, run: info).resume_info(STOPPED)
+    assert out["steps"] == [100, 200] and out["resumable"] and "recipe_path" not in out and "save_dir" not in out, "paths stay on the server"
+    with pytest.raises(launch.LaunchError):
+        make_with_stopped(kit, describe=lambda s, r: info).resume_info("1" * 32)
+    from bhaskera.launcher import resume
+
+    def broken(store, run):
+        raise resume.ResumeError("Slurm no longer knows job 55")
+    out = make_with_stopped(kit, describe=broken).resume_info(STOPPED)
+    assert not out["resumable"] and "no longer knows" in out["why"]

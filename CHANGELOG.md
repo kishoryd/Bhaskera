@@ -21,7 +21,10 @@ clusters with Ray.
   so FSDP never waits on a batch without a given modality. Media are loaded while training and never stored in the tokenised cache.
 - Chat data in `chatml`, `alpaca` or `sharegpt` form (or your own), tokenised once into a Parquet cache; runtime sequence packing
   removes padding.
-- Sharded checkpoints with the newest N kept, and resume with the learning-rate schedule in step.
+- Sharded checkpoints with the newest N kept, saved every `checkpoint.save_every_steps` steps (default 500) and when the run ends. A run
+  that stopped is continued with `./submit.sh resume --run <id>` or the **Resume** button: the same recipe, nodes and time, the optimizer and
+  learning-rate schedule at the saved step, and the training data already used skipped. `--step N` goes back to an earlier checkpoint (the
+  later ones are set aside, not deleted), and the resumed run is tagged `resumed_from`.
 - Recipe checks before queueing (`bhaskera-preflight`): model files, libraries, data, GPU-memory fit, and any option that does nothing.
 - A node check before every job and a plain-words failure summary after it; faulty nodes are remembered and avoided.
 - Hyperparameter sweeps (`python -m bhaskera.launcher.sweep`) and data tools (`inspect`, `dedupe`, `filter`, `split`).

@@ -49,6 +49,10 @@ def save_and_prune(
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
 
+    # Already saved at this step (a step checkpoint that falls on the end of an epoch or of the run): nothing to do.
+    if os.path.exists(os.path.join(ckpt_path, ".complete")):
+        return best_ckpts
+
     save_checkpoint(
         model=model,
         optimizer=optimizer,
@@ -72,13 +76,36 @@ def save_and_prune(
     return best_ckpts
 
 
-def maybe_resume(model, optimizer, save_dir: str) -> int:
-    """Resume from the newest complete checkpoint under `save_dir`; return its step (0 if there is none).
+def maybe_resume(model, optimizer, save_dir: str, step: int = 0) -> int:
+    """Resume from the newest complete checkpoint under `save_dir` (or from the one at `step`); return its step
+    (0 if there is none).
 
     `load_checkpoint` takes the folder that *contains* the step_N folders and does the scan itself
     (skipping any without a .complete marker), so it is given `save_dir` itself, not a step_N folder.
     """
-    return load_checkpoint(model, optimizer, save_dir)
+    return load_checkpoint(model, optimizer, save_dir, step)
+
+
+def requested_resume_step(ckpt_cfg) -> int:
+    """The step to resume from when one was asked for ($BHASKERA_RESUME_STEP, set by `submit.sh resume --step`, or
+    checkpoint.resume_step), else 0 for the latest checkpoint."""
+    raw = os.environ.get("BHASKERA_RESUME_STEP") or getattr(ckpt_cfg, "resume_step", 0) or 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def step_save_due(ckpt_cfg, step: int, max_steps: int) -> bool:
+    """Whether a checkpoint is due after this optimizer step: every checkpoint.save_every_steps steps, not on the last
+    step (the end of the run saves that one)."""
+    every = int(getattr(ckpt_cfg, "save_every_steps", 0) or 0)
+    return bool(ckpt_cfg.enabled and every > 0 and step > 0 and step % every == 0 and step < max_steps)
+
+
+def final_save_due(ckpt_cfg, step: int, start_step: int) -> bool:
+    """Whether the end of the run needs its own checkpoint: step saving is on and the run moved past where it started."""
+    return bool(ckpt_cfg.enabled and int(getattr(ckpt_cfg, "save_every_steps", 0) or 0) > 0 and step > start_step)
 
 
 def fast_forward_scheduler(scheduler, steps: int) -> None:

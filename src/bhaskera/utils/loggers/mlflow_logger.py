@@ -225,6 +225,9 @@ class MLflowLogger(BaseLogger):
             "slurm_job": os.environ.get("SLURM_JOB_ID", ""),
             "slurm_nodelist": os.environ.get("SLURM_JOB_NODELIST", ""),
         }
+        resumed = os.environ.get("BHASKERA_RESUME_OF")          # set by `submit.sh resume`: the run this one continues
+        if resumed:
+            tags["resumed_from"] = resumed
         group = getattr(log_cfg, "group", None)
         if group:
             tags["group"] = str(group)

@@ -27,7 +27,7 @@ TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
 RECIPE_FILE = re.compile(r"^[A-Za-z0-9_.\-]{1,100}\.ya?ml$")
 SUBMITTED = re.compile(r"submitted job (\d+)")
 PLACEHOLDER = re.compile(r"<project>|<username>|REPLACE_")
-KINDS = ("train", "serve", "eval")
+KINDS = ("train", "serve", "eval", "resume")
 MAX_NODES, MAX_HOURS, MAX_LIMIT = 1024, 720, 100000
 STARTS_PER_HOUR = 12
 MIN_GAP_S = 2.0
@@ -109,8 +109,9 @@ def _int(value, name: str, low: int, high: int, required: bool = True) -> Option
 
 class Launcher:
     def __init__(self, kit: Optional[Path], *, runs: Callable[[], list[dict]], env: Optional[dict] = None,
-                 run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run, clock: Callable[[], float] = time.time):
-        self.kit = kit
+                 run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run, clock: Callable[[], float] = time.time,
+                 store: Optional[str] = None, describe: Optional[Callable[[str, str], dict]] = None):
+        self.kit, self._store, self._describe = kit, store, describe
         self._runs, self._env, self._run, self._clock = runs, dict(os.environ if env is None else env), run, clock
         self._lock = threading.Lock()
         self._starts: list[float] = []
@@ -136,7 +137,7 @@ class Launcher:
             rules = []
         recipes = list_recipes(self.kit, self._env) if self.kit else []
         runs = [{"run_id": r["run_id"], "name": r["name"], "status": r["status"]} for r in self._runs() if r.get("has_adapter")]
-        return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "partitions": rules,
+        return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
 
     def _recipe_path(self, name) -> Path:
@@ -154,6 +155,22 @@ class Launcher:
             raise LaunchError(f"{name} cannot be started: {info['why']}")
         return folder / name
 
+    def _stopped(self) -> list[dict]:
+        """Runs that stopped half way (failed, killed, or no longer writing) and know their Slurm job."""
+        return [{"run_id": r["run_id"], "name": r["name"], "status": "STALLED" if r.get("stale") else r["status"]}
+                for r in self._runs() if r.get("job") and (r["status"] in ("FAILED", "KILLED") or r.get("stale"))]
+
+    def resume_info(self, run_id: str) -> dict:
+        """What a stopped run left behind (recipe, nodes, time, checkpoints) and whether it can be resumed."""
+        if not isinstance(run_id, str) or not RUN_ID.match(run_id) or run_id not in {r["run_id"] for r in self._stopped()}:
+            raise LaunchError("pick a stopped run from the list")
+        from . import resume
+        try:
+            info = (self._describe or resume.describe)(self._store or resume._store_default(), run_id)
+        except resume.ResumeError as e:
+            return {"run_id": run_id, "resumable": False, "why": str(e), "steps": []}
+        return {k: info[k] for k in ("run_id", "name", "status", "recipe", "nodes", "hours", "steps", "latest", "max_steps", "resumable", "why")}
+
     def _run_id(self, value) -> str:
         if not isinstance(value, str) or not RUN_ID.match(value):
             raise LaunchError("pick a trained run from the list")
@@ -165,12 +182,22 @@ class Launcher:
         """(arguments of submit.sh, extra environment) for a form, or LaunchError."""
         kind = form.get("kind")
         if kind not in KINDS:
-            raise LaunchError("choose what to start: training, chat server or benchmark")
+            raise LaunchError("choose what to start: training, chat server, benchmark or resume")
         if kind == "train":
             recipe = self._recipe_path(form.get("recipe"))
             nodes = _int(form.get("nodes"), "nodes", 1, MAX_NODES)
             hours = _int(form.get("hours"), "hours", 1, MAX_HOURS, required=False)
             return [str(recipe), str(nodes)] + ([str(hours)] if hours else []), {}
+        if kind == "resume":
+            run = form.get("run")
+            if not isinstance(run, str) or run not in {r["run_id"] for r in self._stopped()}:
+                raise LaunchError("pick a stopped run from the list")
+            args = ["resume", "--run", run]
+            for field, flag, low, high in (("step", "--step", 1, 10_000_000), ("nodes", "--nodes", 1, MAX_NODES), ("hours", "--hours", 1, MAX_HOURS)):
+                v = _int(form.get(field), field, low, high, required=False)
+                if v:
+                    args += [flag, str(v)]
+            return args, {}
         run = self._run_id(form.get("run"))
         hours = _int(form.get("hours"), "hours", 1, MAX_HOURS, required=False) or 2
         args = [kind, "--run", run]

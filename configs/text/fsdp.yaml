@@ -66,7 +66,8 @@ training:
 checkpoint:
   enabled: true
   save_dir: "./checkpoints/qwen3_14b-ultrachat-fsdp-8node"
-  save_interval: 1
+  save_interval: 1                 # epochs between checkpoints
+  save_every_steps: 500            # and one every 500 steps, so a failed job loses little: continue it with ./submit.sh resume
   keep_last_n: 2
 
 logging:

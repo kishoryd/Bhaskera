@@ -16,6 +16,7 @@ Commands (each is also available as `python -m bhaskera.launcher.<name>`):
 | `bhaskera-diag --num-workers N` | A short NCCL check; run it before a long job on a new cluster |
 | `bhaskera-evaluate`, `bhaskera-sweep`, `bhaskera-data` | Benchmarks against the base model, hyperparameter sweeps, data cleaning |
 | `bhaskera-nodes`, `bhaskera-diagnose` | Node health, and a plain explanation of why a job failed |
+| `./submit.sh resume --run <run id> [--step N]` | Continue a run that stopped, from its last or an earlier checkpoint (`python -m bhaskera.launcher.resume show` says what it left) |
 
 Environment variables:
 
