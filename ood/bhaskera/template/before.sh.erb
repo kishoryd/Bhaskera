@@ -1,0 +1,5 @@
+# Runs first in the session job: the address, a free port and a random password for this session (the portal gives the user
+# the password through the Open button; nobody types it).
+export host="$(hostname)"
+export port="$(find_port "${host}")"
+export password="$(create_passwd 24)"

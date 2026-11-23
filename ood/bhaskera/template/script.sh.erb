@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# Runs inside the session job, as the user. The portal gives this script $port and $password (before.sh of the basic template).
+# Runs inside the session job, as the user. $host, $port and $password come from before.sh. The user sets nothing.
 
 module purge >/dev/null 2>&1 || true
 module load <%= bhaskera_module %> || { echo "cannot load <%= bhaskera_module %>" >&2; exit 1; }
 
-# Where submit.sh and your recipes live: your own copy of the kit, made once from the shared one.
-export BHASKERA_WORKDIR="${BHASKERA_WORKDIR:-$HOME/bhaskera-runs}"
+# The account jobs are charged to: the user's default account in Slurm (the page can only start jobs with one).
+if [[ -z "${SLURM_ACCOUNT:-}" ]]; then
+    SLURM_ACCOUNT="$(sacctmgr -nP show user "$USER" format=defaultaccount 2>/dev/null | head -1 | tr -d '[:space:]')"
+    [[ -n "$SLURM_ACCOUNT" ]] && export SLURM_ACCOUNT
+fi
+
+# Where submit.sh, the recipes and the checkpoints live: the user's own copy of the shared kit, made on first use.
+export BHASKERA_WORKDIR="${BHASKERA_WORKDIR:-${SCRATCH:-$HOME}/bhaskera-runs}"
 if [[ ! -f "$BHASKERA_WORKDIR/submit.sh" ]]; then
     mkdir -p "$BHASKERA_WORKDIR" && cp -rn "$BHASKERA_KIT"/. "$BHASKERA_WORKDIR"/
 fi
 cd "$BHASKERA_WORKDIR"
 
-<% if bc_account.to_s != "" -%>
-export SLURM_ACCOUNT="<%= bc_account %>"
-<% end -%>
-# Only the portal's own link carries this token; the page refuses every other request.
+# Only the portal's own Open button carries this token; the page refuses every other request.
 export BHASKERA_HUB_TOKEN="${password:?the portal did not give a password}"
 
-echo "Bhaskera on $(hostname):${port}"
+echo "Bhaskera on ${host}:${port} (account ${SLURM_ACCOUNT:-none found}, folder ${BHASKERA_WORKDIR})"
 exec bhaskera-dashboard portal --bind 0.0.0.0 --hub-port "${port:?the portal did not give a port}"

@@ -3,6 +3,7 @@ name: Bhaskera
 category: Interactive Apps
 subcategory: Machine Learning
 role: batch_connect
+icon: fa://flask
 description: |
-  Fine-tune language and multimodal models on the cluster, chat with them, benchmark and register them: Bhaskera's home page, as you,
-  from the portal. It runs as a small job under your own account and only you can open it.
+  Fine-tune language and multimodal models on the cluster, chat with them, benchmark and register them. Bhaskera's home page,
+  as you, in a new tab. Nothing to set up: press Launch, then Open Bhaskera.

@@ -1,0 +1,9 @@
+# Runs beside script.sh: tell the portal the session is ready only when the page is listening.
+echo "Waiting for Bhaskera to open port ${port} ..."
+if wait_until_port_used "${host}:${port}" 120; then
+    echo "Bhaskera is up."
+else
+    echo "Bhaskera did not open its port within 2 minutes." >&2
+    clean_up 1
+fi
+sleep 2

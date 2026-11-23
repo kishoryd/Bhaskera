@@ -1,24 +1,22 @@
 ---
-# The cluster id is the name of the file in /etc/ood/config/clusters.d/ (without .yml). An administrator sets it for this site.
-cluster: "<%= ENV['OOD_BHASKERA_CLUSTER'] || '*' %>"
+# Nothing here is for the user to fill in. The administrator's installer (ood/install.sh) writes the cluster id, the partition and the
+# hours into the three lines marked below, once.
+title: "Bhaskera"
+description: |
+  Bhaskera's home page: create a recipe, train, chat, benchmark and register models. It runs as a small job under your own account
+  (account, folders and limits are found for you) and only you can open it. Press **Launch**, then **Open Bhaskera**.
+cluster: "__CLUSTER__"
 form:
-  - bc_account
+  - bhaskera_module
   - bc_queue
   - bc_num_hours
-  - bhaskera_module
 attributes:
-  bc_account:
-    label: "Slurm account"
-    help: "The account your jobs are charged to. Jobs you start from the page use it too."
-  bc_queue:
-    label: "Partition"
-    help: "A CPU partition is enough: the page itself needs no GPU. Jobs you start from it ask for GPUs on their own."
-  bc_num_hours:
-    label: "Hours the page stays open"
-    value: 8
-    min: 1
-    max: 24
-    step: 1
   bhaskera_module:
     widget: hidden_field
     value: "bhaskera/1.0.0"
+  bc_queue:
+    widget: hidden_field
+    value: "__PARTITION__"
+  bc_num_hours:
+    widget: hidden_field
+    value: __HOURS__
