@@ -29,6 +29,7 @@ from typing import Callable, Optional
 from . import hub_guard, launch
 from .serve import port_for_job
 
+_MAX_PAGE = 4 * 1024 * 1024    # an HTML page larger than this is passed through unchanged
 RAY_PORT = 8265        # on the first node of a job
 GRAFANA_PORT = 3000    # on the first node of a job
 
@@ -219,16 +220,37 @@ def _handler(hub: Hub):
                 return link.grafana_port, GRAFANA_PORT, f"The charts of job {html.escape(job_id)}"
             return link.ray_port, RAY_PORT, f"The dashboard of job {html.escape(job_id)}"
 
-        def _relay(self, port: int, service_port: int, path: str, body: Optional[bytes], what: str) -> None:
-            """Send the request to a service behind an SSH link and pass its answer back as it arrives (streaming works)."""
+        def _relay(self, port: int, service_port: int, path: str, body: Optional[bytes], what: str, back_link: bool = False) -> None:
+            """Send the request to a service behind an SSH link and pass its answer back as it arrives (streaming works).
+            With back_link, a page of that service gets a small link back to the home page."""
             headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP}
             headers["Host"] = f"localhost:{service_port}"
+            if back_link and self.command == "GET":
+                headers["Accept-Encoding"] = "identity"              # the page must arrive readable to be extended
             try:
                 conn = http.client.HTTPConnection("127.0.0.1", port, timeout=600)
                 conn.request(self.command, path, body, headers)
                 resp = conn.getresponse()
             except OSError:
                 return self._send(502, f"{what} is not up yet; try again in a minute.")
+            ctype = (resp.getheader("Content-Type") or "").lower()
+            if (back_link and self.command == "GET" and resp.status == 200 and ctype.startswith("text/html")
+                    and not resp.getheader("Content-Encoding") and not resp.getheader("Content-Security-Policy")):
+                try:
+                    page = resp.read(_MAX_PAGE + 1)
+                except (OSError, http.client.HTTPException):
+                    page = b""
+                conn.close()
+                if 0 < len(page) <= _MAX_PAGE:
+                    page = hub_guard.with_back_link(page, self.headers.get("Host", ""))
+                self.send_response(resp.status)
+                for k, v in resp.getheaders():
+                    if k.lower() not in _HOP and k.lower() != "content-length":
+                        self.send_header(k, v)
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
+                return
             self.send_response(resp.status)
             for k, v in resp.getheaders():
                 if k.lower() not in _HOP:
@@ -330,7 +352,7 @@ def _handler(hub: Hub):
             if length > hub_guard.MAX_BODY:
                 return self._send(413, "Request too large.")
             body = self.rfile.read(length) if length else None
-            self._relay(port, service_port, self.path, body, what)
+            self._relay(port, service_port, self.path, body, what, back_link=kind in ("mlflow", "job"))
 
         do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _handle
 

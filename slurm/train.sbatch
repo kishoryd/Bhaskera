@@ -110,12 +110,15 @@ if [[ "${BHASKERA_NODECHECK:-1}" != "0" ]]; then
     fi
 fi
 
+# After "Training finished", Ray prints a few red lines while it shuts its nodes down. They do not mean the job failed
+# (the exit code below does), so they are left out; anything Ray reports before that point is kept.
 srun --nodes="$SLURM_NNODES" --ntasks="$SLURM_NNODES" \
     ray symmetric-run --address "$RAY_ADDRESS" --min-nodes "$SLURM_NNODES" \
         --num-cpus="$SLURM_CPUS_PER_TASK" --num-gpus="$GPUS_PER_NODE" \
         -- \
-        python -m bhaskera.launcher.train --config "$CONFIG" --num-workers "$WORKERS" --no-dashboard
-RC=$?
+        python -m bhaskera.launcher.train --config "$CONFIG" --num-workers "$WORKERS" --no-dashboard 2>&1 \
+    | awk '/Training finished/ {done=1} !(done && /ERR scripts\.py:[0-9]+ -- /) {print; fflush()}'
+RC=${PIPESTATUS[0]}
 echo "=== training exit code: $RC ==="
 if [[ $RC -ne 0 ]]; then                       # say in plain words what went wrong, and on which node
     JOBLOG="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -n 's/.*StdOut=//p' | head -1)"

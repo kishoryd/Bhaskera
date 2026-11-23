@@ -39,6 +39,7 @@ flash     = ["flash-attn>=2.5"]
 dev       = ["pytest>=7", "ruff>=0.4"]
 inference = ["scipy>=1.10"]
 qlora     = ["bitsandbytes>=0.43"]
+multimodal = ["av>=12", "soundfile>=0.12"]   # decode video and audio for multimodal fine-tuning
 
 # Convenience meta-extra: install everything needed for the full
 # observability stack (Ray Dashboard already comes with default).

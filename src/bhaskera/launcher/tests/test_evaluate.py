@@ -125,7 +125,7 @@ def test_command_line_end_to_end(tmp_path, monkeypatch, capsys):
     store = _store(tmp_path)
     fake = FakeHarness()
     monkeypatch.setattr(ev, "load_harness", lambda: (fake, None))
-    monkeypatch.setattr(ev, "check_tasks", lambda names, known=None: None)
+    monkeypatch.setattr(ev, "check_tasks", lambda names, known=None, include=None: None)
     monkeypatch.setattr(ev, "free_gpu", lambda: None)
     monkeypatch.setattr(ev, "log_to_mlflow", lambda result, store, run_id, **k: run_id or "new")
     out = tmp_path / "r.json"
@@ -142,3 +142,75 @@ def test_command_line_problems_are_explained_not_dumped(capsys, monkeypatch):
     assert ev.main(["run", "--tasks", "arc_easy"]) == 1 and "--model" in capsys.readouterr().out
     monkeypatch.setattr(ev, "load_harness", lambda: (_ for _ in ()).throw(ev.EvalError("the evaluation harness is not installed")))
     assert ev.main(["prepare", "--tasks", "arc_easy"]) == 1 and "not installed" in capsys.readouterr().out
+
+
+# ---- your own tests, saved examples, and the review ------------------------------------------------------------------
+import yaml  # noqa: E402
+
+
+def test_init_task_writes_a_valid_definition(tmp_path, capsys):
+    data = tmp_path / "mine.jsonl"
+    data.write_text('{"question": "2+2?", "answer": "4"}\n{"question": "3+3?", "answer": "6"}\n')
+    assert ev.main(["init-task", "--name", "my_test", "--data", str(data), "--out", str(tmp_path / "tasks")]) == 0
+    spec = yaml.safe_load((tmp_path / "tasks" / "my_test.yaml").read_text())
+    assert spec["task"] == "my_test" and spec["doc_to_text"] == "{{question}}" and spec["doc_to_target"] == "{{answer}}"
+    assert spec["dataset_kwargs"]["data_files"]["test"] == str(data) and spec["generation_kwargs"]["until"] == ["\n"]
+    assert spec["metric_list"][0]["metric"] == "exact_match"
+    assert "my_test" in capsys.readouterr().out
+
+
+def test_init_task_names_the_problem(tmp_path, capsys):
+    data = tmp_path / "x.jsonl"
+    data.write_text('{"q": "a", "a": "b"}\n')
+    assert ev.main(["init-task", "--name", "t", "--data", str(data), "--out", str(tmp_path)]) == 1
+    assert "no 'question'" in capsys.readouterr().out
+    assert ev.main(["init-task", "--name", "bad name", "--data", str(data), "--out", str(tmp_path)]) == 1
+    assert ev.main(["init-task", "--name", "t", "--data", str(tmp_path / "missing.jsonl"), "--out", str(tmp_path)]) == 1
+
+
+def test_tasks_dir_is_found(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("BHASKERA_TASKS_DIR", raising=False)
+    assert ev.tasks_dir() is None
+    (tmp_path / "tasks").mkdir()
+    assert ev.tasks_dir() == str((tmp_path / "tasks").resolve())
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.setenv("BHASKERA_TASKS_DIR", str(other))
+    assert ev.tasks_dir() == str(other.resolve())
+    with pytest.raises(ev.EvalError):
+        ev.tasks_dir(str(tmp_path / "nope"))
+
+
+def _sample(i, ok, resp):
+    return {"doc_id": i, "arguments": [[f"question {i}", {}]], "target": f"answer {i}", "filtered_resps": [resp], "exact_match": 1.0 if ok else 0.0}
+
+
+class FakeSamples:
+    """A harness that returns the same examples every time, right or wrong depending on the model."""
+    def simple_evaluate(self, model, model_args, tasks, log_samples, **kw):
+        tuned = "peft" in model_args
+        right = {0: True, 1: False, 2: False, 3: True} if not tuned else {0: True, 1: True, 2: False, 3: False}
+        samples = [_sample(i, ok, "x") for i, ok in right.items()]
+        return {"results": {"my_test": {"exact_match,none": sum(right.values()) / 4, "alias": "my_test"}},
+                "samples": {"my_test": samples} if log_samples else {}}
+
+
+def test_samples_are_saved_and_reviewed(tmp_path, capsys):
+    out = ev.evaluate_pair("/m", "/a", ["my_test"], evaluator=FakeSamples(), samples_dir=str(tmp_path), log=lambda s: None)
+    assert out["comparison"][0]["task"] == "my_test"
+    assert (tmp_path / "samples_my_test_base.jsonl").exists() and (tmp_path / "samples_my_test_tuned.jsonl").exists()
+    summary = ev.review(tmp_path)["my_test"]
+    assert [r["id"] for r in summary["fixed"]] == [1] and [r["id"] for r in summary["broken"]] == [3]
+    assert [r["id"] for r in summary["still_wrong"]] == [2] and [r["id"] for r in summary["still_right"]] == [0]
+    assert summary["broken"][0]["prompt"] == "question 3" and summary["broken"][0]["base_response"] == "x"
+    assert ev.main(["review", str(tmp_path)]) == 0
+    text = capsys.readouterr().out
+    assert "fixed by tuning 1" in text and "broken by tuning 1" in text and "still wrong 1" in text
+    rows = [json.loads(l) for l in (tmp_path / "review_my_test.jsonl").read_text().splitlines()]
+    assert {(r["group"], r["id"]) for r in rows} == {("broken", 3), ("still_wrong", 2)}
+
+
+def test_review_needs_tuned_samples(tmp_path):
+    with pytest.raises(ev.EvalError):
+        ev.review(tmp_path)

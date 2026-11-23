@@ -4,11 +4,18 @@
     python -m bhaskera.launcher.evaluate run --model <base model folder> --adapter <adapter folder> --tasks mmlu
     python -m bhaskera.launcher.evaluate prepare --tasks arc_easy,hellaswag      # download the datasets (needs internet)
     python -m bhaskera.launcher.evaluate show results.json                       # print a saved comparison again
+    python -m bhaskera.launcher.evaluate init-task --name my_test --data my.jsonl  # a test from your own question/answer file
+    python -m bhaskera.launcher.evaluate run ... --tasks my_test --save-samples    # keep every example's answer
+    python -m bhaskera.launcher.evaluate review lm_eval_results_samples            # what got fixed, broken, or stays wrong
 
 ``run`` evaluates the base model and the tuned model (base + adapter) on the same tasks, prints a table with the change and
 whether it is larger than the noise, saves ``results.json``, and, when a run is named, stores the numbers and the table
 with that MLflow run (metrics ``lmeval_<task>_<metric>_base``, ``..._tuned`` and ``..._delta``). With ``--run`` the base model
 and the adapter are found from the training run itself (the adapter that ``logging.mlflow_log_adapter`` stored).
+
+Your own tests: ``init-task`` writes a task definition for a JSONL file of questions and answers into a ``tasks`` folder. A ``tasks``
+folder in the current directory, ``$BHASKERA_TASKS_DIR`` or ``--tasks-dir`` is added to the harness's own tasks, so ``--tasks my_test`` works.
+``--save-samples`` keeps each example's prompt, expected answer and response for the base and the tuned model, and ``review`` sorts them.
 
 It needs the harness (``pip install "lm-eval>=0.4.5"``, installed by ``install-bhaskera.sh``) and the task datasets in the
 Hugging Face cache. Compute nodes usually have no internet: run ``prepare`` once on a machine that has it. Use ``slurm/eval.sbatch``
@@ -111,11 +118,27 @@ def load_harness():
     return evaluator, tasks
 
 
-def check_tasks(names: list[str], known: Optional[list[str]] = None) -> None:
+def tasks_dir(given: Optional[str] = None) -> Optional[str]:
+    """The folder with the user's own task definitions: --tasks-dir, $BHASKERA_TASKS_DIR, or ./tasks when it exists."""
+    if given:
+        if not Path(given).is_dir():
+            raise EvalError(f"the tasks folder {given} does not exist")
+        return str(Path(given).resolve())
+    for c in (os.environ.get("BHASKERA_TASKS_DIR"), "tasks"):
+        if c and Path(c).is_dir():
+            return str(Path(c).resolve())
+    return None
+
+
+def make_manager(tasks_mod, include: Optional[str]):
+    return tasks_mod.TaskManager(include_path=include) if include else tasks_mod.TaskManager()
+
+
+def check_tasks(names: list[str], known: Optional[list[str]] = None, include: Optional[str] = None) -> None:
     """Refuse a task name that does not exist, with the closest real name."""
     if known is None:
         _ev, tasks = load_harness()
-        known = list(tasks.TaskManager().all_tasks)
+        known = list(make_manager(tasks, include).all_tasks)
     unknown = [n for n in names if n not in known]
     if unknown:
         lines = []
@@ -126,10 +149,43 @@ def check_tasks(names: list[str], known: Optional[list[str]] = None) -> None:
 
 
 def evaluate_model(evaluator, args: str, tasks: list[str], limit: Optional[int], num_fewshot: Optional[int],
-                   batch_size: str, device: Optional[str] = None) -> dict:
+                   batch_size: str, device: Optional[str] = None, task_manager=None, log_samples: bool = False) -> dict:
     """One benchmark run; returns the harness' full result dict."""
+    extra = {"task_manager": task_manager} if task_manager is not None else {}
     return evaluator.simple_evaluate(model="hf", model_args=args, tasks=tasks, num_fewshot=num_fewshot, batch_size=batch_size,
-                                     limit=limit, device=device, log_samples=False)
+                                     limit=limit, device=device, log_samples=log_samples, **extra)
+
+
+def sample_records(task: str, samples: list[dict], metric: str) -> list[dict]:
+    """One compact line per example: id, prompt, expected answer, the model's response and its score."""
+    out = []
+    for i, smp in enumerate(samples or []):
+        arg = (smp.get("arguments") or [[None]])
+        arg0 = arg[0] if isinstance(arg, list) and arg else arg
+        prompt = arg0[0] if isinstance(arg0, (list, tuple)) and arg0 else smp.get("doc")
+        resp = smp.get("filtered_resps") or smp.get("resps") or [""]
+        while isinstance(resp, (list, tuple)) and resp:
+            resp = resp[0]
+        score = smp.get(metric)
+        out.append({"task": task, "id": smp.get("doc_id", i), "prompt": prompt if isinstance(prompt, str) else json.dumps(prompt, default=str),
+                    "target": smp.get("target"), "response": resp if isinstance(resp, str) else json.dumps(resp, default=str),
+                    "score": float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None})
+    return out
+
+
+def save_samples(side: str, result: dict, flat: dict, folder: str | Path) -> int:
+    """Write samples_<task>_<side>.jsonl for every task of a harness result; returns the number of examples."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for task, smp in (result.get("samples") or {}).items():
+        metric = (flat.get(task) or {}).get("metric", "")
+        rows = sample_records(task, smp, metric)
+        with open(folder / f"samples_{_clean(task)}_{side}.jsonl", "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        n += len(rows)
+    return n
 
 
 def free_gpu() -> None:
@@ -145,25 +201,136 @@ def free_gpu() -> None:
 
 def evaluate_pair(model: str, adapter: Optional[str], tasks: list[str], *, limit: Optional[int] = None,
                   num_fewshot: Optional[int] = None, batch_size: str = "auto", dtype: str = "bfloat16", four_bit: bool = False,
-                  device: Optional[str] = None, skip_base: bool = False, evaluator=None,
-                  log: Callable[[str], None] = lambda s: print(s, flush=True)) -> dict:
+                  device: Optional[str] = None, skip_base: bool = False, evaluator=None, task_manager=None,
+                  samples_dir: Optional[str] = None, log: Callable[[str], None] = lambda s: print(s, flush=True)) -> dict:
     """The base model and the tuned model on the same tasks. Returns everything that is saved."""
     if evaluator is None:
         evaluator, _ = load_harness()
     out: dict[str, Any] = {"model": model, "adapter": adapter, "tasks": tasks, "limit": limit, "num_fewshot": num_fewshot}
     if not skip_base:
         log(f"== base model: {model}")
-        base = evaluate_model(evaluator, model_args(model, None, dtype, four_bit), tasks, limit, num_fewshot, batch_size, device)
+        base = evaluate_model(evaluator, model_args(model, None, dtype, four_bit), tasks, limit, num_fewshot, batch_size, device,
+                              task_manager, bool(samples_dir))
         out["base"] = flatten(base.get("results"))
+        if samples_dir:
+            save_samples("base", base, out["base"], samples_dir)
         free_gpu()
     if adapter:
         log(f"== tuned model: {model} + {adapter}")
-        tuned = evaluate_model(evaluator, model_args(model, adapter, dtype, four_bit), tasks, limit, num_fewshot, batch_size, device)
+        tuned = evaluate_model(evaluator, model_args(model, adapter, dtype, four_bit), tasks, limit, num_fewshot, batch_size, device,
+                               task_manager, bool(samples_dir))
         out["tuned"] = flatten(tuned.get("results"))
+        if samples_dir:
+            save_samples("tuned", tuned, out["tuned"], samples_dir)
         free_gpu()
     if "base" in out and "tuned" in out:
         out["comparison"] = compare(out["base"], out["tuned"])
     return out
+
+
+def load_samples(folder: str | Path, side: str) -> dict[str, dict]:
+    """{task: {id: record}} from the samples_*_<side>.jsonl files of a folder."""
+    out: dict[str, dict] = {}
+    for f in sorted(Path(folder).glob(f"samples_*_{side}.jsonl")):
+        for line in f.read_text().splitlines():
+            if line.strip():
+                r = json.loads(line)
+                out.setdefault(r["task"], {})[r["id"]] = r
+    return out
+
+
+def review(folder: str | Path, threshold: float = 0.5) -> dict[str, dict]:
+    """Per task: how many examples tuning fixed, broke, left wrong, and left right, and the records of the last three groups'
+    interesting cases ('broken' and 'still_wrong')."""
+    base, tuned = load_samples(folder, "base"), load_samples(folder, "tuned")
+    if not tuned:
+        raise EvalError(f"no samples_*_tuned.jsonl in {folder}: run with --save-samples and an adapter")
+    out = {}
+    for task, rows in tuned.items():
+        groups = {"fixed": [], "broken": [], "still_wrong": [], "still_right": []}
+        for i, t in rows.items():
+            b = (base.get(task) or {}).get(i)
+            t_ok = t["score"] is not None and t["score"] >= threshold
+            b_ok = None if b is None or b["score"] is None else b["score"] >= threshold
+            if t_ok:
+                groups["still_right" if b_ok in (True, None) else "fixed"].append({**t, "base_response": b and b["response"]})
+            else:
+                groups["broken" if b_ok else "still_wrong"].append({**t, "base_response": b and b["response"]})
+        out[task] = groups
+    return out
+
+
+def write_review(summary: dict[str, dict], folder: str | Path) -> list[str]:
+    """review_<task>.jsonl with the broken and still-wrong examples: what to look at, and what to correct in the data."""
+    written = []
+    for task, g in summary.items():
+        rows = [{"group": name, **r} for name in ("broken", "still_wrong") for r in g[name]]
+        if rows:
+            path = Path(folder) / f"review_{_clean(task)}.jsonl"
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            written.append(str(path))
+    return written
+
+
+def cmd_review(args) -> int:
+    summary = review(args.folder, args.threshold)
+    for task, g in summary.items():
+        n = sum(len(v) for v in g.values())
+        print(f"\n{task}: {n} examples | right now {len(g['still_right']) + len(g['fixed'])} | fixed by tuning {len(g['fixed'])}"
+              f" | broken by tuning {len(g['broken'])} | still wrong {len(g['still_wrong'])}")
+        for name, label in (("broken", "BROKEN (the base model had it right)"), ("still_wrong", "STILL WRONG")):
+            for r in g[name][:args.show]:
+                print(f"  {label}\n    prompt:   {r['prompt'][:200]!r}\n    expected: {str(r['target'])[:120]!r}\n    answered: {r['response'][:160]!r}")
+    for path in write_review(summary, args.folder):
+        print(f"wrote {path}")
+    return 0
+
+
+_TASK_TEMPLATE = """# Your own test, written by: python -m bhaskera.launcher.evaluate init-task
+# Each line of the data file has a question and an answer; the model passes an example when its first line matches the answer
+# (ignoring case and punctuation). Change `metric_list` or `output_type` for other kinds of tests (the harness's documentation
+# describes them), then run:  ./submit.sh eval --run <run id> --tasks {name} --save-samples
+task: {name}
+dataset_path: json
+dataset_kwargs:
+  data_files:
+    test: {data}
+test_split: test
+output_type: generate_until
+doc_to_text: "{{{{{question}}}}}"
+doc_to_target: "{{{{{answer}}}}}"
+generation_kwargs:
+  until: ["\\n"]
+  do_sample: false
+  max_gen_toks: 128
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0
+"""
+
+
+def cmd_init_task(args) -> int:
+    import re
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,60}", args.name):
+        raise EvalError("the test name is letters, digits and _, starting with a letter")
+    data = Path(args.data).resolve()
+    if not data.is_file():
+        raise EvalError(f"the data file {args.data} does not exist")
+    first = json.loads(next(l for l in data.read_text().splitlines() if l.strip()))
+    for field in (args.question_field, args.answer_field):
+        if field not in first:
+            raise EvalError(f"the first line of {args.data} has no '{field}' (it has: {', '.join(first)}); use --question-field / --answer-field")
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{args.name}.yaml"
+    path.write_text(_TASK_TEMPLATE.format(name=args.name, data=data, question=args.question_field, answer=args.answer_field))
+    print(f"wrote {path}\nrun it with:  ./submit.sh eval --run <run id> --tasks {args.name} --save-samples")
+    return 0
 
 
 def _clean(name: str) -> str:
@@ -190,7 +357,8 @@ def from_run(store: str | Path, run_id: str) -> tuple[str, Optional[str]]:
     return model, str(adapter)
 
 
-def log_to_mlflow(result: dict, store: str, run_id: Optional[str], experiment: str = "bhaskera-eval", name: str = "lm-eval") -> str:
+def log_to_mlflow(result: dict, store: str, run_id: Optional[str], experiment: str = "bhaskera-eval", name: str = "lm-eval",
+                  samples_dir: Optional[str] = None) -> str:
     """Store metrics, the table and the full result with a run (an existing training run, or a new one). Returns the run id."""
     os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
     from mlflow.tracking import MlflowClient
@@ -210,6 +378,8 @@ def log_to_mlflow(result: dict, store: str, run_id: Optional[str], experiment: s
         client.log_table(run_id, data={k: [r[k] for r in rows] for k in ("task", "metric", "base", "tuned", "delta", "verdict")},
                          artifact_file="lm_eval/comparison.json")
     client.log_dict(run_id, result, "lm_eval/results.json")
+    if samples_dir and Path(samples_dir).is_dir():
+        client.log_artifacts(run_id, str(samples_dir), "lm_eval/samples")
     return run_id
 
 
@@ -229,16 +399,22 @@ def cmd_run(args) -> int:
         raise EvalError("give --model <base model folder>, or --run <mlflow run id>")
     if not adapter and not args.skip_base:
         print("no adapter given: only the base model is evaluated")
-    check_tasks(tasks)
+    include = tasks_dir(args.tasks_dir)
+    check_tasks(tasks, include=include)
+    evaluator, tasks_mod = load_harness()
+    samples_dir = (args.samples_dir or str(Path(args.out).with_suffix("")) + "_samples") if args.save_samples else None
     result = evaluate_pair(model, adapter, tasks, limit=args.limit, num_fewshot=args.num_fewshot, batch_size=args.batch_size,
-                           dtype=args.dtype, four_bit=args.four_bit, device=args.device, skip_base=args.skip_base)
+                           dtype=args.dtype, four_bit=args.four_bit, device=args.device, skip_base=args.skip_base, evaluator=evaluator,
+                           task_manager=make_manager(tasks_mod, include) if include else None, samples_dir=samples_dir)
     print()
     print(table(result.get("comparison", [])) if "comparison" in result else
           "\n".join(f"{t}: {r['metric']} = {r['value']:.4f}" for side in ("base", "tuned") for t, r in (result.get(side) or {}).items()))
     Path(args.out).write_text(json.dumps(result, indent=1))
     print(f"\nsaved {args.out}")
+    if samples_dir:
+        print(f"every example's answer is in {samples_dir}; see what changed with:  python -m bhaskera.launcher.evaluate review {samples_dir}")
     if args.run or args.mlflow:
-        rid = log_to_mlflow(result, args.store, args.run)
+        rid = log_to_mlflow(result, args.store, args.run, samples_dir=samples_dir)
         print(f"stored with MLflow run {rid}")
     return 0
 
@@ -247,8 +423,9 @@ def cmd_prepare(args) -> int:
     os.environ.setdefault("HF_DATASETS_DISABLE_PROGRESS_BARS", "1")
     tasks = [t for t in args.tasks.split(",") if t]
     _ev, tasks_mod = load_harness()
-    check_tasks(tasks)
-    manager = tasks_mod.TaskManager()
+    include = tasks_dir(args.tasks_dir)
+    check_tasks(tasks, include=include)
+    manager = make_manager(tasks_mod, include)
     for name in tasks:
         print(f"downloading {name} ...", flush=True)
         tasks_mod.get_task_dict([name], manager)            # building the task downloads its dataset into the cache
@@ -277,16 +454,30 @@ def main(argv: Optional[list[str]] = None) -> int:
     r.add_argument("--4bit", action="store_true", dest="four_bit", help="load the base model in 4 bit (as QLoRA trained it)")
     r.add_argument("--device")
     r.add_argument("--skip-base", action="store_true", dest="skip_base", help="evaluate only the tuned model")
+    r.add_argument("--tasks-dir", dest="tasks_dir", help="folder with your own task definitions (default: ./tasks or $BHASKERA_TASKS_DIR)")
+    r.add_argument("--save-samples", action="store_true", dest="save_samples", help="keep every example's prompt, answer and response, to review mistakes")
+    r.add_argument("--samples-dir", dest="samples_dir", help="where --save-samples writes (default: <out>_samples)")
     r.add_argument("--out", default="lm_eval_results.json")
     r.add_argument("--store", default=_store_default(), help="MLflow store (default ~/mlflow-runs)")
     r.add_argument("--mlflow", action="store_true", help="store the result in a new MLflow run when --run is not given")
     pr = sub.add_parser("prepare")
     pr.add_argument("--tasks", default=DEFAULT_TASKS)
+    pr.add_argument("--tasks-dir", dest="tasks_dir")
+    it = sub.add_parser("init-task", help="write a test definition for your own question/answer JSONL file")
+    it.add_argument("--name", required=True)
+    it.add_argument("--data", required=True, help="JSONL file, one example per line")
+    it.add_argument("--question-field", default="question", dest="question_field")
+    it.add_argument("--answer-field", default="answer", dest="answer_field")
+    it.add_argument("--out", default="tasks", help="folder for the task definition (default ./tasks)")
+    rv = sub.add_parser("review", help="what tuning fixed, broke, or left wrong, from the saved samples")
+    rv.add_argument("folder", help="the folder --save-samples wrote")
+    rv.add_argument("--show", type=int, default=3, help="examples to print per group (default 3)")
+    rv.add_argument("--threshold", type=float, default=0.5, help="a score at or above this counts as right")
     sh = sub.add_parser("show")
     sh.add_argument("file")
     args = p.parse_args(argv)
     try:
-        return {"run": cmd_run, "prepare": cmd_prepare, "show": cmd_show}[args.action](args)
+        return {"run": cmd_run, "prepare": cmd_prepare, "show": cmd_show, "init-task": cmd_init_task, "review": cmd_review}[args.action](args)
     except EvalError as e:
         print(f"error: {e}")
         return 1

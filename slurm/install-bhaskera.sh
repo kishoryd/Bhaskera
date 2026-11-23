@@ -45,6 +45,9 @@ cp "$KIT"/recipes/*.yaml "$PREFIX/share/kit/recipes/"
 mkdir -p "$PREFIX/share/kit/clusters" && cp "$KIT"/clusters/*.yaml "$PREFIX/share/kit/clusters/"      # cluster profiles
 chmod +x "$PREFIX/share/kit/submit.sh"
 
+# Video and audio decoding for multimodal fine-tuning (images need nothing extra), under the same pins.
+uv pip install av soundfile -c "$KIT/requirements-paramrudra.lock"
+
 # EleutherAI lm-evaluation-harness, to benchmark a tuned model against its base (needs internet; skip with WITH_EVAL=0).
 # Installed under the benchmark pins, so it cannot change torch, transformers or the other tested versions.
 if [[ "${WITH_EVAL:-1}" == "1" ]]; then

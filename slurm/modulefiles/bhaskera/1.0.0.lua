@@ -13,8 +13,8 @@ family("condaenv")                                -- same family as AIStack Pyth
 setenv("BHASKERA_HOME", root)
 setenv("BHASKERA_DIR",  pathJoin(root, "src"))    -- used by train.sbatch / tokenize.sbatch / submit.sh
 setenv("BHASKERA_KIT",  pathJoin(root, "share/kit"))
-setenv("BHASKERA_OBSERVABILITY", pathJoin(root, "observability"))
-setenv("BHASKERA_CLUSTER_PROFILE", pathJoin(root, "share/kit/clusters/param-rudra.yaml"))   -- partitions, GPUs per node, network interface of this cluster   -- Prometheus and Grafana for the Ray Dashboard charts
+setenv("BHASKERA_OBSERVABILITY", pathJoin(root, "observability"))   -- Prometheus and Grafana for the Ray Dashboard charts
+setenv("BHASKERA_CLUSTER_PROFILE", pathJoin(root, "share/kit/clusters/param-rudra.yaml"))   -- partitions, GPUs per node and network interface of this cluster
 setenv("BHASKERA_QUICKSTART", quickstart)
 setenv("VIRTUAL_ENV",   pathJoin(root, "venv"))
 prepend_path("PATH",    pathJoin(root, "venv/bin"))

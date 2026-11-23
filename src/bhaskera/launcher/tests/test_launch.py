@@ -74,6 +74,12 @@ def test_serve_and_eval(kit):
     m.launch({"action": "start", "kind": "eval", "run": RUN, "tasks": "arc_easy,gsm8k", "limit": "50"})
     argv, kw = fake.calls[-1]
     assert argv[2:] == ["eval", "--run", RUN, "--tasks", "arc_easy,gsm8k", "--limit", "50"] and kw["env"]["EVAL_HOURS"] == "2"
+    m._last = 0
+    m.launch({"action": "start", "kind": "eval", "run": RUN, "samples": True})
+    assert "--save-samples" in fake.calls[-1][0]
+    m._last = 0
+    m.launch({"action": "start", "kind": "eval", "run": RUN, "samples": "yes"})
+    assert "--save-samples" not in fake.calls[-1][0]
 
 
 @pytest.mark.parametrize("form", [

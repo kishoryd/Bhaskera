@@ -32,6 +32,8 @@ clusters with Ray.
 - Start a training job, a chat server or a benchmark from the page. *Check first* runs the limits and preflight without submitting.
 - Chat with a tuned model, the base model, or both side by side, from the same weights (`./submit.sh serve`).
 - Benchmark a tuned model against its base with the lm-evaluation-harness (`./submit.sh eval`); results are stored with the run.
+  Your own tests: `evaluate init-task` turns a question/answer JSONL file into a test, `--save-samples` keeps every example's answer,
+  and `evaluate review` shows what tuning fixed, broke and left wrong, with a file of examples to correct.
 - MLflow: about 20 curated curves by default, the trained adapter in standard PEFT format, optional model registry entry, evaluation
   report and traces.
 

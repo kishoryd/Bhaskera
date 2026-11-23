@@ -177,6 +177,8 @@ class Launcher:
         if form.get("four_bit") is True:
             args.append("--4bit")
         if kind == "eval":
+            if form.get("samples") is True:
+                args.append("--save-samples")
             tasks = form.get("tasks") or ""
             if tasks:
                 if not isinstance(tasks, str) or not TASKS.match(tasks):

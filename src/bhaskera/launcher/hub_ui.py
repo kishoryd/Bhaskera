@@ -178,6 +178,35 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 .nodebox{margin:4px 0 14px}.nodebox>summary,.opt>summary{cursor:pointer;color:var(--muted);font-size:12.5px}
 .nodebox>summary:hover,.opt>summary:hover{color:var(--text)}
 .opt{position:relative}.opt>div{position:absolute;right:0;z-index:2;display:flex;flex-direction:column;gap:10px;padding:12px 14px;margin-top:6px;background:var(--bg);border:1px solid var(--ink);border-radius:3px;min-width:230px}
+.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:16px 22px 4px}
+.choice{text-align:left;border:1px solid var(--border);background:transparent;border-radius:3px;padding:11px 13px;display:flex;flex-direction:column;gap:3px}
+.choice b{font-size:14px}.choice span{font-size:12.5px;color:var(--muted)}
+.choice:hover{border-color:var(--ink)}
+.choice[aria-pressed=true]{border-color:var(--ink);box-shadow:inset 3px 0 0 var(--accent);background:var(--surface)}
+.sfields{padding:6px 22px 0;display:flex;flex-direction:column;gap:16px}
+.srow label.lbl{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em}
+.srow select,.srow input[type=number],.srow input[type=text]{border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:3px;padding:7px 10px;font:inherit}
+.srow select{width:100%}.srow input[type=number]{width:90px}.srow input[type=text]{width:100%}
+.srow select:focus,.srow input:focus{outline:0;border-color:var(--ink)}
+.srow .sub{font-size:12.5px;color:var(--muted);margin-top:5px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chipb{border:1px solid var(--border);background:transparent;border-radius:3px;padding:4px 11px;font-size:13px}
+.chipb:hover{border-color:var(--ink)}
+.chipb[aria-pressed=true]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.rlist{border:1px solid var(--border);border-radius:3px;max-height:210px;overflow:auto}
+.ritem{display:flex;gap:10px;align-items:baseline;width:100%;text-align:left;border:0;border-bottom:1px solid var(--border);background:transparent;padding:8px 11px}
+.ritem:last-child{border-bottom:0}
+.ritem:hover{background:var(--surface)}
+.ritem[aria-pressed=true]{background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
+.ritem b{font-weight:600}.ritem .m{margin-left:auto;font:12px var(--mono);color:var(--muted);white-space:nowrap}
+.srow details summary{cursor:pointer;color:var(--muted);font-size:13px}
+.srow details label{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px}
+.ssum{margin:14px 22px 0;padding:10px 13px;border-left:3px solid var(--ink);background:var(--surface);font-size:13px;min-height:20px}
+.ssum.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+.ssum:empty{display:none}
+.toast{position:fixed;left:50%;top:78px;transform:translateX(-50%);z-index:20;background:var(--ink);color:var(--paper);padding:10px 18px;border-radius:3px;font-size:13.5px;box-shadow:4px 4px 0 rgba(31,28,23,.2)}
+.job.flash{animation:fl 2.4s ease-out}@keyframes fl{0%{background:var(--warn-soft)}100%{background:transparent}}
+.btn.confirm{background:var(--accent);border-color:var(--accent);color:#fff}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -245,14 +274,19 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 
 <dialog id="startbox">
   <div class="dlg-head"><b>Start a job</b><span class="spacer" style="flex:1"></span><button class="btn" id="startclose" type="button">Close</button></div>
-  <div style="padding:14px 22px 0"><div class="seg" id="startkind" role="group" aria-label="What to start">
-    <button type="button" data-k="train">Train a model</button><button type="button" data-k="serve">Chat with a trained model</button><button type="button" data-k="eval">Benchmark a trained model</button></div></div>
+  <div class="choices" id="startkind" role="group" aria-label="What to start">
+    <button type="button" class="choice" data-k="train"><b>Train a model</b><span>Fine-tune with one of your recipes</span></button>
+    <button type="button" class="choice" data-k="serve"><b>Chat with a trained model</b><span>Ask the tuned model, the base model, or both</span></button>
+    <button type="button" class="choice" data-k="eval"><b>Benchmark a trained model</b><span>Compare it with its base on standard tests</span></button>
+  </div>
   <div id="startnote" class="startnote" hidden></div>
-  <div class="fgrid" id="startfields"></div>
+  <div class="sfields" id="startfields"></div>
+  <div class="ssum" id="startsum"></div>
   <pre class="result" id="startout" hidden></pre>
-  <div class="dlg-foot"><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the preflight; submits nothing">Check first</button>
+  <div class="dlg-foot"><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the recipe check; submits nothing">Check first</button>
     <button class="btn primary" id="startgo" type="button">Start</button></div>
 </dialog>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <dialog id="logbox">
   <div class="dlg-head"><b id="logtitle">Log</b><span class="muted" id="logmeta"></span><span class="spacer" style="flex:1"></span>
@@ -353,7 +387,7 @@ function nodesHtml(nodes,id){
 }
 function serviceCard(j){
   var running=(j.state==="RUNNING"||j.state==="COMPLETING"), s=j.serve||{}, serve=j.kind==="serve";
-  var h='<article class="card job"><div class="job-head">'+badge(j.state)+'<span class="job-name">'+esc(j.name)+'</span><span class="muted mono">#'+esc(j.id)+'</span>'+
+  var h='<article class="card job" data-job-card="'+esc(j.id)+'"><div class="job-head">'+badge(j.state)+'<span class="job-name">'+esc(j.name)+'</span><span class="muted mono">#'+esc(j.id)+'</span>'+
         '<div class="meta"><span class="chip">'+(serve?"chat server":"benchmark")+'</span><span class="chip">'+esc(j.partition)+'</span>'+
         (!running&&j.reason?'<span class="chip">'+esc(j.reason)+'</span>':"")+'</div></div>';
   if(!running) return h+'</article>';
@@ -369,7 +403,7 @@ function jobCard(j){
   var t=j.train||{}, running=(j.state==="RUNNING"||j.state==="COMPLETING");
   var base="http://job-"+j.id+".localhost:"+PORT+"/";
   var charts="http://grafana-"+j.id+".localhost:"+PORT+"/d/rayDefaultDashboard?orgId=1&from=now-1h&to=now&refresh=10s";
-  var h='<article class="card job"><div class="job-head">'+badge(j.state)+'<span class="job-name">'+esc(j.name)+'</span>'+
+  var h='<article class="card job" data-job-card="'+esc(j.id)+'"><div class="job-head">'+badge(j.state)+'<span class="job-name">'+esc(j.name)+'</span>'+
         '<span class="muted mono">#'+esc(j.id)+'</span><div class="meta"><span class="chip">'+esc(j.partition)+'</span>'+
         '<span class="chip">'+j.node_count+(j.node_count===1?" node":" nodes")+(GPN?' · '+(GPN*j.node_count)+' GPUs':'')+'</span>'+
         (!running && j.reason ? '<span class="chip" title="Why the job waits">'+esc(j.reason)+'</span>' : "")+'</div></div>';
@@ -458,7 +492,7 @@ function render(){
   bits.push(T.running ? T.running+" running"+(T.nodes?" · "+T.nodes+(T.nodes===1?" node":" nodes")+(T.gpus?" · "+T.gpus+" GPUs":""):"") : "idle");
   if(T.queued) bits.push(T.queued+" waiting for nodes");
   if(T.gpu_util!=null) bits.push("GPUs "+T.gpu_util+"% busy");
-  if(part) bits.push(part.submitted+" of "+part.max_submitted+" job slots used");
+  if(part) bits.push(part.submitted+" of "+part.max_submitted+" job slots used in "+part.partition);
   $("#stats").textContent=bits.join("  ·  ");
   var order={RUNNING:0,COMPLETING:1,PENDING:2};
   var jobs=(s.jobs||[]).slice().sort(function(a,b){ return ((order[a.state]||0)-(order[b.state]||0)) || (Number(b.id)-Number(a.id)); });
@@ -608,79 +642,139 @@ $("#runs").addEventListener("click", function(e){
 });
 
 /* ---- start a job ---- */
-var L = {opts:null, kind:"train", run:"", busy:false};
+var L = {opts:null, kind:"train", run:"", nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
   var rules=(L.opts.partitions||[]).slice().sort(function(a,b){return a.max_nodes-b.max_nodes});
   for(var i=0;i<rules.length;i++){ if(n<=rules[i].max_nodes) return rules[i]; }
   return null;
 }
+function slotsFor(part){
+  var p=(state&&state.partitions||[]).filter(function(x){return x.partition===part})[0];
+  return p&&p.max_submitted!=null ? {free:Math.max(0,p.max_submitted-p.submitted), max:p.max_submitted} : null;
+}
 function val(id){ var e=$("#"+id); return e?e.value.trim():""; }
-function optionsFor(runs){
-  if(!runs.length) return '<option value="">no run has a saved adapter yet</option>';
-  return runs.map(function(r){ return '<option value="'+esc(r.run_id)+'"'+(r.run_id===L.run?" selected":"")+'>'+esc(r.name)+' ('+esc(r.run_id.slice(0,8))+')</option>'; }).join("");
+function chip(label,on,attr){ return '<button type="button" class="chipb" '+attr+' aria-pressed="'+(on?"true":"false")+'">'+esc(label)+'</button>'; }
+function recipeName(f){ return f.replace(/\.ya?ml$/,""); }
+function runInfo(id){ return (state&&state.runs||[]).filter(function(r){return r.run_id===id})[0]||{}; }
+function runList(){
+  var ok={}; (L.opts.runs||[]).forEach(function(r){ ok[r.run_id]=1; });
+  var rs=(state&&state.runs||[]).filter(function(r){return ok[r.run_id]});
+  if(!rs.length) return '<div class="sub">No finished run has a saved adapter yet. Train with <code>logging.mlflow_log_adapter: true</code> in the recipe.</div>';
+  if(!L.run||!ok[L.run]) L.run=rs[0].run_id;
+  return '<div class="rlist">'+rs.map(function(r){
+    return '<button type="button" class="ritem" data-run="'+esc(r.run_id)+'" aria-pressed="'+(r.run_id===L.run?"true":"false")+'"><b>'+esc(r.name)+'</b><span class="muted">'+ago(r.started)+'</span>'+
+      '<span class="m">'+(r.eval_loss!=null?"eval loss "+fx(r.eval_loss,3):"")+(r.lm_eval&&Object.keys(r.lm_eval).length?" · benchmarked":"")+'</span></button>';
+  }).join("")+'</div><input type="hidden" id="f-run" value="'+esc(L.run)+'">';
+}
+function hoursRow(opts,def){
+  var cur=L.hours===""?def:L.hours;
+  var inChips=opts.some(function(h){ return String(h)===String(cur); });
+  return '<div class="chips">'+opts.map(function(h){ return chip(h===""?"Longest allowed":h+" h", String(cur)===String(h), 'data-h="'+h+'"'); }).join("")+
+    '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-hours" type="number" min="1" max="'+L.opts.max_hours+'" value="'+(inChips||cur===""?"":cur)+'" placeholder="hours"></div>';
 }
 function renderStart(){
   var o=L.opts, k=L.kind, h="";
-  Array.prototype.forEach.call($("#startkind").querySelectorAll("button"), function(b){ b.setAttribute("aria-pressed", b.getAttribute("data-k")===k?"true":"false"); });
+  L.confirm=false;
+  Array.prototype.forEach.call($("#startkind").querySelectorAll(".choice"), function(b){ b.setAttribute("aria-pressed", b.getAttribute("data-k")===k?"true":"false"); });
   var note=$("#startnote"); note.hidden=o.enabled; note.textContent=o.reason||"";
-  $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy;
-  $("#startout").hidden=true;
+  $("#startout").hidden=true; $("#startgo").classList.remove("confirm");
   if(k==="train"){
     var rs=o.recipes||[], ready=rs.filter(function(r){return r.ready}), blocked=rs.filter(function(r){return !r.ready&&!r.tokenize});
-    h+='<div class="fld wide"><label for="f-recipe">Recipe</label><select id="f-recipe">'+
-      (ready.length?ready.map(function(r){return '<option value="'+esc(r.file)+'">'+esc(r.file)+' – '+esc(r.model||"?")+', '+esc(r.method)+(r.strategy?', '+esc(r.strategy):'')+'</option>'}).join(""):'<option value="">no ready recipe found</option>')+
-      blocked.map(function(r){return '<option value="" disabled>'+esc(r.file)+' – '+esc(r.why)+'</option>'}).join("")+'</select>'+
-      (ready.length?'':'<div class="hint">Put a recipe in the <code>recipes</code> folder next to submit.sh, or in a folder listed in $BHASKERA_RECIPES.</div>')+'</div>'+
-      '<div class="fld"><label for="f-nodes">Nodes</label><input id="f-nodes" type="number" min="1" max="'+o.max_nodes+'" value="'+(L.nodes||2)+'"><div class="hint" id="f-plan"></div></div>'+
-      '<div class="fld"><label for="f-hours">Hours (optional)</label><input id="f-hours" type="number" min="1" max="'+o.max_hours+'" value="'+(L.hours||"")+'"></div>';
+    if(ready.length&&!ready.some(function(r){return r.file===L.recipe})) L.recipe=ready[0].file;
+    h+='<div class="srow"><label class="lbl" for="f-recipe">Recipe</label>'+(ready.length ?
+        '<select id="f-recipe">'+ready.map(function(r){return '<option value="'+esc(r.file)+'"'+(r.file===L.recipe?" selected":"")+'>'+esc(recipeName(r.file))+'</option>'}).join("")+'</select><div class="sub" id="f-recipe-info"></div>' :
+        '<div class="sub">No recipe is ready. Put one in the <code>recipes</code> folder next to submit.sh, or in a folder listed in $BHASKERA_RECIPES.</div>')+
+      (blocked.length?'<div class="sub">'+blocked.length+' more '+(blocked.length>1?"need":"needs")+' editing first (they still have <code>&lt;project&gt;/&lt;username&gt;</code> placeholders): '+blocked.slice(0,3).map(function(r){return esc(recipeName(r.file))}).join(", ")+(blocked.length>3?", …":"")+'</div>':'')+'</div>'+
+      '<div class="srow"><label class="lbl">Nodes</label><div class="chips">'+[1,2,4,8,16,32].filter(function(n){return n<=o.max_nodes}).map(function(n){return chip(n,L.nodes===n,'data-n="'+n+'"')}).join("")+
+        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-nodes" type="number" min="1" max="'+o.max_nodes+'" value="'+L.nodes+'"></div></div>'+
+      '<div class="srow"><label class="lbl">How long</label>'+hoursRow(["",1,2,6,12,24],"")+'</div>';
   } else {
-    h+='<div class="fld wide"><label for="f-run">Trained run</label><select id="f-run">'+optionsFor(o.runs||[])+'</select></div>';
-    if(k==="eval") h+='<div class="fld"><label for="f-tasks">Benchmarks</label><input id="f-tasks" type="text" value="arc_easy,hellaswag"></div>'+
-      '<div class="fld"><label for="f-limit">Examples per task (blank: all)</label><input id="f-limit" type="number" min="1" value="200"></div>';
-    h+='<div class="fld"><label for="f-hours">Hours</label><input id="f-hours" type="number" min="1" max="'+o.max_hours+'" value="'+(o.default_hours||2)+'"></div>'+
-      '<div class="fld check" style="align-self:end"><label><input id="f-4bit" type="checkbox"> Load the model in 4-bit (as QLoRA trained it)</label></div>';
+    h+='<div class="srow"><label class="lbl">Trained model</label>'+runList()+'</div>';
+    if(k==="eval") h+='<div class="srow"><label class="lbl">Tests</label><div class="chips">'+COMMON_TASKS.map(function(t){return chip(t,!!L.tasks[t],'data-t="'+t+'"')}).join("")+'</div>'+
+        '<div style="margin-top:8px"><input id="f-more" type="text" placeholder="other test names, separated by commas"></div>'+
+        '<div class="sub">The test data must be downloaded once: <code>python -m bhaskera.launcher.evaluate prepare --tasks &lt;names&gt;</code></div></div>'+
+      '<div class="srow"><label class="lbl">How much</label><div class="chips">'+chip("Quick check: 200 examples per test",L.quick,'data-q="1"')+chip("Full test",!L.quick,'data-q="0"')+'</div></div>';
+    h+='<div class="srow"><label class="lbl">Stop after</label>'+hoursRow([1,2,4,8],o.default_hours||2)+'</div>'+
+       '<div class="srow"><details'+(k==="eval"?' open':'')+'><summary>More options</summary>'+(k==="eval"?'<label><input id="f-samples" type="checkbox" checked> Keep every answer, to review the mistakes afterwards</label>':'')+'<label><input id="f-4bit" type="checkbox"> Load the model in 4-bit (as QLoRA trained it)</label></details></div>';
   }
-  $("#startfields").innerHTML=h; showPlan();
+  $("#startfields").innerHTML=h; fillInfo(); showSum();
+  $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||(k!=="train"&&!(o.runs||[]).length)||(k==="train"&&!(o.recipes||[]).some(function(r){return r.ready}));
 }
-function showPlan(){
-  var n=parseInt(val("f-nodes"),10), el=$("#f-plan"); if(!el) return;
-  if(!n){ el.textContent=""; return; }
-  var p=planFor(n), g=L.opts.gpus_per_node;
-  el.textContent=(g?(n*g)+" GPUs. ":"")+(p?"Goes to "+p.partition+(p.max_hours?" (up to "+p.max_hours+" h).":"."):"");
+function fillInfo(){
+  var el=$("#f-recipe-info"); if(!el) return;
+  var r=(L.opts.recipes||[]).filter(function(x){return x.file===val("f-recipe")})[0];
+  el.textContent=r?[r.model,r.method,r.strategy].filter(Boolean).join(" · "):"";
+}
+function showSum(){
+  var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, n=L.kind==="train"?(parseInt(val("f-nodes"),10)||0):1, bits=[], warn=false;
+  if(!n){ el.className="ssum"; el.textContent=""; return; }
+  var p=planFor(n);
+  bits.push(n+(n===1?" node":" nodes")+(g?" · "+(n*g)+" GPUs":""));
+  if(p){ bits.push(p.partition); var sl=slotsFor(p.partition); if(sl){ bits.push(sl.free+" of "+sl.max+" job slots free"); if(!sl.free) warn=true; } }
+  var hrs=L.hours===""?(p&&p.max_hours?p.max_hours:""):L.hours;
+  if(L.kind==="train") bits.push(hrs?"up to "+hrs+" h":"time limit of the partition");
+  else bits.push((L.hours||o.default_hours||2)+" h at most"+(L.kind==="serve"?"; loading takes a few minutes":""));
+  el.className="ssum"+(warn?" warn":""); el.textContent=bits.join("  ·  ")+(warn?"  ·  no free slot: the job will be refused until one ends":"");
+}
+function tasksValue(){
+  var t=Object.keys(L.tasks).filter(function(k){return L.tasks[k]}), more=val("f-more").split(",").map(function(x){return x.trim()}).filter(Boolean);
+  return t.concat(more).join(",");
 }
 function formData(action){
   var f={action:action,kind:L.kind};
-  if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
-  else { f.run=val("f-run"); f.hours=val("f-hours"); f.four_bit=$("#f-4bit").checked; if(L.kind==="eval"){ f.tasks=val("f-tasks"); f.limit=val("f-limit"); } }
+  if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
+  else { f.run=val("f-run"); f.hours=val("f-hours")||L.hours||String(L.opts.default_hours||2); f.four_bit=$("#f-4bit").checked;
+    if(L.kind==="eval"){ f.tasks=tasksValue(); f.limit=L.quick?"200":""; f.samples=$("#f-samples").checked; } }
   return f;
 }
 function showResult(cls,title,body){
   var o=$("#startout"); o.hidden=false; o.className="result "+cls; o.innerHTML="<b>"+esc(title)+"</b>"+(body?"\n"+esc(body):""); o.scrollIntoView({block:"nearest"});
 }
+function toast(msg){ var t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(function(){ t.hidden=true; },6000); }
 function send(action){
   if(L.busy) return; var f=formData(action);
-  if(action==="start"&&L.kind==="train"){
-    var p=planFor(parseInt(f.nodes,10));
-    if(!window.confirm("Start "+f.recipe+" on "+f.nodes+" node(s)"+(L.opts.gpus_per_node?" ("+f.nodes*L.opts.gpus_per_node+" GPUs)":"")+(f.hours?" for up to "+f.hours+" h":"")+"?\nThis uses GPU hours of your project.")) return;
+  if(action==="start"&&L.kind==="train"&&!L.confirm){
+    L.confirm=true; var g=L.opts.gpus_per_node, n=parseInt(f.nodes,10)||0;
+    $("#startgo").textContent="Yes, start on "+n+(n===1?" node":" nodes")+(g?" ("+n*g+" GPUs)":""); $("#startgo").classList.add("confirm");
+    setTimeout(function(){ if(L.confirm){ L.confirm=false; $("#startgo").textContent="Start"; $("#startgo").classList.remove("confirm"); } },6000);
+    return;
   }
+  L.confirm=false; $("#startgo").textContent="Start"; $("#startgo").classList.remove("confirm");
   L.busy=true; $("#startcheck").disabled=$("#startgo").disabled=true; showResult("", action==="check"?"Checking …":"Submitting …", "");
   api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
     if(r.j.error){ showResult("bad","Not started",r.j.error); return; }
-    if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Checks passed. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
-    if(r.j.ok){ showResult("ok","Submitted job #"+r.j.job+". It appears under Jobs in a moment.", r.j.output); refresh(); setTimeout(function(){ if($("#startbox").open) $("#startbox").close(); }, 2500); }
-    else showResult("bad","Not submitted",r.j.output);
-  }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); }).then(function(){ L.busy=false; $("#startcheck").disabled=$("#startgo").disabled=!(L.opts&&L.opts.enabled); });
+    if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
+    if(r.j.ok){
+      var what=L.kind==="train"?"Training":L.kind==="serve"?"Chat server":"Benchmark";
+      toast(what+" submitted as job #"+r.j.job+(L.kind==="serve"?". The chat opens on this page when the model is loaded.":"."));
+      $("#startbox").close(); refresh();
+      setTimeout(function(){ var c=document.querySelector('[data-job-card="'+r.j.job+'"]'); if(c){ c.scrollIntoView({block:"center",behavior:"smooth"}); c.classList.add("flash"); } },1500);
+    } else showResult("bad","Not submitted",r.j.output);
+  }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); }).then(function(){ L.busy=false; if(L.opts) $("#startcheck").disabled=$("#startgo").disabled=!L.opts.enabled; });
 }
 function openStart(kind,run){
-  api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; }).catch(function(){ L.opts={enabled:false,reason:"The page could not reach the hub."}; }).then(function(){
-    L.kind=kind||L.kind; L.run=run||L.run; renderStart(); if(!$("#startbox").open) $("#startbox").showModal();
+  api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; }).catch(function(){ L.opts={enabled:false,reason:"The page could not reach the hub.",recipes:[],runs:[],partitions:[]}; }).then(function(){
+    L.kind=kind||L.kind; if(run) L.run=run; renderStart(); if(!$("#startbox").open) $("#startbox").showModal();
   });
 }
 $("#startbtn").addEventListener("click", function(){ openStart("train"); });
 $("#startclose").addEventListener("click", function(){ $("#startbox").close(); });
-$("#startkind").addEventListener("click", function(e){ var b=e.target.closest("button"); if(b){ L.kind=b.getAttribute("data-k"); renderStart(); } });
-$("#startfields").addEventListener("input", function(e){ if(e.target.id==="f-nodes") showPlan(); });
+$("#startkind").addEventListener("click", function(e){ var b=e.target.closest(".choice"); if(b){ L.kind=b.getAttribute("data-k"); L.hours=""; renderStart(); } });
+$("#startfields").addEventListener("click", function(e){
+  var b=e.target.closest("button"); if(!b) return;
+  if(b.hasAttribute("data-n")){ L.nodes=parseInt(b.getAttribute("data-n"),10); renderStart(); }
+  else if(b.hasAttribute("data-h")){ L.hours=b.getAttribute("data-h"); renderStart(); }
+  else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
+  else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
+  else if(b.hasAttribute("data-run")){ L.run=b.getAttribute("data-run"); renderStart(); }
+});
+$("#startfields").addEventListener("input", function(e){
+  if(e.target.id==="f-nodes"){ var n=parseInt(e.target.value,10); L.nodes=n||L.nodes; showSum(); }
+  else if(e.target.id==="f-hours"){ L.hours=e.target.value.trim(); showSum(); }
+  else if(e.target.id==="f-recipe"){ L.recipe=e.target.value; fillInfo(); }
+});
 $("#startcheck").addEventListener("click", function(){ send("check"); });
 $("#startgo").addEventListener("click", function(){ send("start"); });
 

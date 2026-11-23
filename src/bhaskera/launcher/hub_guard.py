@@ -87,3 +87,15 @@ def same_user_peer(client: tuple, server: tuple, uid: Optional[int] = None, proc
     except (OSError, ValueError):
         return False
     return owner == uid
+
+
+def with_back_link(page: bytes, host: str) -> bytes:
+    """An HTML page with a small link back to the home page (the address it was opened from, without the job or MLflow
+    prefix) added before </body>. The page is returned unchanged when it is not text we can extend."""
+    m = re.match(r"^[^:]+:(\d{1,5})$", (host or "").strip())
+    port = f":{m.group(1)}" if m else ""
+    link = ('<a id="bhaskera-back" href="http://localhost%s/" style="position:fixed;left:14px;bottom:14px;z-index:2147483647;'
+            'background:#1f1c17;color:#f3efe6;font:600 13px system-ui,Segoe UI,Arial,sans-serif;padding:8px 14px;border-radius:3px;'
+            'text-decoration:none;box-shadow:3px 3px 0 rgba(0,0,0,.2)">&larr; Bhaskera</a>' % port).encode()
+    i = page.lower().rfind(b"</body>")
+    return page + link if i < 0 else page[:i] + link + page[i:]
