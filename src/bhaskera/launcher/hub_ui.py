@@ -41,6 +41,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .brand svg{width:26px;height:26px;color:var(--accent)}
 .brand b{font:600 21px/1 var(--serif);letter-spacing:.005em} .brand small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
 .spacer{flex:1}
+#updated{display:inline-block;width:16ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .pill{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:7px}
 .dot{width:7px;height:7px;background:var(--ok);display:inline-block}
 .dot.stale{background:var(--bad)}
@@ -604,7 +605,7 @@ function clock(){
   if(!lastOk){ return; }
   var age=Math.round((Date.now()-lastOk)/1000);
   dot.classList.toggle("stale", age>30);
-  el.textContent = age>30 ? "connection lost – retrying" : (age<3 ? "live" : "updated "+age+" s ago");
+  el.title = age>30 ? "The page lost its connection and is retrying." : ""; el.textContent = age>30 ? "reconnecting …" : (age<3 ? "live" : "updated "+age+" s ago");
 }
 function refresh(){
   fetch("/api/state",{cache:"no-store"}).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
