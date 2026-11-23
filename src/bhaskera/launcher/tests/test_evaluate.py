@@ -161,6 +161,7 @@ def test_init_task_writes_a_valid_definition(tmp_path, capsys):
     mod = importlib.util.module_from_spec(sp)
     sp.loader.exec_module(mod)
     assert mod.process_results({"answer": "4"}, [" The answer is 4."]) == {"contains": 1.0} and mod.process_results({"answer": "4"}, [" What is 5+5?"]) == {"contains": 0.0}
+    assert mod.process_results({"answer": "High performance computing"}, [" High-performance computing."]) == {"contains": 1.0}      # a hyphen is a space, not nothing
     assert "my_test" in capsys.readouterr().out
 
 

@@ -317,7 +317,7 @@ _UTILS_TEMPLATE = """import re
 
 
 def _words(text):
-    return " ".join(re.sub(r"[^a-z0-9 ]", "", str(text).lower()).split())
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text).lower()).split())
 
 
 def process_results(doc, results):
