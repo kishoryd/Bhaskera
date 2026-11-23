@@ -136,6 +136,12 @@ footer a{text-decoration:underline;text-underline-offset:3px}
 dialog{width:min(980px,96vw);height:min(860px,92vh);display:none;flex-direction:column;overflow:hidden;padding:0;border:1px solid var(--ink);border-radius:3px;background:var(--bg);color:var(--text);box-shadow:6px 6px 0 rgba(31,28,23,.18)}
 dialog[open]{display:flex}
 dialog::backdrop{background:rgba(31,28,23,.45)}
+.menuwrap{position:relative}
+.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:290px;background:var(--bg);border:1px solid var(--ink);border-radius:3px;box-shadow:4px 4px 0 rgba(31,28,23,.16);padding:4px}
+.menu[hidden]{display:none}
+.menu button{display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;border:0;background:transparent;padding:8px 11px;border-radius:2px}
+.menu button:hover,.menu button:focus{background:var(--surface);outline:0}
+.menu b{font-size:14px;font-weight:500}.menu span{font-size:12px;color:var(--muted)}
 .dlg-head{display:flex;align-items:center;gap:10px;padding:12px 22px;border-bottom:1px solid var(--border)}
 .dlg-head b{font:500 18px var(--serif)}
 #logtext{margin:0;padding:14px 18px;background:#14120d;color:#d9d2c0;font:12px/1.55 var(--mono);height:62vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
@@ -237,14 +243,22 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
   </div>
   <div class="spacer"></div>
   <nav class="nav" id="nav" aria-label="Tools"></nav>
+  <div class="menuwrap"><button class="btn primary" id="startbtn" type="button" aria-haspopup="true" aria-expanded="false">Start <span aria-hidden="true">&#9662;</span></button>
+    <div class="menu" id="startmenu" role="menu" hidden>
+      <button role="menuitem" data-k="recipe"><b>Create a recipe</b><span>Describe a training run, or write it yourself</span></button>
+      <button role="menuitem" data-k="train"><b>Train</b><span>Fine-tune with one of your recipes</span></button>
+      <button role="menuitem" data-k="resume"><b>Resume</b><span>Continue a stopped run from a checkpoint</span></button>
+      <button role="menuitem" data-k="serve"><b>Chat</b><span>Talk to a trained model</span></button>
+      <button role="menuitem" data-k="eval"><b>Benchmark</b><span>Test one or more models</span></button>
+      <button role="menuitem" data-k="register"><b>Register</b><span>Keep a model under a name</span></button>
+    </div></div>
   <span class="pill" id="who" hidden></span>
   <span class="pill" title="The page refreshes by itself"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
   <button class="icon-btn" id="theme" aria-label="Switch between light and dark" title="Light / dark"></button>
 </div></header>
 
 <main class="wrap">
-  <div class="h2row"><h2>Jobs <span class="count" id="jobcount">0</span></h2><span class="muted" id="stats"></span><span class="spacer"></span>
-    <button class="btn primary" id="startbtn" type="button">Start a job</button></div>
+  <div class="h2row"><h2>Jobs <span class="count" id="jobcount">0</span></h2><span class="muted" id="stats"></span></div>
   <div id="jobs"><div class="skeleton"></div></div>
 
   <div id="chat">
@@ -483,7 +497,7 @@ function jobCard(j){
   return h;
 }
 function emptyJobs(){
-  return '<div class="quiet">Nothing is running. Press <b>Start a job</b> to train a model, or to chat with or benchmark one you trained.</div>';
+  return '<div class="quiet">Nothing is running. Open the <b>Start</b> menu at the top to train a model, or to chat with or benchmark one you trained.</div>';
 }
 
 /* ---- runs ---- */
@@ -1117,7 +1131,11 @@ function openStart(kind,run){
     L.kind=kind||L.kind; if(run) L.run=run; renderStart(); if(!$("#startbox").open) $("#startbox").showModal();
   });
 }
-$("#startbtn").addEventListener("click", function(){ openStart("train"); });
+function menu(open){ $("#startmenu").hidden=!open; $("#startbtn").setAttribute("aria-expanded",open?"true":"false"); }
+$("#startbtn").addEventListener("click", function(e){ e.stopPropagation(); menu($("#startmenu").hidden); });
+$("#startmenu").addEventListener("click", function(e){ var b=e.target.closest("[data-k]"); if(!b) return; menu(false); L.hours=""; openStart(b.getAttribute("data-k")); });
+document.addEventListener("click", function(){ menu(false); });
+document.addEventListener("keydown", function(e){ if(e.key==="Escape") menu(false); });
 $("#startclose").addEventListener("click", function(){ $("#startbox").close(); });
 $("#startkind").addEventListener("click", function(e){ var b=e.target.closest(".choice"); if(b){ L.kind=b.getAttribute("data-k"); L.hours=""; renderStart(); } });
 $("#startfields").addEventListener("click", function(e){
