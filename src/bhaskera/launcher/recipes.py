@@ -444,8 +444,8 @@ def validate(text: str) -> None:
         raise RecipeError("the recipe has options that do nothing: " + "; ".join(unknown))
     try:
         from bhaskera.models.multimodal import check_multimodal_settings
-    except ImportError:
-        return
+    except Exception:
+        return                      # the model libraries are not usable here (the page may run without them); the job checks again
     try:
         check_multimodal_settings(_cfg)
     except ValueError as e:
