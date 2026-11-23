@@ -217,3 +217,11 @@ def test_custom_recipe_from_yaml(world):
         recipes.build({"name": "mine", "method": "custom", "yaml": "model:\n  name: /scratch/<project>/m\n"}, work)
     with pytest.raises(recipes.RecipeError, match="not valid YAML"):
         recipes.build({"name": "mine", "method": "custom", "yaml": "a: [1"}, work)
+
+
+def test_ddp_recipes_checkpoint_activations(world):
+    work, model, cache = world
+    for method in ("qlora", "ddp"):
+        r = recipes.build(form(model, cache, method=method), work)
+        assert r["training"]["distributed"]["ddp"] == {"activation_checkpointing": True}
+    recipes.validate(recipes.render(recipes.build(form(model, cache, method="qlora"), work)))

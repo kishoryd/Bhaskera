@@ -221,6 +221,8 @@ def build(form: dict, workdir: Path) -> dict:
         "monitoring": {"dashboard_host": "127.0.0.1"},
     }
     dist = recipe["training"]["distributed"]
+    if method["strategy"] == "ddp":
+        dist["ddp"] = {"activation_checkpointing": True}      # off by default under DDP: a 14B model at 4096 tokens then runs out of memory
     if key == "fsdp":
         dist["fsdp"] = {"sharding_strategy": "FULL_SHARD", "activation_checkpointing": True}
     elif key == "hsdp":
