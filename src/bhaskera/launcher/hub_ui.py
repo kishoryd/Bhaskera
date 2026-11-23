@@ -619,7 +619,7 @@ function renderModels(){
   var ok={}; (state&&state.runs||[]).forEach(function(r){ if(r.has_adapter) ok[r.run_id]=1; });
   $("#models").innerHTML=rows.length?rows.map(function(x){
     var v=x.v, act=ok[v.run_id]?'<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(v.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(v.run_id)+'">Benchmark</button></div>':'<span class="muted">run not in this store</span>';
-    return '<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc(v.version)+'</td><td class="muted">'+esc(v.run_name||v.run_id.slice(0,8))+'</td><td>'+(v.aliases||[]).map(function(a){return '<span class="chip">'+esc(a)+'</span>'}).join(" ")+'</td><td class="num">'+esc(v.eval_loss||"–")+'</td><td>'+act+'</td></tr>';
+    return '<tr'+(v.note?' title="'+esc(v.note)+'"':"")+'><td><b>'+esc(x.name)+'</b>'+(v.note?' <span class="muted" title="A hand-off note is kept with this version. Hover over the row to read it.">&#9998;</span>':"")+'</td><td>'+esc(v.version)+'</td><td class="muted">'+esc(v.run_name||v.run_id.slice(0,8))+'</td><td>'+(v.aliases||[]).map(function(a){return '<span class="chip">'+esc(a)+'</span>'}).join(" ")+'</td><td class="num">'+esc(v.eval_loss||"–")+'</td><td>'+act+'</td></tr>';
   }).join(""):'<tr><td colspan="6" class="muted" style="text-align:center;padding:22px">'+(regModels===null?"Loading …":'No model is registered yet. Once a run has finished, register it to keep it under a name. <button class="btn small" data-start="register" style="margin-left:8px">Register a model</button>')+'</td></tr>';
 }
 
@@ -882,7 +882,7 @@ $("#jobs").addEventListener("click", function(e){ var b=e.target.closest("[data-
 $("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(chat.job,"Close server",$("#chat-close")); });
 
 /* ---- start a job ---- */
-var L = {opts:null, kind:"train", run:"", evalSel:[], own:{name:"",data:"",q:"question",a:"answer"}, shots:"", skipBase:false, rinfo:null, step:0, regname:"", alias:"",
+var L = {opts:null, kind:"train", run:"", note:"", evalSel:[], own:{name:"",data:"",q:"question",a:"answer"}, shots:"", skipBase:false, rinfo:null, step:0, regname:"", alias:"",
   rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""}}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
@@ -951,7 +951,9 @@ function renderStart(){
        (known.length?'<div class="chips" style="margin-top:8px">'+known.map(function(m){return chip(m.name+" ("+m.versions+(m.versions===1?" version":" versions")+")",L.regname===m.name,'data-name="'+esc(m.name)+'"')}).join("")+'</div><div class="sub">Pick one to add a new version to it.</div>':'<div class="sub">The first version creates the model.</div>')+'</div>'+
        '<div class="srow"><label class="lbl" for="f-alias">Alias (optional)</label><input id="f-alias" type="text" list="f-aliases" value="'+esc(L.alias)+'" maxlength="32" placeholder="a name of your choice, for example the stage it is in">'+
        '<datalist id="f-aliases">'+aliasNames().map(function(a){return '<option value="'+esc(a)+'">'}).join("")+'</datalist>'+
-       '<div class="sub">An alias is a label you choose that points at one version; move it to a newer version later. '+(aliasNames().length?"Already in use: "+esc(aliasNames().join(", "))+". ":"")+'Chat and benchmark accept <code>name@alias</code>.</div></div>';
+       '<div class="sub">An alias is a label you choose that points at one version; move it to a newer version later. '+(aliasNames().length?"Already in use: "+esc(aliasNames().join(", "))+". ":"")+'Chat and benchmark accept <code>name@alias</code>.</div></div>'+
+       '<div class="srow"><label class="lbl" for="f-note">Hand-off note (optional)</label><textarea id="f-note" rows="4" maxlength="2000" style="width:100%" placeholder="What is this model for? Which data was it trained on? Anything the next person should know, such as limits or things it gets wrong.">'+esc(L.note)+'</textarea>'+
+       '<div class="sub">Kept with the version in the registry, together with the base model, settings and scores that are filled in for you, so whoever picks it up knows what it is and how to use it.</div></div>';
   } else {
     h+='<div class="srow"><label class="lbl">Trained model</label>'+runList()+'</div>';
     if(k==="eval") h+='<div class="srow"><label class="lbl">Tests</label><div class="chips">'+COMMON_TASKS.map(function(t){return chip(t,!!L.tasks[t],'data-t="'+t+'"')}).join("")+'</div>'+
@@ -1128,7 +1130,7 @@ function formData(action){
       if(r.method==="hsdp"&&r.hsdp!=="") f.hsdp_shard_size=r.hsdp; if(r.method==="pipeline"){ if(r.stages) f.stages=r.stages; if(r.micro) f.microbatches=r.micro; }
     }
   }
-  else if(L.kind==="register"){ f.run=val("f-run"); f.name=val("f-name"); f.alias=L.alias; }
+  else if(L.kind==="register"){ f.run=val("f-run"); f.name=val("f-name"); f.alias=L.alias; f.note=L.note; }
   else if(L.kind==="resume"){ f.run=L.run; f.step=L.step||""; f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
   else if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
   else { f.run=val("f-run"); f.hours=val("f-hours")||L.hours||String(L.opts.default_hours||2); f.four_bit=$("#f-4bit").checked;
@@ -1259,6 +1261,7 @@ $("#startfields").addEventListener("input", function(e){
   else if(e.target.id==="f-hours"){ L.hours=e.target.value.trim(); showSum(); }
   if(L.kind==="resume") showSum();
   else if(e.target.id==="f-recipe"){ L.recipe=e.target.value; fillInfo(); }
+  else if(e.target.id==="f-note"){ L.note=e.target.value; }
   else if(e.target.id==="f-alias"){ L.alias=e.target.value.trim(); showSum(); }
   else if(e.target.id==="f-name"){ L.regname=e.target.value.trim(); L.regnameFor=L.run; }
   else if(e.target.id==="f-rname"){ L.rc.name=e.target.value.trim(); }

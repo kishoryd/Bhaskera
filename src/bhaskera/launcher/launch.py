@@ -84,8 +84,18 @@ def _describe(path: Path) -> dict:
     lora = raw.get("lora") if isinstance(raw.get("lora"), dict) else {}
     quant = str(model.get("quantization") or "")
     info["method"] = "QLoRA" if quant == "qlora" else ("LoRA" if lora.get("enabled") else "full fine-tune")
-    dist = raw.get("distributed") if isinstance(raw.get("distributed"), dict) else {}
+    train = raw.get("training") if isinstance(raw.get("training"), dict) else {}
+    dist = train.get("distributed") if isinstance(train.get("distributed"), dict) else {}
     info["strategy"] = str(dist.get("strategy") or "")
+    fsdp = dist.get("fsdp") if isinstance(dist.get("fsdp"), dict) else {}
+    pipe = dist.get("pipeline") if isinstance(dist.get("pipeline"), dict) else {}
+    try:
+        if info["strategy"] == "fsdp" and "HYBRID" in str(fsdp.get("sharding_strategy", "")).upper():
+            info["shard"] = int(fsdp.get("hsdp_shard_size") or 0)
+        if info["strategy"] == "pipeline":
+            info["stages"] = int(pipe.get("stages", 4))
+    except (TypeError, ValueError):
+        pass
     if "tokenize" in path.name or ("model" not in raw and "data" in raw):
         info["tokenize"], info["ready"], info["why"] = True, False, "a tokenizing recipe; run it with ./submit.sh tokenize"
     elif PLACEHOLDER.search(re.sub(r"(?m)^\s*#.*$", "", text)):        # comments may mention the placeholders
@@ -152,6 +162,22 @@ class Launcher:
                 "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
 
+    def _check_gpus(self, info: dict, nodes: int) -> None:
+        """HSDP and Pipeline need a GPU count the shard group or the stages divide; say so now, not after the queue."""
+        from . import cluster_profile
+        per_node = cluster_profile.current().gpus_per_node
+        if not per_node:
+            return
+        total = nodes * per_node
+        if info.get("shard") is not None:
+            size = info["shard"] or per_node
+            if total % size:
+                raise LaunchError(f"{info['file']} shards each group over {size} GPUs, which does not divide the {total} GPUs of {nodes} "
+                                  f"{'node' if nodes == 1 else 'nodes'}: change the number of nodes or hsdp_shard_size")
+        if info.get("stages") and total % info["stages"]:
+            raise LaunchError(f"{info['file']} cuts the model into {info['stages']} stages, which does not divide the {total} GPUs of {nodes} "
+                              f"{'node' if nodes == 1 else 'nodes'}: change the number of nodes or the stages")
+
     def _recipe_path(self, name) -> Path:
         if not isinstance(name, str) or not RECIPE_FILE.match(name):
             raise LaunchError("pick a recipe from the list")
@@ -174,7 +200,7 @@ class Launcher:
             return [{"name": m["name"], "versions": len(m["versions"]), "aliases": sorted({a for v in m["versions"] for a in v["aliases"]}),
                      "refs": [{"ref": f"{m['name']}:{v['version']}", "version": v["version"], "run_id": v["run_id"], "aliases": v["aliases"],
                                "run_name": v["tags"].get("run_name", ""), "base_model": v["tags"].get("base_model", ""),
-                               "eval_loss": v["tags"].get("eval_loss", ""), "eval_accuracy": v["tags"].get("eval_accuracy", "")} for v in m["versions"]]}
+                               "eval_loss": v["tags"].get("eval_loss", ""), "eval_accuracy": v["tags"].get("eval_accuracy", ""), "note": (v.get("description") or "")[:900]} for v in m["versions"]]}
                     for m in register.listing(register.make_client(self._store or register._store_default()))]
         except Exception:
             return []
@@ -190,7 +216,10 @@ class Launcher:
             raise LaunchError("an alias is letters, digits, _ and - (at most 32), starting with a letter")
         if dry:
             return {"ok": True, "job": None, "dry": True, "output": f"Looks fine: run {run[:8]} would be registered as {name}" + (f" with the alias {alias}" if alias else "")}
-        cmd = [sys.executable, "-m", "bhaskera.launcher.register", "add", "--run", run, "--name", name] + (["--alias", alias] if alias else [])
+        note = form.get("note") or ""
+        if not isinstance(note, str) or len(note) > 2000:
+            raise LaunchError("the hand-off note is text of at most 2000 characters")
+        cmd = [sys.executable, "-m", "bhaskera.launcher.register", "add", "--run", run, "--name", name] + (["--alias", alias] if alias else []) + (["--note", note] if note.strip() else [])
         if self._store:
             cmd += ["--store", self._store]
         try:
@@ -401,6 +430,7 @@ class Launcher:
             recipe = self._recipe_path(form.get("recipe"))
             nodes = _int(form.get("nodes"), "nodes", 1, MAX_NODES)
             hours = _int(form.get("hours"), "hours", 1, MAX_HOURS, required=False)
+            self._check_gpus(_describe(recipe), nodes)
             return [str(recipe), str(nodes)] + ([str(hours)] if hours else []), {}
         if kind == "resume":
             run = form.get("run")

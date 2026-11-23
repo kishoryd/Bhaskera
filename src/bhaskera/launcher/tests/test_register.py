@@ -17,7 +17,7 @@ class FakeClient:
         self.with_adapter = with_adapter
         self.runs = {r: NS(info=NS(run_name=f"run-{r[:2]}", artifact_uri=f"/store/1/{r}/artifacts"),
                           data=NS(metrics={"eval_loss": 1.02, "eval_accuracy": 0.7176, "lmeval_arc_easy_acc_norm_tuned": 0.83,
-                                           "lmeval_arc_easy_acc_norm_delta": 0.015, "loss": 0.9}, params={"model.name": "/m/Qwen3-14B"}))
+                                           "lmeval_arc_easy_acc_norm_delta": 0.015, "loss": 0.9}, params={"model.name": "/m/Qwen3-14B", "lora.r": "16", "lora.alpha": "32", "model.quantization": "qlora", "training.max_steps": "500", "training.lr": "0.0001"}))
                      for r in (RUN, RUN2)}
 
     def get_run(self, rid):
@@ -33,8 +33,8 @@ class FakeClient:
             raise RuntimeError("exists")
         self.models[name] = description
 
-    def create_model_version(self, name, source, run_id, tags):
-        v = NS(name=name, version=str(1 + sum(1 for x in self.versions if x.name == name)), source=source, run_id=run_id, tags=dict(tags), aliases=[])
+    def create_model_version(self, name, source, run_id, tags, description=""):
+        v = NS(name=name, version=str(1 + sum(1 for x in self.versions if x.name == name)), source=source, run_id=run_id, tags=dict(tags), aliases=[], description=description)
         self.versions.append(v)
         return v
 
@@ -130,3 +130,14 @@ def test_evaluate_and_serve_find_the_adapter_by_registry_name(tmp_path, monkeypa
         assert model == "/models/Qwen3-14B" and adapter == str(run / "artifacts" / "adapter")
     with pytest.raises(evaluate.EvalError, match="no run nothing"):
         evaluate.from_run(tmp_path, "nothing")
+
+
+def test_a_registered_version_carries_a_hand_off_note():
+    c = FakeClient()
+    register.add(c, RUN, "my-model", note="For support questions. Weak on legal text.")
+    text = c.versions[0].description
+    assert text.startswith("For support questions. Weak on legal text.")
+    for part in ("Base model: /m/Qwen3-14B", f"({RUN})", "LoRA rank 16, alpha 32", "QLoRA (4-bit base)", "500 steps", "eval loss 1.0200", "arc easy acc norm 0.830", "same path"):
+        assert part in text, part
+    assert "Results:" in register.model_card(NS(info=NS(run_name=""), data=NS(params={}, metrics={})), RUN) and "not evaluated yet" in register.model_card(NS(info=NS(run_name=""), data=NS(params={}, metrics={})), RUN)
+    assert register.listing(c)[0]["versions"][0]["description"] == text

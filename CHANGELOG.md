@@ -7,6 +7,18 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Home page
+- **Create recipe** (Start menu): a recipe from a few choices for text and multimodal models, with QLoRA + DDP, DDP, FSDP2, HSDP and Pipeline,
+  *All settings* (every option, searchable, with its meaning), a *Custom* mode (paste or start from a starter) and *Prepare data* for raw JSONL.
+  Recipes are checked with the training job's own loader before they are written. DDP and QLoRA recipes turn on activation checkpointing.
+- **Benchmark** takes several models (a job each), registered names, your own tests (from a question/answer file), a few-shot count and
+  *tuned model only*. **Compare models** puts their scores side by side.
+- **Models** lists every registered version with Chat and Benchmark, without MLflow's own page. A registered version carries a hand-off note:
+  your note, the base model, settings and scores (`register add --note`, `register show`). Aliases are typed, not preset.
+- A guided path from data to a usable model, a **Guide** of the words used, plain explanations beside each choice, a Start menu, and a
+  calmer, more consistent design.
+- Train refuses an HSDP or Pipeline recipe whose shard size or stages do not divide the GPUs of the chosen nodes.
+
 ## [1.0.0] - 2026-11-23
 
 The first release. Bhaskera fine-tunes language models, and models that also read images, video and audio, on Slurm GPU

@@ -65,7 +65,34 @@ def run_tags(client, run_id: str) -> dict[str, str]:
     return {k: _truncate(v) for k, v in tags.items() if v != ""}
 
 
-def add(client, run_id: str, name: str, alias: Optional[str] = None) -> dict:
+def model_card(run, run_id: str, note: str = "") -> str:
+    """The hand-off note kept with a registered version: what it is, how it was made, how well it did, how to use it."""
+    p, m = run.data.params, run.data.metrics
+    got = lambda *keys: next((p[k] for k in keys if p.get(k)), "")
+    lines = []
+    if note.strip():
+        lines += [note.strip(), ""]
+    lines += [f"Base model: {got('model.name') or 'unknown'}", f"Trained in run: {run.info.run_name or ''} ({run_id})"]
+    kind = got("model.quantization")
+    how = ", ".join(x for x in (f"LoRA rank {got('lora.r')}, alpha {got('lora.alpha')}" if got("lora.r") else "", "QLoRA (4-bit base)" if kind == "qlora" else "",
+                                f"parallelism {got('training.distributed.strategy')}" if got("training.distributed.strategy") else "") if x)
+    if how:
+        lines.append("Method: " + how)
+    train = ", ".join(x for x in (f"{got('training.max_steps')} steps" if got("training.max_steps") else "", f"learning rate {got('training.lr')}" if got("training.lr") else "",
+                                  f"batch {got('training.batch_size')} x accumulation {got('training.grad_accum')}" if got("training.batch_size") else "",
+                                  f"sequence length {got('data.seq_len')}" if got("data.seq_len") else "") if x)
+    if train:
+        lines.append("Training: " + train)
+    if got("data.tokenized_path"):
+        lines.append("Data: " + got("data.tokenized_path"))
+    res = [f"{k.replace('_', ' ')} {m[k]:.4f}" for k in ("eval_loss", "eval_accuracy") if k in m]
+    res += [f"{k[len('lmeval_'):-len('_tuned')].replace('_', ' ')} {m[k]:.3f}" for k in sorted(m) if k.startswith("lmeval_") and k.endswith("_tuned")][:8]
+    lines.append("Results: " + ("; ".join(res) if res else "not evaluated yet"))
+    lines.append("Use: the adapter needs the base model above at the same path. ./submit.sh serve --run <name>:<version> to chat, ./submit.sh eval --run <name>:<version> to test.")
+    return "\n".join(lines)
+
+
+def add(client, run_id: str, name: str, alias: Optional[str] = None, note: str = "") -> dict:
     """Register the adapter stored with a run as a new version of ``name``; point ``alias`` at it when given."""
     if not RUN_ID.match(run_id or ""):
         raise RegisterError("give the 32-character MLflow run id (the home page lists it, and `evaluate`/`serve` use the same id)")
@@ -83,7 +110,8 @@ def add(client, run_id: str, name: str, alias: Optional[str] = None) -> dict:
         client.create_registered_model(name, description="LoRA adapters trained with Bhaskera")
     except Exception:
         pass                                              # it exists already: this adds a version
-    version = client.create_model_version(name, source=f"{run.info.artifact_uri}/adapter", run_id=run_id, tags=run_tags(client, run_id))
+    version = client.create_model_version(name, source=f"{run.info.artifact_uri}/adapter", run_id=run_id, tags=run_tags(client, run_id),
+                                          description=model_card(run, run_id, note))
     v = str(version.version)
     if alias:
         client.set_registered_model_alias(name, alias, v)
@@ -96,7 +124,7 @@ def listing(client) -> list[dict]:
     for rm in client.search_registered_models():
         versions = client.search_model_versions(f"name='{rm.name}'")
         rows = [{"version": str(v.version), "run_id": v.run_id, "aliases": sorted(getattr(v, "aliases", None) or []),
-                 "tags": dict(v.tags or {})} for v in versions]
+                 "tags": dict(v.tags or {}), "description": getattr(v, "description", "") or ""} for v in versions]
         rows.sort(key=lambda r: int(r["version"]), reverse=True)
         out.append({"name": rm.name, "versions": rows})
     return sorted(out, key=lambda m: m["name"])
@@ -158,16 +186,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     a.add_argument("--run", required=True)
     a.add_argument("--name", required=True)
     a.add_argument("--alias", help="point this alias (for example champion) at the new version")
+    a.add_argument("--note", default="", help="a hand-off note kept with the version: what it is for, the data, known limits")
+    sh = sub.add_parser("show", help="print the hand-off note of a version")
+    sh.add_argument("ref", help="name, name:version or name@alias")
+    sh.add_argument("--store", default=_store_default())
     sub.choices["resolve"].add_argument("ref", help="name, name:version or name@alias")
     args = p.parse_args(argv)
     try:
         client = make_client(args.store)
         if args.action == "add":
-            r = add(client, args.run, args.name, args.alias)
+            r = add(client, args.run, args.name, args.alias, args.note)
             print(f"registered {r['name']} version {r['version']}" + (f" (alias {r['alias']})" if r["alias"] else ""))
             print(f"use it:  ./submit.sh serve --run {r['name']}:{r['version']}")
         elif args.action == "list":
             print(_show(listing(client)))
+        elif args.action == "show":
+            name, _, rest = args.ref.partition("@") if "@" in args.ref else (args.ref.partition(":")[0], "", args.ref.partition(":")[2])
+            run_id = resolve(client, args.ref)
+            hit = [v for m in listing(client) if m["name"] == name for v in m["versions"] if v["run_id"] == run_id and (not rest or rest in v["aliases"] or v["version"] == rest)]
+            print(hit[0]["description"] if hit and hit[0]["description"] else "this version has no hand-off note")
         else:
             print(resolve(client, args.ref))
         return 0
