@@ -40,6 +40,16 @@ The cluster's user manual says Open OnDemand is running at `ood.paramrudra.cdacb
 means the hardest parts (sign-in, session cookies, TLS, starting a process as the user) may already be solved. Option A reuses them.
 Option B is the same design built by us. Option C is listed only so the reason not to is written down.
 
+### What we found about this cluster's portal (checked, not assumed)
+
+- The portal is Apache with `mod_auth_openidc`: an unauthenticated request is sent to **Keycloak** (`auth.paramrudra.cdacb.in`, realm `paramrudra`, client `ondemand`, authorization
+  code flow with PKCE). So sign-in is OIDC. Whether Keycloak checks passwords against LDAP itself is **to confirm**, but it means we would not talk to LDAP at all: we would use the portal's sign-in.
+- Users get a per-user server (`/pun/sys/dashboard`), and the portal runs on at least two web nodes (the cookie `OOD_SERVERID` names `ood_node2`).
+- The web server is not visible from the login nodes, so its configuration (`/etc/ood/config`, installed apps) could not be read; that is a question for the admins.
+
+**First slice, built on this branch:** an Open OnDemand interactive app (`ood/`) plus a portal mode for the page (`bhaskera-dashboard portal`). Tested without the portal itself;
+`ood/README.md` says exactly what was and was not tested.
+
 ## 4. The architecture (A and B are the same shape)
 
 ```
