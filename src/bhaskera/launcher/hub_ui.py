@@ -415,7 +415,7 @@ var $ = function(s){return document.querySelector(s)};
 var esc = function(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})};
 var PROXY=false;
 var PORT = location.port || "8265";
-var MLFLOW = "http://mlflow.localhost:"+PORT+"/";
+var MLFLOW = PROXY ? "mlflow/" : "http://mlflow.localhost:"+PORT+"/";
 var GITHUB = "https://github.com/kishoryd/Bhaskera";
 var svg = function(d){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+d+'</svg>'};
 var ICON = {
@@ -576,7 +576,7 @@ function renderRuns(){
   $("#runs").innerHTML = rows.length ? rows.map(function(r){
     var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
           ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
-    return '<tr><td>'+(PROXY?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
+    return '<tr><td>'+(PROXY&&!(state.portal&&state.portal.mlflow)?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
       '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
 }
@@ -652,7 +652,12 @@ $("#cmp").addEventListener("click", function(e){ var b=e.target.closest("[data-c
 function renderSide(){
   var s=state, first=(s.jobs||[]).filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
   var items=[["MLflow",MLFLOW],["Models","#modsec"],["Guide","#guide"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
-  if(PROXY) items=items.filter(function(l){ return l[0]!=="MLflow"&&l[0]!=="Ray"; });
+  if(PROXY){
+    var pl=s.portal||{};
+    items=items.filter(function(l){ return l[0]!=="Ray"&&(l[0]!=="MLflow"||pl.mlflow); });
+    if(pl.files) items.push(["Files",pl.files]);
+    if(pl.jobs) items.push(["Jobs",pl.jobs]);
+  }
   $("#nav").innerHTML=items.map(function(l){
     return '<a'+(l[1]?' href="'+esc(l[1])+'"'+(l[1].charAt(0)==="#"?"":' target="_blank" rel="noopener"'):' class="off" title="Opens when a job runs"')+'>'+esc(l[0])+'</a>';
   }).join("");

@@ -68,3 +68,58 @@ def test_the_page_works_under_any_prefix_and_without_localhost_links():
     page = hub_ui.INDEX_HTML
     assert 'fetch("/' not in page and 'api("/' not in page and '"/api/' not in page          # every request is relative to where the page is
     assert "var PROXY=false;" in page                                                      # the hub switches it on behind a portal
+
+
+# ---- MLflow's own pages inside the portal tab
+
+import http.server
+import threading
+
+
+@pytest.fixture
+def portal_with_mlflow():
+    seen = []
+
+    class FakeMlflow(http.server.BaseHTTPRequestHandler):
+        log_message = lambda *a: None
+
+        def do_GET(self):
+            seen.append((self.path, dict(self.headers)))
+            body = b"<html>mlflow</html>"
+            self.send_response(200); self.send_header("Content-Type", "text/html"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+        do_POST = do_GET
+
+    up = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeMlflow)
+    threading.Thread(target=up.serve_forever, daemon=True).start()
+    hub = ray_hub.Hub(lambda: [], lambda n: n, lambda h, r, g: [h], spawn=lambda c: _Proc(), peer_check=lambda c, s: False)
+    hub.state_provider = lambda: {"jobs": [], "runs": []}
+    hub.proxy_token = TOKEN
+    hub.portal_prefix = "/rnode/node17/20001"
+    hub.mlflow_port = up.server_address[1]
+    srv = ray_hub.serve(hub, ray_hub.free_port())
+    yield srv, seen
+    srv.shutdown(); up.shutdown()
+
+
+def test_mlflow_pages_get_the_prefix_back_and_never_see_the_session_token(portal_with_mlflow):
+    srv, seen = portal_with_mlflow
+    cookie = {"Cookie": f"bhaskera_session={TOKEN}", "Authorization": "Basic eDp5"}
+    status, _, body = call(srv, path="/mlflow/static-files/app.js?x=1", headers=cookie)
+    assert status == 200 and "mlflow" in body
+    path, headers = seen[-1]
+    assert path == "/rnode/node17/20001/mlflow/static-files/app.js?x=1"          # the portal stripped the prefix; MLflow was started to serve under it
+    assert "Cookie" not in headers and "Authorization" not in headers and headers["Host"].startswith("localhost:")
+    assert call(srv, path="/mlflow", headers=cookie)[:2][0] == 302 and call(srv, path="/mlflow", headers=cookie)[1]["Location"] == "mlflow/"
+    status, _, _ = call(srv, "POST", "/mlflow/ajax-api/2.0/mlflow/runs/search", {**cookie, "Content-Type": "application/json"}, "{}")
+    assert status == 200 and seen[-1][0] == "/rnode/node17/20001/mlflow/ajax-api/2.0/mlflow/runs/search"
+
+
+def test_mlflow_pages_need_the_token_and_a_portal_that_keeps_the_prefix_also_works(portal_with_mlflow):
+    srv, seen = portal_with_mlflow
+    n = len(seen)
+    assert call(srv, path="/mlflow/")[0] == 403 and len(seen) == n                  # nothing reaches MLflow without the token
+    status, _, _ = call(srv, path="/rnode/node17/20001/mlflow/x", headers={"Cookie": f"bhaskera_session={TOKEN}"})   # a portal that does not strip
+    assert status == 200 and seen[-1][0] == "/rnode/node17/20001/mlflow/x"
+    status, _, page = call(srv, path="/rnode/node17/20001/", headers={"Cookie": f"bhaskera_session={TOKEN}"})
+    assert status == 200 and "var PROXY=true;" in page

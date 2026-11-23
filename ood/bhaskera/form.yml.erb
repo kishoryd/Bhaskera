@@ -1,19 +1,15 @@
 ---
 # Nothing here is for the user to fill in. The administrator's installer (ood/install.sh) writes the cluster id, the partition and the
-# hours into the three lines marked below, once.
+# hours into this file, and the install folder and proxy path into the session script, once.
 title: "Bhaskera"
 description: |
   Bhaskera's home page: create a recipe, train, chat, benchmark and register models. It runs as a small job under your own account
   (account, folders and limits are found for you) and only you can open it. Press **Launch**, then **Open Bhaskera**.
 cluster: "__CLUSTER__"
 form:
-  - bhaskera_module
   - bc_queue
   - bc_num_hours
 attributes:
-  bhaskera_module:
-    widget: hidden_field
-    value: "bhaskera/1.0.0"
   bc_queue:
     widget: hidden_field
     value: "__PARTITION__"

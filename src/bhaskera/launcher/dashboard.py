@@ -522,20 +522,77 @@ def _make_hub(cfg: DashboardConfig, job: Optional[str], local_port: int, mlflow:
     return hub
 
 
+def _start_portal_mlflow(cfg: DashboardConfig, prefix: str) -> Optional[tuple]:
+    """MLflow's own pages for this session, served under <portal prefix>/mlflow so that they work inside the portal tab.
+    Returns (process, port), or None when MLflow cannot start (the page then simply has no MLflow link)."""
+    exe = shutil.which("mlflow")
+    if not exe:
+        print("MLflow is not installed here; the MLflow pages are not available in this session.", flush=True)
+        return None
+    store = Path(cfg.store)
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"MLflow store {cfg.store} is not usable ({e}); the MLflow pages are not available.", flush=True)
+        return None
+    try:
+        close_orphan_runs(cfg)
+    except Exception:
+        pass
+    port = ray_hub.free_port()
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    log = open(_LOG_FILE.parent / "mlflow-portal.log", "a")
+    env = {**os.environ, "MLFLOW_ALLOW_FILE_STORE": os.environ.get("MLFLOW_ALLOW_FILE_STORE", "true")}
+    proc = subprocess.Popen([exe, "ui", "--backend-store-uri", f"file://{store.resolve()}", "--host", "127.0.0.1", "--port", str(port),
+                             "--static-prefix", f"{prefix}/mlflow"], stdout=log, stderr=log, env=env)
+    for _ in range(60):
+        if proc.poll() is not None:
+            print(f"MLflow exited at once (see {log.name}); the MLflow pages are not available.", flush=True)
+            return None
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            return proc, port
+        except OSError:
+            time.sleep(0.5)
+    proc.terminate()
+    return None
+
+
 def cmd_portal(cfg: DashboardConfig, bind: str, port: int) -> None:
     """The home page for use behind a web portal (Open OnDemand): reached over the network, protected by a session token that only
-    the portal's own link carries (BHASKERA_HUB_TOKEN), without the MLflow and Ray links that need *.localhost names."""
+    the portal's own link carries (BHASKERA_HUB_TOKEN). MLflow's pages are served inside the same tab; the Ray Dashboard, which cannot
+    live under a path prefix, is not offered (the page shows the same job numbers itself)."""
     token = os.environ.get("BHASKERA_HUB_TOKEN", "")
     if len(token) < 16:
         _die("set BHASKERA_HUB_TOKEN to a random string of at least 16 characters (the portal app does this for you)")
+    prefix = os.environ.get("BHASKERA_EXTERNAL_PREFIX", "").rstrip("/")
     hub = _make_hub(cfg, None, port, None)
-    hub.proxy_token = token
+    hub.proxy_token, hub.portal_prefix = token, prefix
+    started = _start_portal_mlflow(cfg, prefix)
+    if started:
+        hub.mlflow_port = started[1]
+    workdir = launch.find_kit()
+    state = hub.state_provider
+
+    def with_portal_links() -> dict:
+        out = state()
+        out["portal"] = {"mlflow": bool(hub.mlflow_port), "jobs": "/pun/sys/dashboard/activejobs",
+                         "files": f"/pun/sys/dashboard/files/fs{workdir}" if workdir else ""}
+        return out
+
+    hub.state_provider = with_portal_links
     try:
         server = ray_hub.serve(hub, port, bind)
     except OSError as e:
+        if started:
+            started[0].terminate()
         _die(f"cannot listen on {bind}:{port} ({e})")
     print(f"Bhaskera is ready on {bind}:{port}. It closes with Ctrl-C or when its job ends.", flush=True)
-    _watch(hub, server, quiet=True)
+    try:
+        _watch(hub, server, quiet=True)
+    finally:
+        if started:
+            started[0].terminate()
 
 
 def _watch(hub: "ray_hub.Hub", server, quiet: bool = False) -> None:

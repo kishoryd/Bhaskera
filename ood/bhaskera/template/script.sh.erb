@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Runs inside the session job, as the user. $host, $port and $password come from before.sh. The user sets nothing.
+# Runs inside the session job, as the user. $host, $port and $password come from before.sh. The user sets nothing, and no module is loaded:
+# the installer wrote where Bhaskera is installed, and this script sets what the Lmod module would set.
 
-module purge >/dev/null 2>&1 || true
-# --ignore_cache: a compute node whose Lmod cache is out of date would otherwise say the module is unknown.
-module --ignore_cache load <%= bhaskera_module %> || module load <%= bhaskera_module %> || { echo "cannot load <%= bhaskera_module %>" >&2; exit 1; }
+ROOT="__ROOT__"
+[[ -x "$ROOT/venv/bin/bhaskera-dashboard" ]] || { echo "Bhaskera is not installed at $ROOT on $(hostname)" >&2; exit 1; }
+export BHASKERA_HOME="$ROOT" BHASKERA_DIR="$ROOT/src" BHASKERA_KIT="$ROOT/share/kit" BHASKERA_OBSERVABILITY="$ROOT/observability"
+export VIRTUAL_ENV="$ROOT/venv" PATH="$ROOT/venv/bin:$PATH" MLFLOW_ALLOW_FILE_STORE=true
+export BHASKERA_QUICKSTART="${BHASKERA_QUICKSTART:-$(dirname "$ROOT")/quickstart}"
+# The cluster profile (partitions, GPUs per node): the one in the kit, unless the site sets another.
+[[ -n "${BHASKERA_CLUSTER_PROFILE:-}" ]] || export BHASKERA_CLUSTER_PROFILE="$(ls "$BHASKERA_KIT"/clusters/*.yaml 2>/dev/null | head -1)"
 
 # The account jobs are charged to: the user's default account in Slurm (the page can only start jobs with one).
 if [[ -z "${SLURM_ACCOUNT:-}" ]]; then
@@ -20,6 +25,8 @@ cd "$BHASKERA_WORKDIR"
 
 # Only the portal's own Open button carries this token; the page refuses every other request.
 export BHASKERA_HUB_TOKEN="${password:?the portal did not give a password}"
+# The path the portal puts in front of the page: MLflow's pages are served under it, inside the same tab.
+export BHASKERA_EXTERNAL_PREFIX="__PROXY__/${host}/${port}"
 
 echo "Bhaskera on ${host}:${port} (account ${SLURM_ACCOUNT:-none found}, folder ${BHASKERA_WORKDIR})"
 exec bhaskera-dashboard portal --bind 0.0.0.0 --hub-port "${port:?the portal did not give a port}"

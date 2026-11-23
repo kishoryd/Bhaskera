@@ -94,6 +94,7 @@ class Hub:
         # Behind a web portal (Open OnDemand and the like) the hub is reached over the network, through the portal's own sign-in. It then
         # accepts a request only with this token (a cookie, set from the one link the portal gives the user), and shows no *.localhost links.
         self.proxy_token: Optional[str] = None
+        self.portal_prefix = ""     # the path the portal puts in front of the page ("/rnode/<host>/<port>"); MLflow's own pages need to know it
 
     def refresh(self) -> tuple[list[JobLink], list[str]]:
         """Bring the links in line with the running jobs. Returns (links added, ids of links removed)."""
@@ -225,10 +226,10 @@ def _handler(hub: Hub):
                 return link.grafana_port, GRAFANA_PORT, f"The charts of job {html.escape(job_id)}"
             return link.ray_port, RAY_PORT, f"The dashboard of job {html.escape(job_id)}"
 
-        def _relay(self, port: int, service_port: int, path: str, body: Optional[bytes], what: str, back_link: bool = False) -> None:
+        def _relay(self, port: int, service_port: int, path: str, body: Optional[bytes], what: str, back_link: bool = False, strip_auth: bool = False) -> None:
             """Send the request to a service behind an SSH link and pass its answer back as it arrives (streaming works).
             With back_link, a page of that service gets a small link back to the home page."""
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP}
+            headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP and not (strip_auth and k.lower() in ("cookie", "authorization"))}
             headers["Host"] = f"localhost:{service_port}"
             if back_link and self.command == "GET":
                 headers["Accept-Encoding"] = "identity"              # the page must arrive readable to be extended
@@ -366,7 +367,26 @@ def _handler(hub: Hub):
                 return False
             return False
 
+        def _mlflow_in_portal(self, path: str, query: str) -> None:
+            """MLflow's own pages inside the portal tab: /mlflow/... goes to the MLflow of this session, which was started to serve under
+            <portal prefix>/mlflow, so the prefix the portal strips is put back."""
+            if path == "/mlflow":
+                self.send_response(302)
+                self.send_header("Location", "mlflow/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > hub_guard.MAX_BODY:
+                return self._send(413, "Request too large.")
+            body = self.rfile.read(length) if length else None
+            self._relay(hub.mlflow_port, hub.mlflow_port, hub.portal_prefix + path + (f"?{query}" if query else ""), body, "MLflow", strip_auth=True)
+
         def _handle(self) -> None:
+            if hub.proxy_token and hub.portal_prefix:
+                p, sep, q = self.path.partition("?")
+                if p == hub.portal_prefix or p.startswith(hub.portal_prefix + "/"):      # a portal that does not strip its prefix
+                    self.path = (p[len(hub.portal_prefix):] or "/") + sep + q
             if hub.proxy_token:
                 self._redirected = False
                 if not self._proxy_auth():
@@ -381,6 +401,8 @@ def _handler(hub: Hub):
             target = target_from_host(self.headers.get("Host", "")) if not hub.proxy_token else None
             if target is None:
                 path, _, query = self.path.partition("?")
+                if hub.proxy_token and hub.mlflow_port and (path == "/mlflow" or path.startswith("/mlflow/")):
+                    return self._mlflow_in_portal(path, query)
                 if path in ("/", "/index.html"):
                     return self._send(200, hub.index_html())
                 if path == "/api/state" and hub.state_provider is not None:
