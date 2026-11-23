@@ -1,0 +1,24 @@
+---
+# The cluster id is the name of the file in /etc/ood/config/clusters.d/ (without .yml). An administrator sets it for this site.
+cluster: "<%= ENV['OOD_BHASKERA_CLUSTER'] || '*' %>"
+form:
+  - bc_account
+  - bc_queue
+  - bc_num_hours
+  - bhaskera_module
+attributes:
+  bc_account:
+    label: "Slurm account"
+    help: "The account your jobs are charged to. Jobs you start from the page use it too."
+  bc_queue:
+    label: "Partition"
+    help: "A CPU partition is enough: the page itself needs no GPU. Jobs you start from it ask for GPUs on their own."
+  bc_num_hours:
+    label: "Hours the page stays open"
+    value: 8
+    min: 1
+    max: 24
+    step: 1
+  bhaskera_module:
+    widget: hidden_field
+    value: "bhaskera/1.0.0"

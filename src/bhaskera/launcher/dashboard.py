@@ -493,8 +493,21 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
 
     ensure_mlflow(cfg)
     print()
+    hub = _make_hub(cfg, job, local_port, mlflow_port(cfg))
+    try:
+        server = ray_hub.serve(hub, hub_port())
+    except OSError as e:
+        _die(f"cannot listen on the login-node port {hub_port()} ({e}); is another "
+             "'bhaskera-dashboard ray' of yours running? Stop it first (Ctrl-C).")
+    print(f"Open http://localhost:{local_port} in your browser. Keep this window open; it closes with Ctrl-C.")
+    print("Jobs that start later are added by themselves, and MLflow stays available after they end.\n", flush=True)
+    _watch(hub, server)
+
+
+def _make_hub(cfg: DashboardConfig, job: Optional[str], local_port: int, mlflow: Optional[int]) -> "ray_hub.Hub":
+    """The hub with its page and Start buttons wired to this user's runs."""
     hub = ray_hub.Hub(lambda: hub_jobs(my_jobs(), job), head_node, forward_command, laptop_port=local_port, serve_forward_cmd=forward_command_serve,
-                      mlflow_port=mlflow_port(cfg))
+                      mlflow_port=mlflow)
     from . import hub_state
     try:
         from importlib.metadata import version as _version
@@ -506,13 +519,26 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
         docs_url=os.environ.get("BHASKERA_DOCS_URL", "https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/"))
     hub.state_provider, hub.log_provider = builder.build, builder.log
     hub.launcher = launch.Launcher(launch.find_kit(), runs=lambda: hub_state.recent_runs(cfg.store), store=cfg.store, jobs=my_jobs)
+    return hub
+
+
+def cmd_portal(cfg: DashboardConfig, bind: str, port: int) -> None:
+    """The home page for use behind a web portal (Open OnDemand): reached over the network, protected by a session token that only
+    the portal's own link carries (BHASKERA_HUB_TOKEN), without the MLflow and Ray links that need *.localhost names."""
+    token = os.environ.get("BHASKERA_HUB_TOKEN", "")
+    if len(token) < 16:
+        _die("set BHASKERA_HUB_TOKEN to a random string of at least 16 characters (the portal app does this for you)")
+    hub = _make_hub(cfg, None, port, None)
+    hub.proxy_token = token
     try:
-        server = ray_hub.serve(hub, hub_port())
+        server = ray_hub.serve(hub, port, bind)
     except OSError as e:
-        _die(f"cannot listen on the login-node port {hub_port()} ({e}); is another "
-             "'bhaskera-dashboard ray' of yours running? Stop it first (Ctrl-C).")
-    print(f"Open http://localhost:{local_port} in your browser. Keep this window open; it closes with Ctrl-C.")
-    print("Jobs that start later are added by themselves, and MLflow stays available after they end.\n", flush=True)
+        _die(f"cannot listen on {bind}:{port} ({e})")
+    print(f"Bhaskera is ready on {bind}:{port}. It closes with Ctrl-C or when its job ends.", flush=True)
+    _watch(hub, server, quiet=True)
+
+
+def _watch(hub: "ray_hub.Hub", server, quiet: bool = False) -> None:
     announced_idle = False
     try:
         while True:
@@ -522,7 +548,7 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
             for job_id in removed:
                 print(f"job {job_id} is no longer running; its Ray Dashboard and Grafana are closed. "
                       "Its metrics stay in MLflow.", flush=True)
-            if not hub.links() and not announced_idle:
+            if not quiet and not hub.links() and not announced_idle:
                 print("no Bhaskera job is running yet; waiting (MLflow already lists finished runs) ...", flush=True)
             announced_idle = not hub.links()
             time.sleep(10)
@@ -547,7 +573,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="start",
-        choices=["start", "stop", "status", "tunnel", "ray", "ssh-config"],
+        choices=["start", "stop", "status", "tunnel", "ray", "ssh-config", "portal"],
         help="Subcommand (default: start). 'ray' prints the commands for the Ray Dashboard of a running job; 'ssh-config' prints a laptop SSH entry that shortens them.",
     )
     p.add_argument(
@@ -601,6 +627,9 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="USER",
         help="SSH username for the tunnel command (default: omitted).",
     )
+    p.add_argument("--bind", default="127.0.0.1", metavar="ADDRESS",
+                   help="'portal' only: the address to listen on (the portal's proxy must reach it). Default 127.0.0.1.")
+    p.add_argument("--hub-port", type=int, default=None, metavar="PORT", help="'portal' only: the port to listen on.")
     p.add_argument(
         "--no-save",
         action="store_true",
@@ -674,6 +703,8 @@ def main() -> None:
         cmd_ssh_config(cfg, args.ray_port)
     elif args.action == "ray":
         cmd_ray(cfg, args.job, args.info, args.ray_port)
+    elif args.action == "portal":
+        cmd_portal(cfg, args.bind, args.hub_port or hub_port())
 
 
 if __name__ == "__main__":

@@ -169,7 +169,7 @@ def test_the_page_and_its_endpoints(tmp_path, use_profile):
     srv = ray_hub.serve(hub, ray_hub.free_port())
     try:
         status, ctype, page = _get(srv.server_port, "/", "localhost:8265")
-        assert status == 200 and ctype.startswith("text/html") and "<title>Bhaskera" in page and "/api/state" in page
+        assert status == 200 and ctype.startswith("text/html") and "<title>Bhaskera" in page and "api/state" in page
         status, ctype, body = _get(srv.server_port, "/api/state", "localhost:8265")
         assert status == 200 and ctype == "application/json" and json.loads(body)["jobs"][0]["id"] in ("7", "8")
         status, _, body = _get(srv.server_port, "/api/log?job=7&lines=3", "localhost:8265")

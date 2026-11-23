@@ -18,11 +18,13 @@ from __future__ import annotations
 import html
 import json
 import http.client
+import http.cookies
 import http.server
 import re
 import socket
 import subprocess
 import threading
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -89,6 +91,9 @@ class Hub:
         self.state_provider: Optional[Callable[[], dict]] = None
         self.log_provider: Optional[Callable[[str, int], dict]] = None
         self.launcher = None   # launch.Launcher: the Start buttons
+        # Behind a web portal (Open OnDemand and the like) the hub is reached over the network, through the portal's own sign-in. It then
+        # accepts a request only with this token (a cookie, set from the one link the portal gives the user), and shows no *.localhost links.
+        self.proxy_token: Optional[str] = None
 
     def refresh(self) -> tuple[list[JobLink], list[str]]:
         """Bring the links in line with the running jobs. Returns (links added, ids of links removed)."""
@@ -150,7 +155,7 @@ class Hub:
     def index_html(self) -> str:
         if self.state_provider is not None:
             from .hub_ui import INDEX_HTML
-            return INDEX_HTML
+            return INDEX_HTML.replace("var PROXY=false;", "var PROXY=true;") if self.proxy_token else INDEX_HTML
         rows = []
         for l in self.links():
             rows.append(
@@ -280,7 +285,7 @@ def _handler(hub: Hub):
             if self.command != "POST":
                 return self._json({"error": "use POST"}, 405)
             origin = self.headers.get("Origin")
-            if (origin and not hub_guard.origin_allowed(origin)) or self.headers.get("X-Requested-With") != "bhaskera":
+            if (origin and not hub.proxy_token and not hub_guard.origin_allowed(origin)) or self.headers.get("X-Requested-With") != "bhaskera":
                 return self._json({"error": "this request does not come from the Bhaskera page"}, 403)
             length = int(self.headers.get("Content-Length") or 0)
             if length > hub_guard.MAX_CHAT_BODY:
@@ -299,7 +304,7 @@ def _handler(hub: Hub):
             if self.command != "POST":
                 return self._json({"error": "use POST"}, 405)
             origin = self.headers.get("Origin")
-            if (origin and not hub_guard.origin_allowed(origin)) or self.headers.get("X-Requested-With") != "bhaskera":
+            if (origin and not hub.proxy_token and not hub_guard.origin_allowed(origin)) or self.headers.get("X-Requested-With") != "bhaskera":
                 return self._json({"error": "this request does not come from the Bhaskera page"}, 403)
             length = int(self.headers.get("Content-Length") or 0)
             if length > hub_guard.MAX_FORM_BODY:
@@ -325,12 +330,55 @@ def _handler(hub: Hub):
             except launch.LaunchError as e:
                 return self._json({"error": str(e)}, 400)
 
+        def _proxy_auth(self) -> bool:
+            """Behind a portal: true when the request carries the session token (cookie or Basic password); a request that brings the
+            token in its URL or form gets the cookie and is sent to the page."""
+            import base64
+            import hmac
+            token = hub.proxy_token or ""
+            cookie = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+            have = cookie["bhaskera_session"].value if "bhaskera_session" in cookie else ""
+            basic = ""
+            auth = self.headers.get("Authorization", "")
+            if auth.lower().startswith("basic "):
+                try:
+                    basic = base64.b64decode(auth[6:]).decode().partition(":")[2]
+                except Exception:
+                    basic = ""
+            if any(hmac.compare_digest(x.encode(), token.encode()) for x in (have, basic) if x):
+                return True
+            given = ""
+            path, _, query = self.path.partition("?")
+            if self.command == "POST" and path.rstrip("/") == "":
+                length = int(self.headers.get("Content-Length") or 0)
+                if 0 < length <= 4096:
+                    given = urllib.parse.parse_qs(self.rfile.read(length).decode(errors="replace")).get("password", [""])[0]
+            elif self.command == "GET":
+                given = urllib.parse.parse_qs(query).get("password", [""])[0]
+            if given and hmac.compare_digest(given.encode(), token.encode()):
+                self.send_response(303)
+                self.send_header("Set-Cookie", f"bhaskera_session={token}; HttpOnly; SameSite=Lax; Secure" if self.headers.get("X-Forwarded-Proto") == "https"
+                                 else f"bhaskera_session={token}; HttpOnly; SameSite=Lax")
+                self.send_header("Location", "./")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self._redirected = True
+                return False
+            return False
+
         def _handle(self) -> None:
-            if not hub.peer_check(self.client_address, self.server.server_address):
-                return self._send(403, "This page is private to the user who started it.")
-            if not hub_guard.host_allowed(self.headers.get("Host", "")):
-                return self._send(421, "Open the hub as http://localhost:<port>.")
-            target = target_from_host(self.headers.get("Host", ""))
+            if hub.proxy_token:
+                self._redirected = False
+                if not self._proxy_auth():
+                    if self._redirected:
+                        return
+                    return self._send(403, "Open Bhaskera from the Sessions page of the portal; this address needs the session link.")
+            else:
+                if not hub.peer_check(self.client_address, self.server.server_address):
+                    return self._send(403, "This page is private to the user who started it.")
+                if not hub_guard.host_allowed(self.headers.get("Host", "")):
+                    return self._send(421, "Open the hub as http://localhost:<port>.")
+            target = target_from_host(self.headers.get("Host", "")) if not hub.proxy_token else None
             if target is None:
                 path, _, query = self.path.partition("?")
                 if path in ("/", "/index.html"):
@@ -391,9 +439,9 @@ class _Server(http.server.ThreadingHTTPServer):
             self._slots.release()
 
 
-def serve(hub: Hub, port: int) -> http.server.ThreadingHTTPServer:
-    """Start the proxy on 127.0.0.1 in its own thread (raises OSError when the port is taken)."""
-    srv = _Server(("127.0.0.1", port), _handler(hub))
+def serve(hub: Hub, port: int, bind: str = "127.0.0.1") -> http.server.ThreadingHTTPServer:
+    """Start the proxy in its own thread, on 127.0.0.1 unless told otherwise (raises OSError when the port is taken)."""
+    srv = _Server((bind, port), _handler(hub))
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv

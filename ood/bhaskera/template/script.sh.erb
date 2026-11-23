@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Runs inside the session job, as the user. The portal gives this script $port and $password (before.sh of the basic template).
+
+module purge >/dev/null 2>&1 || true
+module load <%= bhaskera_module %> || { echo "cannot load <%= bhaskera_module %>" >&2; exit 1; }
+
+# Where submit.sh and your recipes live: your own copy of the kit, made once from the shared one.
+export BHASKERA_WORKDIR="${BHASKERA_WORKDIR:-$HOME/bhaskera-runs}"
+if [[ ! -f "$BHASKERA_WORKDIR/submit.sh" ]]; then
+    mkdir -p "$BHASKERA_WORKDIR" && cp -rn "$BHASKERA_KIT"/. "$BHASKERA_WORKDIR"/
+fi
+cd "$BHASKERA_WORKDIR"
+
+<% if bc_account.to_s != "" -%>
+export SLURM_ACCOUNT="<%= bc_account %>"
+<% end -%>
+# Only the portal's own link carries this token; the page refuses every other request.
+export BHASKERA_HUB_TOKEN="${password:?the portal did not give a password}"
+
+echo "Bhaskera on $(hostname):${port}"
+exec bhaskera-dashboard portal --bind 0.0.0.0 --hub-port "${port:?the portal did not give a port}"

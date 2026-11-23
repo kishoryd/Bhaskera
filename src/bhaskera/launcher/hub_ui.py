@@ -413,6 +413,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
 "use strict";
 var $ = function(s){return document.querySelector(s)};
 var esc = function(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})};
+var PROXY=false;
 var PORT = location.port || "8265";
 var MLFLOW = "http://mlflow.localhost:"+PORT+"/";
 var GITHUB = "https://github.com/kishoryd/Bhaskera";
@@ -472,6 +473,7 @@ function badge(st){
   return '<span class="badge '+cls+'">'+esc(label)+'</span>';
 }
 function link(href,label,icon,primary){
+  if(PROXY&&/\.localhost:/.test(href||"")) return "";
   return '<a class="btn'+(primary?" primary":"")+'"'+(href?' href="'+esc(href)+'" target="_blank" rel="noopener"':' aria-disabled="true"')+'>'+ICON[icon]+esc(label)+'</a>';
 }
 function tile(k,v){ return '<div class="tile"><div class="k">'+esc(k)+'</div><div class="v">'+v+'</div></div>'; }
@@ -574,7 +576,7 @@ function renderRuns(){
   $("#runs").innerHTML = rows.length ? rows.map(function(r){
     var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
           ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
-    return '<tr><td><a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>'+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
+    return '<tr><td>'+(PROXY?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
       '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
 }
@@ -582,7 +584,7 @@ function renderRuns(){
 /* ---- registered models ---- */
 var regModels=null, pathOpts=null;
 function loadModels(){
-  fetch("/api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); }).catch(function(){});
+  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); }).catch(function(){});
 }
 /* ---- the path from data to a usable model ---- */
 function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
@@ -650,6 +652,7 @@ $("#cmp").addEventListener("click", function(e){ var b=e.target.closest("[data-c
 function renderSide(){
   var s=state, first=(s.jobs||[]).filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
   var items=[["MLflow",MLFLOW],["Models","#modsec"],["Guide","#guide"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
+  if(PROXY) items=items.filter(function(l){ return l[0]!=="MLflow"&&l[0]!=="Ray"; });
   $("#nav").innerHTML=items.map(function(l){
     return '<a'+(l[1]?' href="'+esc(l[1])+'"'+(l[1].charAt(0)==="#"?"":' target="_blank" rel="noopener"'):' class="off" title="Opens when a job runs"')+'>'+esc(l[0])+'</a>';
   }).join("");
@@ -696,7 +699,7 @@ function clock(){
   el.title = age>30 ? "The page lost its connection and is retrying." : ""; el.textContent = age>30 ? "reconnecting …" : (age<3 ? "live" : "updated "+age+" s ago");
 }
 function refresh(){
-  fetch("/api/state",{cache:"no-store"}).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+  fetch("api/state",{cache:"no-store"}).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
     .then(function(s){ state=s; lastOk=Date.now(); render(); clock(); })
     .catch(function(){ clock(); });
 }
@@ -710,7 +713,7 @@ $("#filter").addEventListener("click", function(e){
 /* ---- log window ---- */
 function loadLog(){
   if(!logJob) return;
-  fetch("/api/log?job="+encodeURIComponent(logJob)+"&lines=400",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
+  fetch("api/log?job="+encodeURIComponent(logJob)+"&lines=400",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
     var box=$("#logtext");
     if(d.error){ box.textContent=d.error; return; }
     box.textContent=d.lines.join("\n");
@@ -805,7 +808,7 @@ function addPair(){
 function scrollChat(){ var m=$("#chat-msgs"); m.scrollTop=m.scrollHeight; }
 function streamAnswer(history,useAdapter,el){
   var ctrl=new AbortController(); chat.ctrl=ctrl; var text="";
-  return fetch("/api/chat?job="+encodeURIComponent(chat.job),{method:"POST",signal:ctrl.signal,
+  return fetch("api/chat?job="+encodeURIComponent(chat.job),{method:"POST",signal:ctrl.signal,
       headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},
       body:JSON.stringify({messages:history,stream:true,use_adapter:useAdapter,max_tokens:parseInt($("#chat-max").value,10),temperature:parseFloat($("#chat-temp").value)})})
     .then(function(res){
@@ -873,7 +876,7 @@ function doCancel(id,label,btn){
     setTimeout(function(){ if(armed.id===String(id)&&Date.now()>=armed.until){ armed={id:null,until:0}; refresh(); } },5200); return;
   }
   armed={id:null,until:0}; if(btn){ btn.disabled=true; btn.textContent="Cancelling …"; }
-  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify({action:"start",kind:"cancel",job:String(id)})}).then(function(r){
+  api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify({action:"start",kind:"cancel",job:String(id)})}).then(function(r){
     if(r.j.error){ toast(r.j.error); if(btn){ btn.disabled=false; btn.textContent=label; } return; }
     toast(r.j.ok?("Job #"+id+" cancelled. It disappears from this page in a few seconds."):("Could not cancel job #"+id+": "+r.j.output)); refresh();
   }).catch(function(){ toast("The page could not reach the hub."); if(btn){ btn.disabled=false; btn.textContent=label; } });
@@ -1066,7 +1069,7 @@ function stoppedList(){
 function loadResume(){
   var run=L.run, box=$("#f-resume"); if(!box||!run) return;
   box.innerHTML='<div class="sub">Looking at what the run left behind …</div>'; L.rinfo=null; L.step=0;
-  api("/api/resume?run="+encodeURIComponent(run),{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){
+  api("api/resume?run="+encodeURIComponent(run),{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){
     if(L.run!==run||L.kind!=="resume") return; L.rinfo=r.j; showResume();
   }).catch(function(){ if($("#f-resume")) $("#f-resume").innerHTML='<div class="sub">The page could not reach the hub.</div>'; });
 }
@@ -1153,12 +1156,12 @@ function send(action){
   }
   L.confirm=false; $("#startgo").textContent=goLabel(L.kind); $("#startgo").classList.remove("confirm");
   L.busy=true; $("#startcheck").disabled=$("#startgo").disabled=true; showResult("", action==="check"?"Checking …":"Submitting …", "");
-  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
+  api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
     if(r.j.error){ showResult("bad","Not started",r.j.error); return; }
     if(r.j.dry&&L.kind==="recipe"){ showResult("ok","This is the recipe that would be written. Nothing was saved yet.",r.j.output); return; }
     if(r.j.ok&&L.kind==="recipe"){
       L.recipe=r.j.recipe; toast("Saved the recipe "+r.j.recipe+". Next: choose how many nodes and press Start to train it.");
-      L.kind="train"; L.step=0; api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(o){ L.opts=o.j; renderStart(); }); return;
+      L.kind="train"; L.step=0; api("api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(o){ L.opts=o.j; renderStart(); }); return;
     }
     if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
     if(r.j.ok&&L.kind==="register"){
@@ -1175,11 +1178,11 @@ function send(action){
 function addOwnTest(){
   var o=L.own, f={kind:"evaltask",action:"start",name:o.name,data:o.data,question_field:o.q||"question",answer_field:o.a||"answer"};
   showResult("","Writing the test …","");
-  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
+  api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
     if(x.j.error){ showResult("bad","Not added",x.j.error); return; }
     if(!x.j.ok){ showResult("bad","Not added",x.j.output); return; }
     L.tasks[o.name]=1; L.own={name:"",data:"",q:"question",a:"answer"};
-    api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; renderStart(); toast("Added the test "+o.name+" and ticked it."); });
+    api("api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; renderStart(); toast("Added the test "+o.name+" and ticked it."); });
   }).catch(function(){ showResult("bad","Not added","The page could not reach the hub."); });
 }
 function sendEvalMany(action){
@@ -1188,7 +1191,7 @@ function sendEvalMany(action){
   var step=function(i){
     if(i>=runs.length) return Promise.resolve();
     var f=Object.assign({},base,{run:runs[i]});
-    return api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
+    return api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
       var nm=runInfo(runs[i]).name||runs[i].slice(0,8);
       if(r.j.error){ notes.push(nm+": "+r.j.error); return; }
       if(r.j.ok&&!r.j.dry) jobs.push(r.j.job);
@@ -1204,7 +1207,7 @@ function sendEvalMany(action){
 }
 function loadBase(){
   var base=val("f-rbase"); if(!base){ showResult("bad","Pick something to start from",""); return; }
-  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify({kind:"recipe",action:"show",base:base})}).then(function(x){
+  api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify({kind:"recipe",action:"show",base:base})}).then(function(x){
     if(x.j.error){ showResult("bad","Could not load it",x.j.error); return; }
     L.rc.yaml=x.j.output; L.rc.base=base; L.rc.copy=true; $("#startout").hidden=true; renderStart();
   });
@@ -1213,14 +1216,14 @@ function prepareData(){
   var r=L.rc, f={action:"start",kind:"tokenize",name:r.name,model:r.model,train_path:r.raw.train,val_path:r.raw.val,format:r.raw.format,seq_len:r.raw.seq,model_kind:r.kind};
   if(r.kind==="multimodal"){ f.modalities=r.mods; f.media_root=r.raw.media; }
   showResult("","Submitting the tokenising job …","");
-  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
+  api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
     if(x.j.error){ showResult("bad","Not started",x.j.error); return; }
     if(x.j.ok){ showResult("ok","Tokenising job #"+x.j.job+" submitted. It takes a few minutes; when it has finished, reopen this form and the data is listed above.",x.j.output); refresh(); }
     else showResult("bad","Not submitted",x.j.output);
   }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); });
 }
 function openStart(kind,run){
-  api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; }).catch(function(){ L.opts={enabled:false,reason:"The page could not reach the hub.",recipes:[],runs:[],partitions:[]}; }).then(function(){
+  api("api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; }).catch(function(){ L.opts={enabled:false,reason:"The page could not reach the hub.",recipes:[],runs:[],partitions:[]}; }).then(function(){
     L.kind=kind||L.kind; if(run) L.run=run; renderStart(); if(!$("#startbox").open) $("#startbox").showModal();
   });
 }
