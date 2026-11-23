@@ -118,10 +118,8 @@ read-only through the home page. [SECURITY.md](SECURITY.md) says what is protect
 
 ## Known limits
 
-- After a resume the data starts again from the beginning of the training set.
 - MoE models are slow outside Pipeline. The BharatGen MoE models run under FSDP only.
 - DDP needs the whole model on each GPU. Qwen3-235B does not fit with QLoRA.
-- gpt-oss (MXFP4) cannot be trained; `scripts/convert_mxfp4_to_bf16.py` converts it for A100s.
 
 ## What you control, and what Bhaskera handles
 
