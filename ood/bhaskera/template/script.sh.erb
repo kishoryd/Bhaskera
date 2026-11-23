@@ -2,7 +2,8 @@
 # Runs inside the session job, as the user. $host, $port and $password come from before.sh. The user sets nothing.
 
 module purge >/dev/null 2>&1 || true
-module load <%= bhaskera_module %> || { echo "cannot load <%= bhaskera_module %>" >&2; exit 1; }
+# --ignore_cache: a compute node whose Lmod cache is out of date would otherwise say the module is unknown.
+module --ignore_cache load <%= bhaskera_module %> || module load <%= bhaskera_module %> || { echo "cannot load <%= bhaskera_module %>" >&2; exit 1; }
 
 # The account jobs are charged to: the user's default account in Slurm (the page can only start jobs with one).
 if [[ -z "${SLURM_ACCOUNT:-}" ]]; then

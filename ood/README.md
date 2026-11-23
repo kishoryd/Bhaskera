@@ -78,7 +78,7 @@ new on the cluster it says "Nothing is running", and that is normal.
 |---|---|---|
 | Open Bhaskera gives "Forbidden" or a proxy error | `host_regex` does not match the node name | Step 4, then `./check.sh --nodes "<that node>"` |
 | The card stays "Starting" for minutes | The partition is busy or the limit is smaller than the hours | `squeue -u <user>`; lower `--hours`; pick another partition (rerun `install.sh`) |
-| The card goes to "Completed" at once | The module or the `portal` command is missing on that node | Open the session's `output.log` from the card |
+| The card goes to "Completed" at once | The module or the `portal` command is missing on that node, or the node's Lmod cache is out of date ("module(s) are unknown") | Open the session's `output.log` from the card; refresh the cache on every compute node (`update_lmod_system_cache_files` as your site does it). The app already loads with `--ignore_cache`, which covers a stale cache, not a missing modulefile |
 | The page says "Open Bhaskera from the Sessions page" | The address was opened without the Open button (a bookmark, a copied link) | Use the Open button; the token changes with each session |
 | The page says "SLURM_ACCOUNT is not set" under Start | The user has no default account in Slurm | `sacctmgr modify user <user> set defaultaccount=<account>` |
 | The page opens but nothing loads | The proxy dropped a header or cookie | Look at the web server's error log; the page needs `Set-Cookie` back and `Cookie` forward |
