@@ -152,10 +152,15 @@ def test_init_task_writes_a_valid_definition(tmp_path, capsys):
     data = tmp_path / "mine.jsonl"
     data.write_text('{"question": "2+2?", "answer": "4"}\n{"question": "3+3?", "answer": "6"}\n')
     assert ev.main(["init-task", "--name", "my_test", "--data", str(data), "--out", str(tmp_path / "tasks")]) == 0
-    spec = yaml.safe_load((tmp_path / "tasks" / "my_test.yaml").read_text())
-    assert spec["task"] == "my_test" and spec["doc_to_text"] == "{{question}}" and spec["doc_to_target"] == "{{answer}}"
+    spec = yaml.safe_load((tmp_path / "tasks" / "my_test.yaml").read_text().replace("!function", "!!str"))
+    assert spec["task"] == "my_test" and spec["doc_to_text"] == "Question: {{question}}\nAnswer:" and spec["doc_to_target"] == "{{answer}}"
     assert spec["dataset_kwargs"]["data_files"]["test"] == str(data) and spec["generation_kwargs"]["until"] == ["\n"]
-    assert spec["metric_list"][0]["metric"] == "exact_match"
+    assert spec["metric_list"][0]["metric"] == "contains" and spec["process_results"] == "my_test_utils.process_results"
+    import importlib.util
+    sp = importlib.util.spec_from_file_location("my_test_utils", tmp_path / "tasks" / "my_test_utils.py")
+    mod = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(mod)
+    assert mod.process_results({"answer": "4"}, [" The answer is 4."]) == {"contains": 1.0} and mod.process_results({"answer": "4"}, [" What is 5+5?"]) == {"contains": 0.0}
     assert "my_test" in capsys.readouterr().out
 
 
