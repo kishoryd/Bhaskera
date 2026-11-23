@@ -24,7 +24,7 @@ from typing import Optional
 ALLOWED_HOST = re.compile(r"^(localhost|127\.0\.0\.1|\[::1\]|job-\d+\.localhost|grafana-\d+\.localhost|mlflow\.localhost)(:\d{1,5})?$", re.IGNORECASE)
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 MAX_BODY = 10 * 1024 * 1024
-MAX_CHAT_BODY = 1024 * 1024
+MAX_CHAT_BODY = 100 * 1024 * 1024        # a conversation with attached images, video or audio (the chat server checks each file)
 MAX_FORM_BODY = 16 * 1024
 MAX_CONNECTIONS = 64
 

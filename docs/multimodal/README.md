@@ -88,6 +88,21 @@ Starters, one per input type, in `configs/multimodal/`:
 
 A row may mix types: list them in `data.modalities`.
 
+### Chatting with files
+
+A chat server started for a multimodal model (**Chat** on its run on the home page, or `./submit.sh serve --run <run id>`) accepts images, video
+and audio. On the page, the chat window has an **Attach** button when the model can read files, with a preview and a remove button for each
+file; the files stay in the conversation for follow-up questions. Over the API, a message's `content` is a list of parts:
+
+```json
+{"messages": [{"role": "user", "content": [
+   {"type": "text", "text": "What is in this picture?"},
+   {"type": "image", "data": "<base64 or a data: URL>"}]}]}
+```
+
+`GET /health` lists what the model reads under `modalities`. Files are checked by their own first bytes (not their names), at most 12 MB per
+image, 25 MB per audio file, 48 MB per video, 8 files and 56 MB in all. A model is never sent a kind of file it cannot read.
+
 ## 4. How it works
 
 **Model** (`models/multimodal.py`). An *encoder* is a tower (vision, audio) of identical

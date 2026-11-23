@@ -77,7 +77,7 @@ bhaskera-dashboard ray
 prints one SSH command for your laptop. Open <http://localhost:8265> and you get your jobs with live loss, MFU and GPU load,
 the logs, links to the Ray Dashboard and MLflow, and your recent runs. From the same page you can start a job (with a
 *Check first* that submits nothing), chat with a model you trained (the tuned model, the base model, or both side by side), and
-benchmark it against its base. Everything it does is also a plain command (`./submit.sh serve`, `./submit.sh eval`), and the docs
+benchmark it against its base. For a model that reads images, video or audio, the chat window has an **Attach** button. Everything it does is also a plain command (`./submit.sh serve`, `./submit.sh eval`), and the docs
 show both ways side by side, including chatting from the terminal. `BHASKERA_HUB_LAUNCH=0` turns the Start buttons off.
 
 To test a model on your own questions, `python -m bhaskera.launcher.evaluate init-task` turns a question/answer JSONL file into a test,

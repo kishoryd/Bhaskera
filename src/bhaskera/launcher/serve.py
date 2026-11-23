@@ -15,6 +15,10 @@ The server speaks a small part of the OpenAI chat API:
     POST /v1/chat/completions     {"messages": [...], "max_tokens": 256, "temperature": 0.7, "top_p": 0.9,
                                    "stream": true, "use_adapter": true}
 
+A message's ``content`` is text, or for a model that reads images, video or audio a list of parts:
+``[{"type": "text", "text": "What is in this?"}, {"type": "image", "data": "<base64 or data: URL>"}]`` (also ``video`` and ``audio``).
+/health lists what the model accepts under ``modalities``. Each file is checked against its own type and size before it is decoded.
+
 It listens on 127.0.0.1 only and serves only connections from the user who started it (see hub_guard.py); the home page
 reaches it through an SSH link. One answer is generated at a time; others wait their turn.
 """
@@ -33,8 +37,11 @@ from typing import Iterator, Optional
 
 from . import hub_guard
 
-MAX_BODY = 1024 * 1024
+MAX_BODY = 96 * 1024 * 1024                  # room for the media of a conversation, as base64
 MAX_MESSAGES = 50
+MAX_MEDIA_ITEMS = 8
+MAX_MEDIA_BYTES = {"image": 12 << 20, "audio": 25 << 20, "video": 48 << 20}      # decoded size of one file
+MAX_MEDIA_TOTAL = 56 << 20
 MAX_CONTENT_CHARS = 20000
 MAX_NEW_TOKENS_CAP = 1024
 
@@ -63,6 +70,57 @@ class RequestError(Exception):
     """A bad request: the message is returned to the caller with status 400."""
 
 
+def _sniff(kind: str, raw: bytes) -> Optional[str]:
+    """The file extension for media of this kind when its first bytes say what it claims to be, else None."""
+    h = raw[:16]
+    if kind == "image":
+        if h.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ".png"
+        if h.startswith(b"\xff\xd8\xff"):
+            return ".jpg"
+        if h[:4] == b"RIFF" and h[8:12] == b"WEBP":
+            return ".webp"
+        return {b"GIF8": ".gif", b"BM": ".bmp"}.get(h[:4]) or (".bmp" if h[:2] == b"BM" else None)
+    if kind == "audio":
+        if h[:4] == b"RIFF" and h[8:12] == b"WAVE":
+            return ".wav"
+        if h[:4] == b"fLaC":
+            return ".flac"
+        if h[:4] == b"OggS":
+            return ".ogg"
+        if h[:3] == b"ID3" or h[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+            return ".mp3"
+        return None
+    if kind == "video":
+        if h[4:8] == b"ftyp":
+            return ".mp4"
+        if h[:4] == b"\x1aE\xdf\xa3":
+            return ".webm"
+        if h[:4] == b"RIFF" and h[8:12] == b"AVI ":
+            return ".avi"
+    return None
+
+
+def decode_media(kind: str, data) -> tuple[bytes, str]:
+    """(bytes, extension) of one attached file given as base64 or a data: URL, or a RequestError."""
+    import base64
+    import binascii
+    if not isinstance(data, str) or not data:
+        raise RequestError(f"a {kind} part needs its file as base64 in 'data'")
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    if len(data) > MAX_MEDIA_BYTES[kind] * 4 // 3 + 16:
+        raise RequestError(f"a {kind} file is larger than {MAX_MEDIA_BYTES[kind] >> 20} MB")
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        raise RequestError(f"the {kind} file is not valid base64")
+    ext = _sniff(kind, raw)
+    if ext is None:
+        raise RequestError(f"the attached file does not look like a supported {kind} file")
+    return raw, ext
+
+
 def parse_request(body: dict, cap: int = MAX_NEW_TOKENS_CAP) -> dict:
     """Check a chat request and fill in defaults."""
     messages = body.get("messages")
@@ -70,13 +128,40 @@ def parse_request(body: dict, cap: int = MAX_NEW_TOKENS_CAP) -> dict:
         raise RequestError("messages must be a non-empty list")
     if len(messages) > MAX_MESSAGES:
         raise RequestError(f"at most {MAX_MESSAGES} messages")
-    clean = []
+    clean, kinds, total = [], set(), 0
     for m in messages:
-        if not isinstance(m, dict) or m.get("role") not in ("system", "user", "assistant") or not isinstance(m.get("content"), str):
+        if not isinstance(m, dict) or m.get("role") not in ("system", "user", "assistant"):
+            raise RequestError("each message needs a role (system, user or assistant) and a content")
+        content = m.get("content")
+        if isinstance(content, str):
+            if len(content) > MAX_CONTENT_CHARS:
+                raise RequestError(f"a message is longer than {MAX_CONTENT_CHARS} characters")
+            clean.append({"role": m["role"], "content": content})
+            continue
+        if not isinstance(content, list) or not content:
             raise RequestError("each message needs a role (system, user or assistant) and a text content")
-        if len(m["content"]) > MAX_CONTENT_CHARS:
-            raise RequestError(f"a message is longer than {MAX_CONTENT_CHARS} characters")
-        clean.append({"role": m["role"], "content": m["content"]})
+        parts = []
+        for part in content:
+            kind = part.get("type") if isinstance(part, dict) else None
+            if kind == "text":
+                text = part.get("text")
+                if not isinstance(text, str) or len(text) > MAX_CONTENT_CHARS:
+                    raise RequestError(f"text parts are text of at most {MAX_CONTENT_CHARS} characters")
+                parts.append({"type": "text", "text": text})
+            elif kind in MAX_MEDIA_BYTES:
+                if m["role"] != "user":
+                    raise RequestError("only the user's messages can carry files")
+                raw, ext = decode_media(kind, part.get("data"))
+                total += len(raw)
+                if total > MAX_MEDIA_TOTAL:
+                    raise RequestError(f"the attached files add up to more than {MAX_MEDIA_TOTAL >> 20} MB")
+                kinds.add(kind)
+                parts.append({"type": kind, "bytes": raw, "ext": ext})
+            else:
+                raise RequestError("a content part is text, image, video or audio")
+        clean.append({"role": m["role"], "content": parts})
+    if sum(1 for m in clean if isinstance(m["content"], list) for p in m["content"] if p["type"] != "text") > MAX_MEDIA_ITEMS:
+        raise RequestError(f"at most {MAX_MEDIA_ITEMS} files per conversation")
 
     def number(name, default, lo, hi):
         v = body.get(name, default)
@@ -84,7 +169,7 @@ def parse_request(body: dict, cap: int = MAX_NEW_TOKENS_CAP) -> dict:
             raise RequestError(f"{name} must be a number")
         return min(max(v, lo), hi)
 
-    return {"messages": clean, "max_tokens": int(number("max_tokens", 256, 1, cap)),
+    return {"messages": clean, "media": sorted(kinds), "max_tokens": int(number("max_tokens", 256, 1, cap)),
             "temperature": float(number("temperature", 0.7, 0.0, 2.0)), "top_p": float(number("top_p", 0.9, 0.05, 1.0)),
             "stream": bool(body.get("stream", False)), "use_adapter": bool(body.get("use_adapter", True)),
             "thinking": bool(body.get("thinking", False))}
@@ -96,9 +181,21 @@ class ModelHost:
     def __init__(self, model: str, adapter: Optional[str] = None, dtype: str = "bfloat16", four_bit: bool = False,
                  trust_remote_code: bool = False, device_map: str = "auto"):
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
         self.model_path, self.adapter_path = model, adapter
-        self.tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=trust_remote_code)
+        self.processor, self.media = None, []
+        config = AutoConfig.from_pretrained(model, trust_remote_code=trust_remote_code)
+        from bhaskera.models.multimodal import config_modalities, is_multimodal_config, model_class_and_config
+        self.multimodal = is_multimodal_config(config)
+        if self.multimodal:                     # a model that reads images, video or audio: its own class and processor
+            from bhaskera.data.multimodal import load_processor
+            cls, build_config = model_class_and_config("multimodal", config)
+            self.processor = load_processor(model, {}, trust_remote_code)
+            self.tokenizer = self.processor.tokenizer
+            have = config_modalities(config)
+            self.media = (["image", "video"] if "vision" in have else []) + (["audio"] if "audio" in have else [])
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=trust_remote_code)
         kwargs: dict = {"torch_dtype": getattr(torch, dtype), "trust_remote_code": trust_remote_code}
         if torch.cuda.is_available():
             kwargs["device_map"] = device_map
@@ -106,7 +203,10 @@ class ModelHost:
             from transformers import BitsAndBytesConfig
             kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=getattr(torch, dtype),
                                                                bnb_4bit_quant_type="nf4")
-        self.model = AutoModelForCausalLM.from_pretrained(model, **kwargs)
+        if self.multimodal:
+            self.model = cls.from_pretrained(model, config=build_config, **{k: v for k, v in kwargs.items() if k != "trust_remote_code"})
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(model, **kwargs)
         self.has_adapter = bool(adapter)
         if adapter:
             from peft import PeftModel
@@ -116,22 +216,71 @@ class ModelHost:
         self.device = next(self.model.parameters()).device
 
     def _prompt_ids(self, messages: list[dict], thinking: bool):
+        messages = [{"role": m["role"], "content": m["content"] if isinstance(m["content"], str) else
+                     " ".join(p["text"] for p in m["content"] if p["type"] == "text")} for m in messages]
         try:
             text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=thinking)
         except Exception:
             text = "\n".join(f"{m['role']}: {m['content']}" for m in messages) + "\nassistant:"
         return self.tokenizer(text, return_tensors="pt", add_special_tokens=False).input_ids.to(self.device)
 
+    def _media_inputs(self, req: dict, folder: str):
+        """The model inputs for a conversation that may carry files: the files are written to ``folder`` (the processor
+        and the video decoder read paths), turned into the chat template's parts, and run through the model's processor."""
+        import torch
+        from bhaskera.data.multimodal import load_media, run_processor
+        items, messages = [], []
+        for m in req["messages"]:
+            if isinstance(m["content"], str):
+                messages.append({"role": m["role"], "content": [{"type": "text", "text": m["content"]}]})
+                continue
+            parts = []
+            for p in m["content"]:
+                if p["type"] == "text":
+                    parts.append(p)
+                else:
+                    path = os.path.join(folder, f"{len(items)}{p['ext']}")
+                    with open(path, "wb") as f:
+                        f.write(p["bytes"])
+                    items.append({"type": p["type"], "path": path})
+                    parts.append({"type": p["type"], p["type"]: path})
+            messages.append({"role": m["role"], "content": parts})
+        try:
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=req["thinking"])
+        except TypeError:
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        try:
+            media = load_media(items, self.processor, {})
+            inputs = run_processor(self.processor, [text], media)
+        except Exception as e:
+            raise RuntimeError(f"could not read the attached files: {str(e)[:200]}")
+        dtype = next(self.model.parameters()).dtype
+        return {k: (v.to(self.device, dtype) if torch.is_tensor(v) and v.is_floating_point() else v.to(self.device) if torch.is_tensor(v) else v)
+                for k, v in inputs.items()}
+
     def generate(self, req: dict) -> Iterator[str]:
         """Pieces of the answer as they are produced. One caller at a time."""
         import contextlib
+        import tempfile
         import torch
         from transformers import TextIteratorStreamer
-        ids = self._prompt_ids(req["messages"], req["thinking"])
+        keep = tempfile.TemporaryDirectory(prefix="bhaskera-chat-") if self.multimodal else None
+        try:
+            yield from self._generate(req, keep.name if keep else None, contextlib, torch, TextIteratorStreamer)
+        finally:
+            if keep:
+                keep.cleanup()
+
+    def _generate(self, req, folder, contextlib, torch, TextIteratorStreamer) -> Iterator[str]:
         streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
         sampling = req["temperature"] > 0
-        gen = {"input_ids": ids, "attention_mask": torch.ones_like(ids), "max_new_tokens": req["max_tokens"], "streamer": streamer,
-               "do_sample": sampling, "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id}
+        if folder is not None:
+            gen = dict(self._media_inputs(req, folder))
+        else:
+            ids = self._prompt_ids(req["messages"], req["thinking"])
+            gen = {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+        gen.update({"max_new_tokens": req["max_tokens"], "streamer": streamer,
+                    "do_sample": sampling, "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id})
         if sampling:
             gen.update(temperature=req["temperature"], top_p=req["top_p"])
         use_adapter = req["use_adapter"] or not self.has_adapter
@@ -209,6 +358,11 @@ def make_handler(host, info: dict, cap: int = MAX_NEW_TOKENS_CAP, peer_check=hub
                 req = parse_request(json.loads(self.rfile.read(length) or b"{}"), cap)
             except (ValueError, RequestError) as e:
                 return self._json(400, {"error": str(e)})
+            accepted = set(info.get("modalities", ["text"]))
+            missing = [k for k in req["media"] if k not in accepted]
+            if missing:
+                return self._json(400, {"error": f"this model cannot read {', '.join(missing)} files"
+                                                 + (f" (it reads: {', '.join(sorted(accepted - {'text'}))})" if len(accepted) > 1 else " (it reads text only)")})
             started, tokens = time.monotonic(), 0
             if req["stream"]:
                 self.send_response(200)
@@ -272,7 +426,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"loading {model}" + (f" with adapter {adapter}" if adapter else "") + " ...", flush=True)
     host = ModelHost(model, adapter, args.dtype, args.four_bit, args.trust)
     info = {"model": os.path.basename(model.rstrip("/")), "adapter": adapter_label(adapter),
-            "host": socket.gethostname()}
+            "host": socket.gethostname(), "modalities": ["text"] + list(getattr(host, "media", []))}
     srv = serve(host, info, port, args.cap)
     print(f"=== serving on {socket.gethostname()}:{port} ===", flush=True)
     try:

@@ -207,6 +207,14 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 .toast{position:fixed;left:50%;top:78px;transform:translateX(-50%);z-index:20;background:var(--ink);color:var(--paper);padding:10px 18px;border-radius:3px;font-size:13.5px;box-shadow:4px 4px 0 rgba(31,28,23,.2)}
 .job.flash{animation:fl 2.4s ease-out}@keyframes fl{0%{background:var(--warn-soft)}100%{background:transparent}}
 .btn.confirm{background:var(--accent);border-color:var(--accent);color:#fff}
+.attached{display:flex;flex-wrap:wrap;gap:8px;padding:10px 0 0;align-items:center}
+.att{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:3px;padding:3px 4px 3px 8px;font-size:12.5px;background:var(--surface)}
+.att img{height:34px;width:34px;object-fit:cover;border-radius:2px}
+.att button{border:0;background:transparent;font-size:15px;line-height:1;padding:2px 6px;color:var(--muted)}
+.att button:hover{color:var(--bad)}
+.msg .files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.msg .files img{max-height:130px;max-width:200px;border-radius:2px;border:1px solid rgba(255,255,255,.25)}
+.msg .files span{font:12px var(--mono);opacity:.85;border:1px solid rgba(255,255,255,.35);padding:1px 7px;border-radius:2px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -245,7 +253,10 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
         </div>
       </div>
       <div class="msgs" id="chat-msgs" aria-live="polite"></div>
+      <div class="attached" id="chat-files" hidden></div>
       <form class="composer" id="chat-form">
+        <button class="btn" id="chat-attachbtn" type="button" hidden title="Attach an image, a video or an audio file">Attach</button>
+        <input id="chat-file" type="file" multiple hidden>
         <textarea id="chat-input" rows="2" placeholder="Ask the model something … (Enter sends, Shift+Enter starts a new line)" aria-label="Your message"></textarea>
         <button class="btn primary" id="chat-send" type="submit">Send</button><button class="btn" id="chat-stop" type="button" hidden>Stop</button>
       </form>
@@ -549,7 +560,26 @@ $("#copylog").addEventListener("click", function(){
 });
 
 /* ---- chat with a tuned model ---- */
-var chat = {job:null, messages:[], busy:false, ctrl:null, mode:"tuned"};
+var chat = {job:null, messages:[], busy:false, ctrl:null, mode:"tuned", media:[], pending:[]};
+var MEDIA_LIMIT={image:12,audio:25,video:48}, MEDIA_TOTAL=56;       // MB, as the chat server checks them
+function mediaKind(f){ var t=(f.type||"").split("/")[0]; return t==="image"||t==="video"||t==="audio" ? t : ""; }
+function renderAttached(){
+  var box=$("#chat-files"); box.hidden=!chat.pending.length;
+  box.innerHTML=chat.pending.map(function(a,i){
+    return '<span class="att">'+(a.kind==="image"?'<img src="'+esc(a.data)+'" alt="">':'')+esc(a.kind)+': '+esc(a.name)+' <button type="button" data-rm="'+i+'" aria-label="Remove">&times;</button></span>';
+  }).join("");
+}
+function attachFiles(files){
+  var total=chat.pending.reduce(function(s,a){return s+a.size},0), errs=[];
+  var reads=Array.prototype.map.call(files, function(f){
+    var kind=mediaKind(f);
+    if(!kind||chat.media.indexOf(kind)<0){ errs.push(f.name+": this model reads "+(chat.media.join(", ")||"text only")); return null; }
+    if(f.size>MEDIA_LIMIT[kind]*1048576){ errs.push(f.name+" is larger than "+MEDIA_LIMIT[kind]+" MB"); return null; }
+    if((total+=f.size)>MEDIA_TOTAL*1048576){ errs.push("the files add up to more than "+MEDIA_TOTAL+" MB"); return null; }
+    return new Promise(function(ok){ var r=new FileReader(); r.onload=function(){ ok({kind:kind,name:f.name,size:f.size,data:r.result}); }; r.onerror=function(){ ok(null); }; r.readAsDataURL(f); });
+  }).filter(Boolean);
+  Promise.all(reads).then(function(got){ got.forEach(function(a){ if(a) chat.pending.push(a); }); renderAttached(); if(errs.length) toast(errs.join(". ")); });
+}
 function serveJobs(){ return (state.jobs||[]).filter(function(j){return j.kind==="serve"&&(j.state==="RUNNING"||j.state==="COMPLETING")}); }
 function copyCmd(text,btn){
   var done=function(){ var o=btn.textContent; btn.textContent="Copied"; setTimeout(function(){btn.textContent=o},1500); };
@@ -572,6 +602,10 @@ function renderChat(){
   $("#chat-job").textContent="#"+cur.id;
   var sel=$("#chat-jobsel"); sel.hidden=ready.length<2;
   if(ready.length>1){ sel.innerHTML=ready.map(function(j){return '<option value="'+esc(j.id)+'"'+(j.id===chat.job?" selected":"")+'>#'+esc(j.id)+' '+esc(j.name)+'</option>'}).join(""); }
+  chat.media=(cur.serve.modalities||[]).filter(function(m){return m!=="text"});
+  $("#chat-attachbtn").hidden=!chat.media.length;
+  $("#chat-file").accept=chat.media.map(function(m){return m+"/*"}).join(",");
+  if(!chat.media.length&&chat.pending.length){ chat.pending=[]; renderAttached(); }
   var hasAdapter=!!cur.serve.adapter;
   Array.prototype.forEach.call($("#chat-mode").querySelectorAll("button"), function(b){ if(b.getAttribute("data-m")!=="tuned") b.disabled=!hasAdapter; });
   if(!hasAdapter) setMode("tuned");
@@ -580,7 +614,15 @@ function setMode(m){
   chat.mode=m;
   Array.prototype.forEach.call($("#chat-mode").querySelectorAll("button"), function(b){ b.setAttribute("aria-pressed", b.getAttribute("data-m")===m?"true":"false"); });
 }
-function addUser(text){ var d=document.createElement("div"); d.className="msg user"; d.textContent=text; $("#chat-msgs").appendChild(d); return d; }
+function addUser(text,files){
+  var d=document.createElement("div"); d.className="msg user";
+  if(files&&files.length){
+    var f=document.createElement("div"); f.className="files";
+    files.forEach(function(a){ if(a.kind==="image"){ var im=document.createElement("img"); im.src=a.data; im.alt=a.name; f.appendChild(im); } else { var s=document.createElement("span"); s.textContent=a.kind+": "+a.name; f.appendChild(s); } });
+    d.appendChild(f);
+  }
+  var t=document.createElement("div"); t.textContent=text; d.appendChild(t); $("#chat-msgs").appendChild(d); return d;
+}
 function addBot(){ var d=document.createElement("div"); d.className="msg bot"; $("#chat-msgs").appendChild(d); return d; }
 function addPair(){
   var p=document.createElement("div"); p.className="pair";
@@ -617,7 +659,9 @@ function streamAnswer(history,useAdapter,el){
 }
 function ask(text){
   chat.busy=true; $("#chat-send").hidden=true; $("#chat-stop").hidden=false;
-  var history=chat.messages.concat([{role:"user",content:text}]); addUser(text);
+  var files=chat.pending; chat.pending=[]; renderAttached();
+  var content = files.length ? [{type:"text",text:text}].concat(files.map(function(a){ return {type:a.kind,data:a.data}; })) : text;
+  var history=chat.messages.concat([{role:"user",content:content}]); addUser(text,files);
   var done;
   if(chat.mode==="both"){
     var els=addPair();
@@ -632,11 +676,15 @@ function ask(text){
 }
 $("#chat-form").addEventListener("submit", function(e){
   e.preventDefault(); var box=$("#chat-input"), text=box.value.trim();
-  if(!text||chat.busy||!chat.job) return; box.value=""; ask(text);
+  if((!text&&!chat.pending.length)||chat.busy||!chat.job) return;
+  if(!text) text="Describe this."; box.value=""; ask(text);
 });
 $("#chat-input").addEventListener("keydown", function(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); $("#chat-form").requestSubmit(); } });
 $("#chat-stop").addEventListener("click", function(){ if(chat.ctrl) chat.ctrl.abort(); });
-$("#chat-clear").addEventListener("click", function(){ if(chat.ctrl) chat.ctrl.abort(); chat.messages=[]; $("#chat-msgs").innerHTML=""; });
+$("#chat-clear").addEventListener("click", function(){ if(chat.ctrl) chat.ctrl.abort(); chat.messages=[]; chat.pending=[]; renderAttached(); $("#chat-msgs").innerHTML=""; });
+$("#chat-attachbtn").addEventListener("click", function(){ $("#chat-file").click(); });
+$("#chat-file").addEventListener("change", function(e){ attachFiles(e.target.files); e.target.value=""; });
+$("#chat-files").addEventListener("click", function(e){ var b=e.target.closest("[data-rm]"); if(b){ chat.pending.splice(parseInt(b.getAttribute("data-rm"),10),1); renderAttached(); } });
 $("#chat-mode").addEventListener("click", function(e){ var b=e.target.closest("button"); if(b&&!b.disabled) setMode(b.getAttribute("data-m")); });
 $("#chat-jobsel").addEventListener("change", function(e){ chat.job=e.target.value; chat.messages=[]; $("#chat-msgs").innerHTML=""; renderChat(); });
 $("#jobs").addEventListener("toggle", function(e){ var d=e.target; if(d.classList&&d.classList.contains("nodebox")) openNodes[d.getAttribute("data-job")]=d.open; }, true);
