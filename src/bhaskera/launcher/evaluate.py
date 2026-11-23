@@ -1,6 +1,6 @@
 """Judge a fine-tuned model with the standard benchmarks (EleutherAI lm-evaluation-harness), next to the base model.
 
-    python -m bhaskera.launcher.evaluate run --run <mlflow run id> --tasks arc_easy,hellaswag --limit 200
+    python -m bhaskera.launcher.evaluate run --run <mlflow run id or registered name> --tasks arc_easy,hellaswag --limit 200
     python -m bhaskera.launcher.evaluate run --model <base model folder> --adapter <adapter folder> --tasks mmlu
     python -m bhaskera.launcher.evaluate prepare --tasks arc_easy,hellaswag      # download the datasets (needs internet)
     python -m bhaskera.launcher.evaluate show results.json                       # print a saved comparison again
@@ -341,8 +341,14 @@ def from_run(store: str | Path, run_id: str) -> tuple[str, Optional[str]]:
     """(base model path, adapter folder) of a training run in an MLflow file store."""
     store = Path(store)
     hits = list(store.glob(f"*/{run_id}/meta.yaml"))
-    if not hits:
-        raise EvalError(f"no run {run_id} in {store}")
+    if not hits:                                    # not a run id: maybe a name in the model registry (name, name:3, name@champion)
+        from .register import RegisterError, resolve_in_store
+        try:
+            hits = list(store.glob(f"*/{resolve_in_store(str(store), run_id)}/meta.yaml"))
+        except RegisterError as e:
+            raise EvalError(f"no run {run_id} in {store}, and {e}")
+        if not hits:
+            raise EvalError(f"no run {run_id} in {store}")
     run = hits[0].parent
     model = ""
     try:

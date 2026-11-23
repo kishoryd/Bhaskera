@@ -12,7 +12,7 @@ Under `logging` in a recipe:
 | `project`, `run_name` | Names in the tracker |
 | `log_gpu_every_n_steps` | How often GPU and host readings join the metrics |
 | `mlflow_metrics` | `essential` (about 20 curves, default), `detailed` or `full` (also per GPU and per node) |
-| `mlflow_log_adapter`, `mlflow_register_model` | Store the trained LoRA adapter (PEFT format) with the run, and optionally register it |
+| `mlflow_log_adapter`, `mlflow_register_model` (or later, `python -m bhaskera.launcher.register add`) | Store the trained LoRA adapter (PEFT format) with the run, and optionally register it |
 | `mlflow_eval_report`, `mlflow_eval_samples`, `mlflow_tracing` | The evaluation table, example predictions, and traces |
 | `mlflow_tracking_uri` | Where MLflow writes (default `~/mlflow-runs`) |
 

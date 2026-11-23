@@ -181,3 +181,32 @@ def test_resume_info_reports_what_the_run_left(kit):
         raise resume.ResumeError("Slurm no longer knows job 55")
     out = make_with_stopped(kit, describe=broken).resume_info(STOPPED)
     assert not out["resumable"] and "no longer knows" in out["why"]
+
+
+def test_register_runs_the_command_here_not_as_a_job(kit):
+    fake = Fake(out="registered my-model version 2 (alias champion)")
+    m = make(kit, fake)
+    out = m.launch({"action": "start", "kind": "register", "run": RUN, "name": "my-model", "alias": "champion"})
+    argv, kw = fake.calls[-1]
+    assert argv[1:] == ["-m", "bhaskera.launcher.register", "add", "--run", RUN, "--name", "my-model", "--alias", "champion"]
+    assert out["ok"] and out["job"] is None and "version 2" in out["output"]
+    m.launch({"action": "start", "kind": "register", "run": RUN, "name": "other"})
+    assert "--alias" not in fake.calls[-1][0]
+
+
+def test_register_check_changes_nothing(kit):
+    fake = Fake()
+    out = make(kit, fake).launch({"action": "check", "kind": "register", "run": RUN, "name": "my-model", "alias": "champion"})
+    assert out["ok"] and out["dry"] and "my-model" in out["output"] and fake.calls == []
+
+
+@pytest.mark.parametrize("form", [
+    {"kind": "register", "run": RUN, "name": "bad name"}, {"kind": "register", "run": RUN, "name": "x; ls"}, {"kind": "register", "run": RUN},
+    {"kind": "register", "run": RUN, "name": "ok", "alias": "1bad"}, {"kind": "register", "run": "b" * 32, "name": "ok"},
+    {"kind": "register", "run": RUN, "name": "ok", "alias": ["a"]},
+])
+def test_register_refuses_bad_fields(kit, form):
+    fake = Fake()
+    with pytest.raises(launch.LaunchError):
+        make(kit, fake).launch({"action": "start", **form})
+    assert fake.calls == []

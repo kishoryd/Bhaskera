@@ -84,6 +84,9 @@ To test a model on your own questions, `python -m bhaskera.launcher.evaluate ini
 `./submit.sh eval ... --tasks <your test> --save-samples` runs it, and `evaluate review` shows what tuning fixed, what it broke and what
 is still wrong, with a file of the examples to correct in your training data.
 
+A trained model can be saved in the MLflow model registry under a name and version (`python -m bhaskera.launcher.register add`, or the
+**Register a model** card), with an alias such as `champion`; chat and benchmark accept `name@alias` wherever a run id goes.
+
 If a job stops half way, `./submit.sh resume --run <run id>` (or the **Resume** button) submits the same recipe, nodes and time again and
 continues from the last checkpoint, skipping the data already used; `--step N` goes back to an earlier checkpoint, for example before a loss
 spike. A checkpoint is saved every 500 steps by default (`checkpoint.save_every_steps`), so a failure loses little.

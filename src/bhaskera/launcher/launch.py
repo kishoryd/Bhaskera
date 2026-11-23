@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -27,7 +28,7 @@ TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
 RECIPE_FILE = re.compile(r"^[A-Za-z0-9_.\-]{1,100}\.ya?ml$")
 SUBMITTED = re.compile(r"submitted job (\d+)")
 PLACEHOLDER = re.compile(r"<project>|<username>|REPLACE_")
-KINDS = ("train", "serve", "eval", "resume")
+KINDS = ("train", "serve", "eval", "resume", "register")
 MAX_NODES, MAX_HOURS, MAX_LIMIT = 1024, 720, 100000
 STARTS_PER_HOUR = 12
 MIN_GAP_S = 2.0
@@ -137,7 +138,7 @@ class Launcher:
             rules = []
         recipes = list_recipes(self.kit, self._env) if self.kit else []
         runs = [{"run_id": r["run_id"], "name": r["name"], "status": r["status"]} for r in self._runs() if r.get("has_adapter")]
-        return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "partitions": rules,
+        return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "models": self._models(), "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
 
     def _recipe_path(self, name) -> Path:
@@ -154,6 +155,36 @@ class Launcher:
         if not info["ready"]:
             raise LaunchError(f"{name} cannot be started: {info['why']}")
         return folder / name
+
+    def _models(self) -> list[dict]:
+        """The models already in the registry (name, number of versions, aliases), to offer when registering another version."""
+        try:
+            from . import register
+            return [{"name": m["name"], "versions": len(m["versions"]), "aliases": sorted({a for v in m["versions"] for a in v["aliases"]})}
+                    for m in register.listing(register.make_client(self._store or register._store_default()))]
+        except Exception:
+            return []
+
+    def _register(self, form: dict, dry: bool) -> dict:
+        """Save the adapter of a trained run in the model registry under a name. Quick, so no Slurm job: the command runs here."""
+        from . import register
+        run = self._run_id(form.get("run"))
+        name, alias = form.get("name"), form.get("alias") or None
+        if not isinstance(name, str) or not register.NAME.match(name):
+            raise LaunchError("a model name is letters, digits, _, - and . (at most 64), starting with a letter or digit")
+        if alias is not None and (not isinstance(alias, str) or not register.ALIAS.match(alias)):
+            raise LaunchError("an alias is letters, digits, _ and - (at most 32), starting with a letter")
+        if dry:
+            return {"ok": True, "job": None, "dry": True, "output": f"Looks fine: run {run[:8]} would be registered as {name}" + (f" with the alias {alias}" if alias else "")}
+        cmd = [sys.executable, "-m", "bhaskera.launcher.register", "add", "--run", run, "--name", name] + (["--alias", alias] if alias else [])
+        if self._store:
+            cmd += ["--store", self._store]
+        try:
+            done = self._run(cmd, cwd=str(self.kit), env={k: v for k, v in self._env.items()}, capture_output=True, text=True, timeout=60,
+                             stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "job": None, "dry": False, "output": "registering took too long; try again"}
+        return {"ok": done.returncode == 0, "job": None, "dry": False, "output": ((done.stdout or "") + (done.stderr or "")).strip()[-2000:]}
 
     def _stopped(self) -> list[dict]:
         """Runs that stopped half way (failed, killed, or no longer writing) and know their Slurm job."""
@@ -229,6 +260,8 @@ class Launcher:
         if reason:
             raise LaunchError(reason)
         dry = form.get("action") == "check"
+        if form.get("kind") == "register":
+            return self._register(form, dry)
         args, extra = self.build(form)
         if not self._lock.acquire(blocking=False):
             raise LaunchError("another start is still running; wait for it to finish")

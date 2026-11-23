@@ -37,8 +37,10 @@ clusters with Ray.
 - Benchmark a tuned model against its base with the lm-evaluation-harness (`./submit.sh eval`); results are stored with the run.
   Your own tests: `evaluate init-task` turns a question/answer JSONL file into a test, `--save-samples` keeps every example's answer,
   and `evaluate review` shows what tuning fixed, broke and left wrong, with a file of examples to correct.
-- MLflow: about 20 curated curves by default, the trained adapter in standard PEFT format, optional model registry entry, evaluation
-  report and traces.
+- MLflow: about 20 curated curves by default, the trained adapter in standard PEFT format, evaluation report and traces.
+- Model registry: `register add` (or the **Register a model** card) saves a trained run's adapter under a name and version with its base
+  model and results as tags, and an alias such as `champion`; `register list` and `resolve` find it again, and `serve` and `eval` accept
+  `name`, `name:3` or `name@alias` wherever a run id goes.
 
 ### Clusters
 - Nothing is tied to one site: partitions, GPUs and CPUs per node, host memory and the network interface come from a cluster profile

@@ -279,6 +279,7 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
     <button type="button" class="choice" data-k="serve"><b>Chat with a trained model</b><span>Ask the tuned model, the base model, or both</span></button>
     <button type="button" class="choice" data-k="eval"><b>Benchmark a trained model</b><span>Compare it with its base on standard tests</span></button>
     <button type="button" class="choice" data-k="resume"><b>Resume a stopped run</b><span>Continue from its last checkpoint after a failure</span></button>
+    <button type="button" class="choice" data-k="register"><b>Register a model</b><span>Save a trained model under a name in the model registry</span></button>
   </div>
   <div id="startnote" class="startnote" hidden></div>
   <div class="sfields" id="startfields"></div>
@@ -644,7 +645,7 @@ $("#runs").addEventListener("click", function(e){
 });
 
 /* ---- start a job ---- */
-var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, regname:"", alias:"champion", nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -681,7 +682,7 @@ function renderStart(){
   L.confirm=false;
   Array.prototype.forEach.call($("#startkind").querySelectorAll(".choice"), function(b){ b.setAttribute("aria-pressed", b.getAttribute("data-k")===k?"true":"false"); });
   var note=$("#startnote"); note.hidden=o.enabled; note.textContent=o.reason||"";
-  $("#startout").hidden=true; $("#startgo").classList.remove("confirm");
+  $("#startout").hidden=true; $("#startgo").classList.remove("confirm"); $("#startgo").textContent=(k==="register"?"Register":"Start");
   if(k==="train"){
     var rs=o.recipes||[], ready=rs.filter(function(r){return r.ready}), blocked=rs.filter(function(r){return !r.ready&&!r.tokenize});
     if(ready.length&&!ready.some(function(r){return r.file===L.recipe})) L.recipe=ready[0].file;
@@ -694,6 +695,14 @@ function renderStart(){
       '<div class="srow"><label class="lbl">How long</label>'+hoursRow(["",1,2,6,12,24],"")+'</div>';
   } else if(k==="resume"){
     h+='<div class="srow"><label class="lbl">Stopped run</label>'+stoppedList()+'</div><div id="f-resume"></div>';
+  } else if(k==="register"){
+    h+='<div class="srow"><label class="lbl">Trained model</label>'+runList()+'</div>';
+    if(!L.regname||L.regnameFor!==L.run){ L.regname=slug(runInfo(L.run).name||"model"); L.regnameFor=L.run; }
+    var known=(o.models||[]);
+    h+='<div class="srow"><label class="lbl" for="f-name">Registry name</label><input id="f-name" type="text" value="'+esc(L.regname)+'" maxlength="64">'+
+       (known.length?'<div class="chips" style="margin-top:8px">'+known.map(function(m){return chip(m.name+" ("+m.versions+(m.versions===1?" version":" versions")+")",L.regname===m.name,'data-name="'+esc(m.name)+'"')}).join("")+'</div><div class="sub">Pick one to add a new version to it.</div>':'<div class="sub">The first version creates the model.</div>')+'</div>'+
+       '<div class="srow"><label class="lbl">Alias</label><div class="chips">'+[["","none"],["champion","champion"],["staging","staging"]].map(function(a){return chip(a[1],L.alias===a[0],'data-alias="'+a[0]+'"')}).join("")+'</div>'+
+       '<div class="sub">An alias points at one version, for example <b>champion</b> for the one you trust; move it to a newer version later. Chat and benchmark accept <code>name@alias</code>.</div></div>';
   } else {
     h+='<div class="srow"><label class="lbl">Trained model</label>'+runList()+'</div>';
     if(k==="eval") h+='<div class="srow"><label class="lbl">Tests</label><div class="chips">'+COMMON_TASKS.map(function(t){return chip(t,!!L.tasks[t],'data-t="'+t+'"')}).join("")+'</div>'+
@@ -708,6 +717,7 @@ function renderStart(){
   $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||none;
   if(k==="resume") loadResume();
 }
+function slug(t){ return String(t).toLowerCase().replace(/[^a-z0-9_.-]+/g,"-").replace(/^[^a-z0-9]+/,"").slice(0,64)||"model"; }
 function stoppedList(){
   var rs=L.opts.stopped||[];
   if(!rs.length) return '<div class="sub">No run has stopped half way.</div>';
@@ -743,6 +753,9 @@ function fillInfo(){
 }
 function showSum(){
   var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, bits=[], warn=false;
+  if(L.kind==="register"){
+    var rr=runInfo(L.run); el.className="ssum"; el.textContent=rr.name?"Registers the adapter of "+rr.name+" as a new version"+(L.alias?", and points "+L.alias+" at it":""):""; return;
+  }
   if(L.kind==="resume"){
     var ri=L.rinfo; if(!ri||!ri.resumable){ el.className="ssum"; el.textContent=""; return; }
     var rn=parseInt(val("f-nodes"),10)||ri.nodes, rp=planFor(rn);
@@ -766,7 +779,8 @@ function tasksValue(){
 }
 function formData(action){
   var f={action:action,kind:L.kind};
-  if(L.kind==="resume"){ f.run=L.run; f.step=L.step||""; f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
+  if(L.kind==="register"){ f.run=val("f-run"); f.name=val("f-name"); f.alias=L.alias; }
+  else if(L.kind==="resume"){ f.run=L.run; f.step=L.step||""; f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
   else if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
   else { f.run=val("f-run"); f.hours=val("f-hours")||L.hours||String(L.opts.default_hours||2); f.four_bit=$("#f-4bit").checked;
     if(L.kind==="eval"){ f.tasks=tasksValue(); f.limit=L.quick?"200":""; f.samples=$("#f-samples").checked; } }
@@ -784,11 +798,14 @@ function send(action){
     setTimeout(function(){ if(L.confirm){ L.confirm=false; $("#startgo").textContent="Start"; $("#startgo").classList.remove("confirm"); } },6000);
     return;
   }
-  L.confirm=false; $("#startgo").textContent="Start"; $("#startgo").classList.remove("confirm");
+  L.confirm=false; $("#startgo").textContent=(L.kind==="register"?"Register":"Start"); $("#startgo").classList.remove("confirm");
   L.busy=true; $("#startcheck").disabled=$("#startgo").disabled=true; showResult("", action==="check"?"Checking …":"Submitting …", "");
   api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
     if(r.j.error){ showResult("bad","Not started",r.j.error); return; }
     if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
+    if(r.j.ok&&L.kind==="register"){
+      toast(r.j.output.split("\n")[0]+". It is under Models in the header."); $("#startbox").close(); return;
+    }
     if(r.j.ok){
       var what=L.kind==="train"?"Training":L.kind==="serve"?"Chat server":L.kind==="resume"?"Resumed run":"Benchmark";
       toast(what+" submitted as job #"+r.j.job+(L.kind==="serve"?". The chat opens on this page when the model is loaded.":"."));
@@ -811,6 +828,8 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-h")){ L.hours=b.getAttribute("data-h"); renderStart(); }
   else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
   else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
+  else if(b.hasAttribute("data-name")){ L.regname=b.getAttribute("data-name"); L.regnameFor=L.run; renderStart(); }
+  else if(b.hasAttribute("data-alias")){ L.alias=b.getAttribute("data-alias"); renderStart(); }
   else if(b.hasAttribute("data-step")){ L.step=parseInt(b.getAttribute("data-step"),10); showResume(); }
   else if(b.hasAttribute("data-run")){ L.run=b.getAttribute("data-run"); renderStart(); }
 });
@@ -819,6 +838,7 @@ $("#startfields").addEventListener("input", function(e){
   else if(e.target.id==="f-hours"){ L.hours=e.target.value.trim(); showSum(); }
   if(L.kind==="resume") showSum();
   else if(e.target.id==="f-recipe"){ L.recipe=e.target.value; fillInfo(); }
+  else if(e.target.id==="f-name"){ L.regname=e.target.value.trim(); L.regnameFor=L.run; }
 });
 $("#startcheck").addEventListener("click", function(){ send("check"); });
 $("#startgo").addEventListener("click", function(){ send("start"); });
