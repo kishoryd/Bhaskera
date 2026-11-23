@@ -28,11 +28,16 @@ TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
 RECIPE_FILE = re.compile(r"^[A-Za-z0-9_.\-]{1,100}\.ya?ml$")
 SUBMITTED = re.compile(r"submitted job (\d+)")
 PLACEHOLDER = re.compile(r"<project>|<username>|REPLACE_")
-KINDS = ("train", "serve", "eval", "resume", "register", "cancel")
+KINDS = ("train", "serve", "eval", "resume", "register", "cancel", "recipe", "tokenize")
 MAX_NODES, MAX_HOURS, MAX_LIMIT = 1024, 720, 100000
 STARTS_PER_HOUR = 12
 MIN_GAP_S = 2.0
 TIMEOUT_S = 180
+
+
+def _methods() -> dict:
+    from .recipes import METHODS
+    return METHODS
 
 
 class LaunchError(ValueError):
@@ -139,7 +144,9 @@ class Launcher:
             rules = []
         recipes = list_recipes(self.kit, self._env) if self.kit else []
         runs = [{"run_id": r["run_id"], "name": r["name"], "status": r["status"]} for r in self._runs() if r.get("has_adapter")]
-        return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "models": self._models(), "partitions": rules,
+        return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "models": self._models(),
+                "caches": self._caches(), "model_folders": self._model_folders(), "methods": {k: {"label": v["label"], "about": v["about"]} for k, v in _methods().items()},
+                "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
 
     def _recipe_path(self, name) -> Path:
@@ -186,6 +193,70 @@ class Launcher:
         except subprocess.TimeoutExpired:
             return {"ok": False, "job": None, "dry": False, "output": "registering took too long; try again"}
         return {"ok": done.returncode == 0, "job": None, "dry": False, "output": ((done.stdout or "") + (done.stderr or "")).strip()[-2000:]}
+
+    def _recipe_files(self) -> list[Path]:
+        if not self.kit:
+            return []
+        return [f for d in recipe_dirs(self.kit, self._env) for f in sorted(list(d.glob("*.yaml")) + list(d.glob("*.yml")))]
+
+    def _caches(self) -> list[dict]:
+        """Tokenised data already made, found in the cache folders the recipes use and next to submit.sh."""
+        try:
+            from . import recipes
+            extra = [p for p in (self._env.get("BHASKERA_CACHE") or "").split(":") if p]
+            return recipes.find_caches(recipes.cache_folders(self.kit, self._recipe_files(), extra))
+        except Exception:
+            return []
+
+    def _model_folders(self) -> list[str]:
+        try:
+            from . import recipes
+            return recipes.suggested_models(self._recipe_files())
+        except Exception:
+            return []
+
+    def _recipe(self, form: dict, dry: bool) -> dict:
+        """Write recipes/<name>.yaml from a few choices (dry: only show it). It is loaded with the training job's own loader first."""
+        from . import recipes
+        try:
+            recipe = recipes.build(form, self.kit)
+            text = recipes.render(recipe)
+            recipes.validate(text)
+            name = form["name"]
+            if dry:
+                return {"ok": True, "job": None, "dry": True, "output": text, "recipe": f"{name}.yaml"}
+            path = recipes.write(recipe_dirs(self.kit, self._env)[0] if recipe_dirs(self.kit, self._env) else self.kit / "recipes", name, text)
+        except recipes.RecipeError as e:
+            raise LaunchError(str(e))
+        return {"ok": True, "job": None, "dry": False, "output": f"Wrote {path.name} in {path.parent}", "recipe": path.name}
+
+    def _tokenize(self, form: dict, dry: bool) -> dict:
+        """Write a tokenising recipe for raw data and submit it as a CPU job (`./submit.sh tokenize`)."""
+        from . import recipes
+        try:
+            filename, text = recipes.tokenize_recipe(form, self.kit)
+            if dry:
+                return {"ok": True, "job": None, "dry": True, "output": text}
+            folder = recipe_dirs(self.kit, self._env)[0] if recipe_dirs(self.kit, self._env) else self.kit / "recipes"
+            path = recipes.write(folder, filename[:-5], text)
+        except recipes.RecipeError as e:
+            raise LaunchError(str(e))
+        now = self._clock()
+        if not self._lock.acquire(blocking=False):
+            raise LaunchError("another start is still running; wait for it to finish")
+        try:
+            self._guard(now)
+            self._last = now
+            env = {k: v for k, v in self._env.items() if k not in ("SKIP_QOS_CHECK", "SKIP_PREFLIGHT", "DRY_RUN")}
+            done = self._run(["bash", str(self.kit / "submit.sh"), "tokenize", str(path)], cwd=str(self.kit), env=env, capture_output=True,
+                             text=True, timeout=TIMEOUT_S, stdin=subprocess.DEVNULL)
+            out = ((done.stdout or "") + (done.stderr or "")).strip()
+            found = SUBMITTED.search(out)
+            if done.returncode == 0 and found:
+                self._starts.append(now)
+            return {"ok": done.returncode == 0 and bool(found), "job": found.group(1) if found else None, "dry": False, "output": out[-3000:]}
+        finally:
+            self._lock.release()
 
     def _cancel(self, form: dict, dry: bool) -> dict:
         """Cancel one of the user's own Bhaskera jobs (training, chat server, benchmark): `scancel <job>`. Never another job."""
@@ -283,6 +354,10 @@ class Launcher:
             return self._register(form, dry)
         if form.get("kind") == "cancel":
             return self._cancel(form, dry)
+        if form.get("kind") == "recipe":
+            return self._recipe(form, dry)
+        if form.get("kind") == "tokenize":
+            return self._tokenize(form, dry)
         args, extra = self.build(form)
         if not self._lock.acquire(blocking=False):
             raise LaunchError("another start is still running; wait for it to finish")

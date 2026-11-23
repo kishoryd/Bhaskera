@@ -287,6 +287,7 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
 <dialog id="startbox">
   <div class="dlg-head"><b>Start a job</b><span class="spacer" style="flex:1"></span><button class="btn" id="startclose" type="button">Close</button></div>
   <div class="choices" id="startkind" role="group" aria-label="What to start">
+    <button type="button" class="choice" data-k="recipe"><b>Create a recipe</b><span>Describe a training run in a few choices; no YAML to write</span></button>
     <button type="button" class="choice" data-k="train"><b>Train a model</b><span>Fine-tune with one of your recipes</span></button>
     <button type="button" class="choice" data-k="serve"><b>Chat with a trained model</b><span>Ask the tuned model, the base model, or both</span></button>
     <button type="button" class="choice" data-k="eval"><b>Benchmark a trained model</b><span>Compare it with its base on standard tests</span></button>
@@ -716,7 +717,8 @@ $("#jobs").addEventListener("click", function(e){ var b=e.target.closest("[data-
 $("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(chat.job,"Close server",$("#chat-close")); });
 
 /* ---- start a job ---- */
-var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, regname:"", alias:"champion", nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, regname:"", alias:"champion",
+  rc:{name:"my-run",model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",raw:{train:"",val:"",format:"chatml",seq:"4096"}}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -753,8 +755,10 @@ function renderStart(){
   L.confirm=false;
   Array.prototype.forEach.call($("#startkind").querySelectorAll(".choice"), function(b){ b.setAttribute("aria-pressed", b.getAttribute("data-k")===k?"true":"false"); });
   var note=$("#startnote"); note.hidden=o.enabled; note.textContent=o.reason||"";
-  $("#startout").hidden=true; $("#startgo").classList.remove("confirm"); $("#startgo").textContent=(k==="register"?"Register":"Start");
-  if(k==="train"){
+  $("#startout").hidden=true; $("#startgo").classList.remove("confirm"); $("#startgo").textContent=goLabel(k);
+  if(k==="recipe"){
+    h+=recipeForm(o);
+  } else if(k==="train"){
     var rs=o.recipes||[], ready=rs.filter(function(r){return r.ready}), blocked=rs.filter(function(r){return !r.ready&&!r.tokenize});
     if(ready.length&&!ready.some(function(r){return r.file===L.recipe})) L.recipe=ready[0].file;
     h+='<div class="srow"><label class="lbl" for="f-recipe">Recipe</label>'+(ready.length ?
@@ -784,10 +788,49 @@ function renderStart(){
        '<div class="srow"><details'+(k==="eval"?' open':'')+'><summary>More options</summary>'+(k==="eval"?'<label><input id="f-samples" type="checkbox" checked> Keep every answer, to review the mistakes afterwards</label>':'')+'<label><input id="f-4bit" type="checkbox"> Load the model in 4-bit (as QLoRA trained it)</label></details></div>';
   }
   $("#startfields").innerHTML=h; fillInfo(); showSum();
-  var none = k==="train" ? !(o.recipes||[]).some(function(r){return r.ready}) : k==="resume" ? !(o.stopped||[]).length : !(o.runs||[]).length;
+  var none = k==="recipe" ? false : k==="train" ? !(o.recipes||[]).some(function(r){return r.ready}) : k==="resume" ? !(o.stopped||[]).length : !(o.runs||[]).length;
   $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||none;
   if(k==="resume") loadResume();
 }
+function cacheLabel(c){ return c.name+" · "+(c.model||"?")+" · sequence "+(c.seq_len||"?")+" · "+(c.rows!=null?Number(c.rows).toLocaleString()+" rows":""); }
+function cacheOptions(list,sel,none){
+  return (none?'<option value="">none (no evaluation during training)</option>':'')+list.map(function(c){ return '<option value="'+esc(c.path)+'"'+(c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join("");
+}
+function recipeForm(o){
+  var r=L.rc, caches=o.caches||[], tr=caches.filter(function(c){return c.side!=="val"}), va=caches.filter(function(c){return c.side!=="train"});
+  if(!r.train||!caches.some(function(c){return c.path===r.train})) r.train=(tr[0]||{}).path||"";
+  if(r.val!==""&&!caches.some(function(c){return c.path===r.val})) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
+  if(r.val===""&&L.rcValTouched!==true) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
+  var methods=Object.keys(o.methods||{});
+  var h='<div class="srow"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">It is saved as <code>recipes/'+esc(r.name||"name")+'.yaml</code> and also names the run in MLflow.</div></div>'+
+    '<div class="srow"><label class="lbl" for="f-rmodel">Model folder</label><input id="f-rmodel" type="text" list="f-rmodels" value="'+esc(r.model)+'" placeholder="/scratch/<project>/<username>/models/Qwen3-14B">'+
+    '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">A downloaded Hugging Face model folder (compute nodes have no internet).</div></div>'+
+    '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label,r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div></div>';
+  if(caches.length){
+    h+='<div class="srow"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select></div>'+
+       '<div class="srow"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select></div>';
+  } else {
+    h+='<div class="srow"><div class="sub">No tokenised data was found yet. Open <b>My data is not tokenised yet</b> below to prepare your files; they appear here when that job has finished.</div></div>';
+  }
+  h+='<div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
+     '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div></div>'+
+     '<div class="srow"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div></div>'+
+     '<div class="srow"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Larger learns more and uses a little more memory.</div></div>'+
+     '<div class="srow"><details><summary>More options</summary><div class="chips" style="margin-top:8px">'+
+       '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
+       '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
+       '<label class="muted">Save every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto"> steps</label>'+
+       '<label class="muted">Evaluate every <input id="f-revals" type="number" min="0" value="'+esc(r.evals)+'" placeholder="auto"> steps</label></div></details></div>'+
+     '<div class="srow"><details><summary>My data is not tokenised yet</summary><div style="margin-top:8px">'+
+       '<div class="sub">Give the JSONL files (one conversation per line). A CPU job tokenises them once; then they show up as training data above.</div>'+
+       '<input id="f-rawtrain" type="text" value="'+esc(r.raw.train)+'" placeholder="training file: /scratch/<project>/<username>/data/train.jsonl" style="margin-top:8px">'+
+       '<input id="f-rawval" type="text" value="'+esc(r.raw.val)+'" placeholder="validation file (optional)" style="margin-top:6px">'+
+       '<div class="chips" style="margin-top:8px">'+["chatml","alpaca","sharegpt"].map(function(f){return chip(f,r.raw.format===f,'data-fmt="'+f+'"')}).join("")+
+       '<label class="muted">Sequence length <input id="f-rawseq" type="number" min="128" value="'+esc(r.raw.seq)+'"></label>'+
+       '<button class="btn small" id="f-rawgo" type="button">Prepare data</button></div></div></details></div>';
+  return h;
+}
+function goLabel(k){ return k==="register"?"Register":k==="recipe"?"Create recipe":"Start"; }
 function slug(t){ return String(t).toLowerCase().replace(/[^a-z0-9_.-]+/g,"-").replace(/^[^a-z0-9]+/,"").slice(0,64)||"model"; }
 function stoppedList(){
   var rs=L.opts.stopped||[];
@@ -824,6 +867,9 @@ function fillInfo(){
 }
 function showSum(){
   var el=$("#startsum"); if(!el) return; var o=L.opts, g=o.gpus_per_node, bits=[], warn=false;
+  if(L.kind==="recipe"){
+    var rc=L.rc; el.className="ssum"; el.textContent=(o.methods&&o.methods[rc.method]?o.methods[rc.method].label:"")+" · "+rc.steps+" steps · learning rate "+rc.lr+" · LoRA rank "+rc.rank+" · the adapter is saved, with a checkpoint every few hundred steps"; return;
+  }
   if(L.kind==="register"){
     var rr=runInfo(L.run); el.className="ssum"; el.textContent=rr.name?"Registers the adapter of "+rr.name+" as a new version"+(L.alias?", and points "+L.alias+" at it":""):""; return;
   }
@@ -850,7 +896,11 @@ function tasksValue(){
 }
 function formData(action){
   var f={action:action,kind:L.kind};
-  if(L.kind==="register"){ f.run=val("f-run"); f.name=val("f-name"); f.alias=L.alias; }
+  if(L.kind==="recipe"){
+    var r=L.rc; f.name=r.name; f.method=r.method; f.model=r.model; f.train_cache=r.train; f.val_cache=r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
+    if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; if(r.evals!=="") f.eval_steps=r.evals;
+  }
+  else if(L.kind==="register"){ f.run=val("f-run"); f.name=val("f-name"); f.alias=L.alias; }
   else if(L.kind==="resume"){ f.run=L.run; f.step=L.step||""; f.nodes=val("f-nodes"); f.hours=val("f-hours"); }
   else if(L.kind==="train"){ f.recipe=val("f-recipe"); f.nodes=val("f-nodes"); f.hours=val("f-hours")||L.hours; }
   else { f.run=val("f-run"); f.hours=val("f-hours")||L.hours||String(L.opts.default_hours||2); f.four_bit=$("#f-4bit").checked;
@@ -869,10 +919,15 @@ function send(action){
     setTimeout(function(){ if(L.confirm){ L.confirm=false; $("#startgo").textContent="Start"; $("#startgo").classList.remove("confirm"); } },6000);
     return;
   }
-  L.confirm=false; $("#startgo").textContent=(L.kind==="register"?"Register":"Start"); $("#startgo").classList.remove("confirm");
+  L.confirm=false; $("#startgo").textContent=goLabel(L.kind); $("#startgo").classList.remove("confirm");
   L.busy=true; $("#startcheck").disabled=$("#startgo").disabled=true; showResult("", action==="check"?"Checking …":"Submitting …", "");
   api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(r){
     if(r.j.error){ showResult("bad","Not started",r.j.error); return; }
+    if(r.j.dry&&L.kind==="recipe"){ showResult("ok","This is the recipe that would be written. Nothing was saved yet.",r.j.output); return; }
+    if(r.j.ok&&L.kind==="recipe"){
+      L.recipe=r.j.recipe; toast("Created "+r.j.recipe+". It is selected under Train a model: choose the nodes and press Start.");
+      L.kind="train"; L.step=0; api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(o){ L.opts=o.j; renderStart(); }); return;
+    }
     if(r.j.dry){ showResult(r.j.ok?"ok":"bad", r.j.ok?"Everything checks out. Nothing was submitted.":"A check failed. Nothing was submitted.", r.j.output); return; }
     if(r.j.ok&&L.kind==="register"){
       toast(r.j.output.split("\n")[0]+". It is under Models in the header."); $("#startbox").close(); return;
@@ -884,6 +939,15 @@ function send(action){
       setTimeout(function(){ var c=document.querySelector('[data-job-card="'+r.j.job+'"]'); if(c){ c.scrollIntoView({block:"center",behavior:"smooth"}); c.classList.add("flash"); } },1500);
     } else showResult("bad","Not submitted",r.j.output);
   }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); }).then(function(){ L.busy=false; if(L.opts) $("#startcheck").disabled=$("#startgo").disabled=!L.opts.enabled; });
+}
+function prepareData(){
+  var r=L.rc, f={action:"start",kind:"tokenize",name:r.name,model:r.model,train_path:r.raw.train,val_path:r.raw.val,format:r.raw.format,seq_len:r.raw.seq};
+  showResult("","Submitting the tokenising job …","");
+  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(f)}).then(function(x){
+    if(x.j.error){ showResult("bad","Not started",x.j.error); return; }
+    if(x.j.ok){ showResult("ok","Tokenising job #"+x.j.job+" submitted. It takes a few minutes; when it has finished, reopen this form and the data is listed above.",x.j.output); refresh(); }
+    else showResult("bad","Not submitted",x.j.output);
+  }).catch(function(){ showResult("bad","Not started","The page could not reach the hub."); });
 }
 function openStart(kind,run){
   api("/api/launch",{headers:{"X-Requested-With":"bhaskera"}}).then(function(r){ L.opts=r.j; }).catch(function(){ L.opts={enabled:false,reason:"The page could not reach the hub.",recipes:[],runs:[],partitions:[]}; }).then(function(){
@@ -899,6 +963,12 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-h")){ L.hours=b.getAttribute("data-h"); renderStart(); }
   else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
   else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
+  else if(b.hasAttribute("data-method")){ L.rc.method=b.getAttribute("data-method"); renderStart(); }
+  else if(b.hasAttribute("data-steps")){ L.rc.steps=b.getAttribute("data-steps"); renderStart(); }
+  else if(b.hasAttribute("data-lr")){ L.rc.lr=b.getAttribute("data-lr"); renderStart(); }
+  else if(b.hasAttribute("data-rank")){ L.rc.rank=b.getAttribute("data-rank"); renderStart(); }
+  else if(b.hasAttribute("data-fmt")){ L.rc.raw.format=b.getAttribute("data-fmt"); renderStart(); }
+  else if(b.id==="f-rawgo"){ prepareData(); }
   else if(b.hasAttribute("data-name")){ L.regname=b.getAttribute("data-name"); L.regnameFor=L.run; renderStart(); }
   else if(b.hasAttribute("data-alias")){ L.alias=b.getAttribute("data-alias"); renderStart(); }
   else if(b.hasAttribute("data-step")){ L.step=parseInt(b.getAttribute("data-step"),10); showResume(); }
@@ -910,6 +980,18 @@ $("#startfields").addEventListener("input", function(e){
   if(L.kind==="resume") showSum();
   else if(e.target.id==="f-recipe"){ L.recipe=e.target.value; fillInfo(); }
   else if(e.target.id==="f-name"){ L.regname=e.target.value.trim(); L.regnameFor=L.run; }
+  else if(e.target.id==="f-rname"){ L.rc.name=e.target.value.trim(); }
+  else if(e.target.id==="f-rmodel"){ L.rc.model=e.target.value.trim(); }
+  else if(e.target.id==="f-rtrain"){ L.rc.train=e.target.value; }
+  else if(e.target.id==="f-rval"){ L.rc.val=e.target.value; L.rcValTouched=true; }
+  else if(e.target.id==="f-rsteps"){ if(e.target.value.trim()) L.rc.steps=e.target.value.trim(); }
+  else if(e.target.id==="f-rbatch"){ L.rc.batch=e.target.value.trim(); }
+  else if(e.target.id==="f-raccum"){ L.rc.accum=e.target.value.trim(); }
+  else if(e.target.id==="f-revery"){ L.rc.every=e.target.value.trim(); }
+  else if(e.target.id==="f-revals"){ L.rc.evals=e.target.value.trim(); }
+  else if(e.target.id==="f-rawtrain"){ L.rc.raw.train=e.target.value.trim(); }
+  else if(e.target.id==="f-rawval"){ L.rc.raw.val=e.target.value.trim(); }
+  else if(e.target.id==="f-rawseq"){ L.rc.raw.seq=e.target.value.trim(); }
 });
 $("#startcheck").addEventListener("click", function(){ send("check"); });
 $("#startgo").addEventListener("click", function(){ send("start"); });
