@@ -65,7 +65,7 @@ def test_a_relative_checkpoint_folder_is_found_from_the_job_folder(tmp_path):
 
 
 @pytest.mark.parametrize("kwargs,state,word", [
-    ({"steps": (), "incomplete": ()}, "FAILED", "no checkpoint"),
+    ({"steps": (), "incomplete": ()}, "FAILED", "no checkpoint was saved before"),
     ({"recipe": False}, "FAILED", "not there any more"),
     ({"job": ""}, "FAILED", "does not record"),
     ({}, "RUNNING", "still running"),
@@ -119,3 +119,10 @@ def test_a_relative_checkpoint_folder_must_be_found_from_the_same_place(tmp_path
     (work / "recipes" / "my-run.yaml").write_text(f"checkpoint:\n  save_dir: {work / 'ckpt'}\n")
     info = resume.describe(store, RUN, _sacct(work))
     assert resume.plan(info, submit_dir=str(elsewhere))["nodes"] == 4  # an absolute folder is found from anywhere
+
+
+def test_checkpointing_switched_off_is_named_as_the_reason(tmp_path):
+    store, work = _store(tmp_path, steps=(), incomplete=())
+    (work / "recipes" / "my-run.yaml").write_text("checkpoint:\n  enabled: false\n")
+    info = resume.describe(store, RUN, _sacct(work))
+    assert not info["resumable"] and "checkpoint.enabled: false" in info["why"]

@@ -125,11 +125,24 @@ def describe(store: str | Path, run_id: str, runner: Optional[Callable] = None) 
     info["steps"] = checkpoint_steps(save_dir)
     info["latest"] = info["steps"][-1] if info["steps"] else 0
     if not info["steps"]:
-        info["why"] = ("no checkpoint was saved, so there is nothing to continue from; set checkpoint.save_every_steps in the "
-                       "recipe so that a failed job loses little, and submit it again")
+        if _checkpoints_off(info["recipe_path"]):
+            info["why"] = ("the recipe has checkpoint.enabled: false, so no checkpoint was saved and there is nothing to continue "
+                           "from; turn it on (and keep checkpoint.save_every_steps) so that a failed job loses little, then submit it again")
+        else:
+            info["why"] = ("no checkpoint was saved before the job stopped, so there is nothing to continue from; lower "
+                           "checkpoint.save_every_steps in the recipe so that a failed job loses little, and submit it again")
         return info
     info["resumable"] = True
     return info
+
+
+def _checkpoints_off(recipe_path: str) -> bool:
+    try:
+        import yaml
+        raw = yaml.safe_load(Path(recipe_path).read_text()) or {}
+        return (raw.get("checkpoint") or {}).get("enabled") is False
+    except Exception:
+        return False
 
 
 def _relative_save_dir(recipe_path: str) -> str:
