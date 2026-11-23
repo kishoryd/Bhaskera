@@ -1,0 +1,118 @@
+#!/bin/bash
+# Submit a Bhaskera job on PARAM Rudra with the right partition and time limit.
+#
+#   ./submit.sh <recipe.yaml> <nodes> [hours]      training (runs bhaskera-preflight first)
+#   ./submit.sh tokenize <tokenize.yaml>           tokenise data (gpu-debug, 1 node)
+#
+# Needs:  export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera
+#         export SLURM_ACCOUNT=<your_account>      (your project account, used as sbatch -A)
+# Optional: export BHASKERA_EXCLUDE=cbgpuXXXX,...  keep jobs off faulty nodes (passed as sbatch --exclude)
+set -euo pipefail
+cd "$(dirname "$0")"
+: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera}"
+: "${SLURM_ACCOUNT:?export SLURM_ACCOUNT=<your_account>  (your project account on this cluster)}"
+[[ -f "$BHASKERA_DIR/bhaskera-activate.sh" ]] || { echo "$BHASKERA_DIR/bhaskera-activate.sh is missing: run setup.sh there first (it writes this file for the installation)"; exit 1; }
+mkdir -p logs
+EXCL=()
+# Keep jobs off nodes that earlier jobs of yours found faulty (see: python -m bhaskera.launcher.bad_nodes), and
+# off the ones in BHASKERA_EXCLUDE.
+SKIP="$(python -m bhaskera.launcher.bad_nodes exclude --extra "${BHASKERA_EXCLUDE:-}" 2>/dev/null || echo "${BHASKERA_EXCLUDE:-}")"
+if [[ -n "$SKIP" ]]; then
+    EXCL=(--exclude="$SKIP")
+    [[ "$SKIP" != "${BHASKERA_EXCLUDE:-}" ]] && echo "skipping nodes that failed before: ${SKIP}"
+fi
+
+# DRY_RUN=1 runs every check (partition limits, preflight) and stops before sbatch; the home page's "Check first" uses it.
+sb() {
+    if [[ "${DRY_RUN:-0}" == 1 ]]; then echo "dry run: every check passed; nothing was submitted" >&2; echo "dry"; else sbatch --parsable "$@"; fi
+}
+
+if [[ "${1:-}" == "tokenize" ]]; then
+    cfg="${2:?usage: ./submit.sh tokenize <tokenize.yaml>}"
+    sbatch -A "$SLURM_ACCOUNT" "${EXCL[@]}" tokenize.sbatch "$cfg"
+    exit
+fi
+
+if [[ "${1:-}" == "eval" || "${1:-}" == "serve" ]]; then
+    what="$1"; shift
+    [[ $# -gt 0 ]] || { echo "usage: ./submit.sh $what --run <mlflow run id> ..."; exit 1; }
+    source "$BHASKERA_DIR/bhaskera-activate.sh"
+    # One node of the partition a one-node job goes to (cluster profile). EVAL_HOURS / SERVE_HOURS set the time limit (default 2 h).
+    read -r part max gpn cpn net mem <<< "$(python -m bhaskera.launcher.cluster_profile plan 1)"
+    if [[ "$what" == "eval" ]]; then hours="${EVAL_HOURS:-2}"; else hours="${SERVE_HOURS:-2}"; fi
+    [[ "$max" != "-" ]] && (( hours > ${max%.*} )) && hours=${max%.*}
+    EXTRA=()
+    [[ "$part" != "-" ]] && EXTRA+=(--partition="$part")
+    [[ "$gpn" != "-" ]]  && EXTRA+=(--gres="gpu:$gpn")
+    [[ "$cpn" != "-" ]]  && EXTRA+=(--cpus-per-task="$cpn")
+    [[ "$mem" != "-" ]]  && EXTRA+=(--mem="$mem")
+    python -m bhaskera.launcher.qos check 1 "$hours" || { echo "not submitted: see the note above"; exit 1; }
+    jid=$(sb -A "$SLURM_ACCOUNT" "${EXCL[@]}" "${EXTRA[@]}" --comment="bhaskera-$what" --time="${hours}:00:00" "$what.sbatch" "$@")
+    [[ "$jid" == dry ]] && exit 0
+    if [[ "$what" == "eval" ]]; then
+        echo "submitted job $jid: evaluation, ${part:+$part, }${hours} h"
+        echo "follow it:  tail -f logs/bhaskera-eval_${jid}.out"
+    else
+        echo "submitted job $jid: chat server, ${part:+$part, }${hours} h"
+        echo "Loading the model takes a few minutes. Then open the Bhaskera home page (bhaskera-dashboard ray): the chat window appears."
+        echo "follow it:  tail -f logs/bhaskera-serve_${jid}.out"
+    fi
+    exit
+fi
+
+cfg="${1:?usage: ./submit.sh <recipe.yaml> <nodes> [hours]}"
+nodes="${2:?usage: ./submit.sh <recipe.yaml> <nodes> [hours]}"
+hours="${3:-}"
+
+source "$BHASKERA_DIR/bhaskera-activate.sh"
+
+# Where a job of this size goes, and what each node offers, come from the cluster profile
+# (slurm/clusters/*.yaml, found through $BHASKERA_CLUSTER_PROFILE or ~/.bhaskera/cluster.yaml).
+# Without a profile: $BHASKERA_PARTITION (else the cluster's default partition), and the hours you give.
+plan="$(python -m bhaskera.launcher.cluster_profile plan "$nodes")" || exit 1
+read -r part max gpn cpn net mem <<< "$plan"
+[[ "$part" == "-" ]] && part=""
+if [[ "$max" == "-" ]]; then
+    : "${hours:?give the hours: ./submit.sh <recipe.yaml> <nodes> <hours> (no partition limit is known for this cluster)}"
+else
+    hours="${hours:-$max}"
+    if (( hours > ${max%.*} )); then
+        echo "note: ${part:-the partition} allows at most ${max} h; using ${max} h (checkpoints let the next job resume)"
+        hours=${max%.*}
+    fi
+fi
+gpus_total=""
+[[ "$gpn" != "-" ]] && gpus_total=$(( gpn * nodes ))
+
+# Pipeline recipes need GPUs divisible by the number of stages.
+stages=$(awk '/^[[:space:]]*stages:/ {print $2; exit}' "$cfg")
+if [[ -n "$gpus_total" ]] && grep -qE '^[[:space:]]*strategy:[[:space:]]*"?pipeline' "$cfg" && [[ -n "$stages" ]] && (( gpus_total % stages )); then
+    echo "pipeline with $stages stages needs a GPU count divisible by $stages; $nodes nodes = $gpus_total GPUs"
+    exit 1
+fi
+
+# The partition's QoS limits the hours of a job and how many jobs one user may have submitted and running.
+echo "== partition limits =="
+if ! python -m bhaskera.launcher.qos check "$nodes" "$hours"; then
+    echo "not submitted: see the note above (SKIP_QOS_CHECK=1 submits anyway)"
+    [[ "${SKIP_QOS_CHECK:-0}" == 1 ]] || exit 1
+fi
+
+echo "== preflight (login node, a few seconds) =="
+if ! python -m bhaskera.launcher.preflight --config "$cfg" --num-gpus "${gpus_total:-0}"; then
+    echo "preflight reported FAIL: fix the items above, or rerun with SKIP_PREFLIGHT=1 to submit anyway"
+    [[ "${SKIP_PREFLIGHT:-0}" == 1 ]] || exit 1
+fi
+
+name=$(basename "$cfg" .yaml)
+# What the profile knows overrides the defaults written in train.sbatch.
+EXTRA=()
+[[ -n "$part" ]]      && EXTRA+=(--partition="$part")
+[[ "$gpn" != "-" ]]   && EXTRA+=(--gres="gpu:$gpn")
+[[ "$cpn" != "-" ]]   && EXTRA+=(--cpus-per-task="$cpn")
+[[ "$mem" != "-" ]]   && EXTRA+=(--mem="$mem")
+jid=$(sb -A "$SLURM_ACCOUNT" "${EXCL[@]}" "${EXTRA[@]}" --comment=bhaskera --job-name="$name" --nodes="$nodes" \
+      --time="${hours}:00:00" train.sbatch "$cfg")
+[[ "$jid" == dry ]] && exit 0
+echo "submitted job $jid: $name on $nodes nodes${gpus_total:+ ($gpus_total GPUs)}${part:+, $part}, ${hours} h"
+echo "follow it:  tail -f logs/${name}_${jid}.out | grep --line-buffered -E '\[step|eval|exit code'"

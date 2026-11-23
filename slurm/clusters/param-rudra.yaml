@@ -1,0 +1,11 @@
+# Bhaskera cluster profile: PARAM Rudra (C-DAC), 2 x A100 80 GB per node, InfiniBand.
+name: PARAM Rudra
+gpus_per_node: 2
+cpus_per_node: 48
+mem_per_node: 170G        # the GPU partitions give only 20 GB per node by default
+net_interface: ib0
+partitions:               # a job of up to max_nodes nodes goes to the first partition that fits
+  - {max_nodes: 4,   name: gpu-debug,   max_hours: 1}
+  - {max_nodes: 25,  name: gpu-small,   max_hours: 24}
+  - {max_nodes: 100, name: gpu-large,   max_hours: 12}
+  - {max_nodes: 200, name: gpu-massive, max_hours: 6}

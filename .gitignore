@@ -1,0 +1,38 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Checkpoints / model outputs
+checkpoints/
+
+# Env
+.venv/
+env/
+
+# Misc
+*.log
+*.err
+*.out
+
+# Datasets and model weights (131G + 1.4T — never commit)
+/data1/
+/models/
+
+# Ray scratch / spill
+.ray_tmp/
+.ray_spill/
+tmp*/
+
+# Profiler output (Nsight Systems / Nsight Compute reports, ~30-80 MB per node)
+/nsys_reports/
+/ncu_reports/
+.bad_nodes
+
+# Written by setup.sh for each checkout (the path of this installation); never commit it
+bhaskera-activate.sh

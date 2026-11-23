@@ -1,0 +1,233 @@
+"""
+bhaskera.models.lora
+====================
+LoRA application with MoE awareness.
+
+DTYPE NOTE (important — do not remove the cast below):
+    PEFT initialises LoRA A/B in float32 for numerical stability.  FSDP2's
+    `_init_mp_dtypes()` requires every parameter inside a shard group to
+    share the same ORIGINAL dtype — MixedPrecisionPolicy only controls
+    forward-time casting, not shard-init uniformity.  If the base model
+    is loaded in bf16, leaving LoRA params in fp32 raises:
+
+        AssertionError: FSDP expects uniform original parameter dtype
+        but got {torch.float32, torch.bfloat16}
+
+    So we cast LoRA params (the only trainable ones) to match the base
+    dtype at apply time **under FSDP only**.  This is the same pattern
+    HF Trainer and PEFT's own FSDP examples use.
+
+    Trade-off (FSDP path): AdamW moments for LoRA are stored in bf16
+    instead of fp32, which is slightly noisier.  In practice this is
+    fine for LoRA SFT — the loss of precision is small and
+    `reduce_dtype=float32` in the FSDP MixedPrecisionPolicy keeps
+    gradient reductions in fp32.
+
+    If you need true fp32 master weights for LoRA, load the BASE model
+    in fp32 instead (set `model.dtype: float32` in your config) and let
+    MixedPrecisionPolicy(param_dtype=bf16) cast at forward time.  That
+    costs ~2x the base-param memory but everything is uniform fp32 at
+    shard-init so no manual cast is needed.
+
+DDP-parity fix (this revision):
+    DDP has no dtype-uniformity requirement, and casting LoRA params
+    to bf16 under DDP is actively harmful:
+
+      * AdamW state (exp_avg, exp_avg_sq) is allocated to match the
+        param dtype. With params in bf16 and β₂=0.95, the second-moment
+        update `v ← β₂·v + (1-β₂)·g²` quantises most LoRA gradients to
+        zero at typical LRs (~2e-4), starving the optimiser.
+      * The DDP forward already uses torch.autocast (see trainer/loop.py
+        line ~9893), which expects fp32 master weights and casts to bf16
+        inside the forward. Pre-casting defeats this design.
+
+    So under DDP we keep LoRA params in PEFT's default fp32. Works for
+    both dense and MoE — the dtype concern is purely an FSDP shard-init
+    constraint.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+import torch
+import torch.nn as nn
+
+from bhaskera.introspect import _EXPERT_LEAF_NAMES, ModelProfile
+
+logger = logging.getLogger(__name__)
+
+
+def apply_lora(model: nn.Module, cfg, profile: ModelProfile) -> nn.Module:
+    try:
+        from peft import LoraConfig as PeftLoraConfig
+        from peft import TaskType, get_peft_model
+    except ImportError as e:
+        raise ImportError("pip install peft  # required for LoRA") from e
+
+    # ── Resolve target modules ──────────────────────────────────────
+    configured_targets = cfg.lora.target_modules
+    if configured_targets == ["auto"] or configured_targets == "auto":
+        target_modules: Optional[list[str]] = (
+            list(profile.lora_targets) if profile.lora_targets else None
+        )
+        if target_modules is None:
+            logger.warning(
+                "Auto LoRA targets: introspection found nothing, "
+                "falling back to PEFT defaults"
+            )
+    else:
+        target_modules = list(configured_targets)
+
+    # ── Encoders listed in lora.encoders: auto targets must reach them too ──
+    # Auto-detection samples one language-model decoder layer, whose linear names (q_proj, ...)
+    # differ from an encoder block's (qkv, proj, linear_fc1, ...). Without this, listing an
+    # encoder in lora.encoders would create no adapter on it.
+    if profile.is_multimodal and (configured_targets == ["auto"] or configured_targets == "auto"):
+        wanted = set(getattr(cfg.lora, "encoders", []) or [])
+        extra: set[str] = set()
+        for enc in profile.encoders:
+            if enc.modality in wanted and enc.blocks:
+                extra |= {n.split(".")[-1] for n, m in enc.blocks[0].named_modules() if isinstance(m, nn.Linear)}
+        if extra:
+            target_modules = sorted(set(target_modules or []) | extra)
+            logger.info(f"LoRA: auto targets extended with encoder linears {sorted(extra)}")
+
+    # ── MoE: optionally include expert FFN linears ──────────────────
+    if profile.is_moe and getattr(cfg.lora, "include_experts", False):
+        if target_modules and configured_targets != ["auto"]:
+            expert_linears = _find_expert_linear_names(model, profile)
+            for short_name in expert_linears:
+                if short_name not in target_modules:
+                    target_modules.append(short_name)
+            logger.info(f"Added expert LoRA targets: {expert_linears}")
+
+    # ── MoE: keep experts out unless include_experts ────────────────
+    # PEFT matches target_modules by module *name*, so "gate_proj"/"up_proj"/
+    # "down_proj" (auto targets for the attention+MLP of a dense layer) also
+    # hit every expert's linears of the same names. include_experts: false
+    # used to only skip *adding* expert names, so every Qwen3-MoE run silently
+    # trained LoRA on all experts (12,032 x 3 adapters on Qwen3-235B-A22B).
+    # PEFT full-matches a string exclude_modules against each module path.
+    exclude_modules: str | None = None
+    if profile.is_moe and profile.expert_modules and not getattr(cfg.lora, "include_experts", False):
+        containers = "|".join(sorted(_EXPERT_LEAF_NAMES))
+        exclude_modules = rf"(.*\.)?({containers})\.\d+\..*"
+        logger.info(f"LoRA: excluding expert modules (include_experts=false): {exclude_modules}")
+
+    # ── Multimodal models: adapters on the language model only ──────
+    # Encoder linears use other names (qkv, proj, linear_fc1) than the language
+    # model's, but a name match must never reach an encoder by accident. Encoders
+    # listed in lora.encoders are the exception.
+    if profile.is_multimodal:
+        from .multimodal import encoder_exclude_regex
+        allowed = set(getattr(cfg.lora, "encoders", []) or [])
+        skipped = [e.modality for e in profile.encoders if e.modality not in allowed]
+        encoder_exclude = encoder_exclude_regex(skipped)
+        if encoder_exclude:
+            exclude_modules = (encoder_exclude if exclude_modules is None
+                               else f"(?:{exclude_modules})|(?:{encoder_exclude})")
+            logger.info(f"LoRA: excluding encoders {skipped} (add to lora.encoders to train them)")
+
+    # ── Build PEFT config ───────────────────────────────────────────
+    peft_kwargs = dict(
+        task_type=TaskType.CAUSAL_LM,
+        r=cfg.lora.r,
+        lora_alpha=cfg.lora.alpha,
+        lora_dropout=cfg.lora.dropout,
+        bias="none",
+    )
+    if target_modules is not None:
+        peft_kwargs["target_modules"] = target_modules
+    if exclude_modules is not None:
+        peft_kwargs["exclude_modules"] = exclude_modules
+
+    modules_to_save = getattr(cfg.lora, "modules_to_save", [])
+    if modules_to_save:
+        peft_kwargs["modules_to_save"] = list(modules_to_save)
+
+    lora_cfg = PeftLoraConfig(**peft_kwargs)
+    model = get_peft_model(model, lora_cfg)
+
+    # ── Strategy-gated LoRA dtype cast ──────────────────────────────
+    # FSDP2 path: cast LoRA (the only trainable) params to base dtype
+    # to satisfy uniform-dtype shard-init.
+    # DDP / single-GPU path: keep PEFT's fp32 default for clean AdamW
+    # master weights and autocast compatibility.
+    strategy = cfg.training.distributed.strategy.lower()
+    if strategy == "fsdp":
+        target_dtype = profile.model_dtype
+        cast_count = 0
+        for pname, param in model.named_parameters():
+            if param.requires_grad and param.dtype != target_dtype:
+                param.data = param.data.to(target_dtype)
+                cast_count += 1
+        if cast_count:
+            logger.info(
+                f"FSDP: cast {cast_count} LoRA parameter tensors to {target_dtype} "
+                "(FSDP2 requires uniform param dtype within a shard group)"
+            )
+    else:
+        # Verify and report: PEFT should have left A/B in fp32.
+        fp32_count = sum(
+            1 for _, p in model.named_parameters()
+            if p.requires_grad and p.dtype == torch.float32
+        )
+        logger.info(
+            f"{strategy.upper()}: keeping {fp32_count} LoRA parameter tensors in fp32 "
+            "(autocast handles forward-time bf16; AdamW master weights stay fp32)"
+        )
+
+    # ── Freeze router / gate weights (critical for MoE stability) ───
+    if profile.is_moe and router_frozen(cfg):
+        _freeze_router_weights(model, profile)
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total     = sum(p.numel() for p in model.parameters())
+    logger.info(
+        f"LoRA applied | targets={target_modules} | "
+        f"trainable={trainable:,} ({100 * trainable / total:.2f}%)"
+    )
+    return model
+
+
+_ROUTER_LEAVES = ("gate", "router", "gating", "switch", "shared_expert_gate")
+
+
+def router_frozen(cfg) -> bool:
+    """Router weights stay frozen unless lora.freeze_router or moe.freeze_router is false."""
+    return (bool(getattr(getattr(cfg, "lora", None), "freeze_router", True))
+            and bool(getattr(getattr(cfg, "moe", None), "freeze_router", True)))
+
+
+def is_router_param(pname: str, profile: ModelProfile) -> bool:
+    """True for a router/gate weight. Matches the owning module's name, never a substring of
+    the parameter path: "gate" is inside every SwiGLU gate_proj (and its LoRA tensors)."""
+    if "lora_" in pname:
+        return False
+    module = pname.rsplit(".", 1)[0]
+    if any(module == r or module.endswith("." + r) for r in profile.router_module_names):
+        return True
+    return module.rsplit(".", 1)[-1] in _ROUTER_LEAVES
+
+
+def _freeze_router_weights(model: nn.Module, profile: ModelProfile) -> None:
+    """Freeze all gate/router parameters to prevent MoE routing collapse."""
+    frozen = 0
+    for pname, param in model.named_parameters():
+        if is_router_param(pname, profile) and param.requires_grad:
+            param.requires_grad_(False)
+            frozen += 1
+    if frozen:
+        logger.info(f"Froze {frozen} router/gate parameter tensors")
+
+
+def _find_expert_linear_names(model: nn.Module, profile: ModelProfile) -> list[str]:
+    if not profile.expert_modules:
+        return []
+    sample = profile.expert_modules[0]
+    names: set[str] = set()
+    for name, mod in sample.named_modules():
+        if isinstance(mod, nn.Linear):
+            names.add(name.split(".")[-1])
+    return sorted(names)

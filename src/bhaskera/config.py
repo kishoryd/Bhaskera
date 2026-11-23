@@ -1,0 +1,713 @@
+"""
+Bhaskera config — single source of truth.
+
+
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from typing import Any, Optional, Union
+
+import yaml
+
+
+# Sub-configs
+
+@dataclass
+class ModelConfig:
+    name: str = "tiiuae/falcon-7b"
+    dtype: str = "bfloat16"
+    attn_impl: Optional[str] = None
+    trust_remote_code: bool = False
+    use_liger_kernel: bool = True
+    # "qlora": load the frozen base in 4-bit NF4 (bitsandbytes), DDP only.
+    # See models/quantization.py.
+    quantization: str = "none"
+    # "causal_lm" | "multimodal" | "auto". auto picks multimodal when the model config declares
+    # an encoder (vision_config, audio_config: Qwen3-VL, Qwen2.5-Omni and similar).
+    # "image_text" is accepted as an alias of multimodal. See models/multimodal.py.
+    kind: str = "auto"
+    # Multimodal models: encoders kept frozen (no gradients, no optimizer state): a list of
+    # vision / audio, or ["all"]. With LoRA an encoder is frozen anyway unless it is in lora.encoders.
+    freeze_encoders: list[str] = field(default_factory=lambda: ["all"])
+
+
+@dataclass
+class LoraConfig:
+    enabled: bool = False
+    r: int = 16
+    alpha: int = 32
+    dropout: float = 0.05
+    target_modules: list[str] = field(default_factory=lambda: ["auto"])
+    include_experts: bool = False
+    freeze_router: bool = True
+    modules_to_save: list[str] = field(default_factory=list)
+    # Multimodal models: encoders that also get adapters, e.g. [vision] (default []: language model only).
+    encoders: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MoEConfig:
+    aux_loss_weight: float = 0.01
+    router_z_loss_weight: float = 0.001
+    freeze_router: bool = True
+    log_expert_utilization: bool = True
+    log_every_n_steps: int = 10
+
+
+@dataclass
+class TurboQuantConfig:
+    enabled: bool = False
+    key_bits: int = 4
+    value_bits: int = 2
+    residual_window: int = 128
+    protected_layers: int = 2
+
+
+@dataclass
+class SpeculativeConfig:
+    enabled: bool = False
+    draft_model_name: str = ""
+    num_draft_tokens: int = 5
+
+
+@dataclass
+class InferenceConfig:
+    max_new_tokens: int = 512
+    temperature: float = 1.0
+    top_p: float = 0.9
+    top_k: int = 50
+    do_sample: bool = True
+    batch_size: int = 1
+    kv_cache: str = "static"
+    device: str = "auto"
+    torch_compile: bool = False
+    turboquant: TurboQuantConfig = field(default_factory=TurboQuantConfig)
+    speculative: SpeculativeConfig = field(default_factory=SpeculativeConfig)
+
+
+@dataclass
+class DataConfig:
+    name: str = "ultrachat"
+    seq_len: int = 2048
+    num_workers: int = 4
+
+    # ── Phase 1: persistent-cache plumbing ─────────────────────────────────
+    tokenized_path: Optional[str] = None
+    cache_dir: Optional[str] = None
+    overwrite_cache: bool = False
+    tokenize_batch_size: int = 128
+    tokenize_compression: str = "snappy"     # snappy | zstd | none
+    prefetch_batches: int = 2
+    local_shuffle_buffer_multiplier: int = 10
+    pack_sequences: bool = False
+    # Runtime packing of a padded cache (data/packing.py): several examples per
+    # seq_len row, boundaries via position_ids. Distinct from pack_sequences
+    # above, which only synthesizes masks for caches that are already packed.
+    # Train split only; requires model.attn_impl: flash_attention_2.
+    runtime_packing: bool = False
+    packing_window_rows: int = 2048   # rows packed together per Ray Data batch
+
+    # ── Multimodal data (data/multimodal.py) ────────────────────────────────
+    # Which kinds of input a row can carry: any of text, image, video, audio (default [text]).
+    # With a non-text entry the cache holds the token ids with media placeholders already
+    # expanded, plus the file paths; pixels / waveforms are loaded and processed while
+    # training. Needs a multimodal model (model.kind multimodal or auto).
+    modalities: list[str] = field(default_factory=lambda: ["text"])
+    media_root: Optional[str] = None      # prefix for relative image / video / audio paths
+    image_root: Optional[str] = None      # older name of media_root (used when media_root is unset)
+    # "assistant" (default): loss on assistant turns only; "all": every text token
+    # (media placeholders are never trained on).
+    loss_on: str = "assistant"
+    video_fps: Optional[float] = None     # frames sampled per second (processor default if None)
+    video_max_frames: Optional[int] = None
+    video_max_pixels: Optional[int] = None    # pixel budget for a whole clip (frames x H x W)
+    audio_max_seconds: Optional[float] = None # clips are cut to this length
+    image_min_pixels: Optional[int] = None   # per-image resolution bounds (processor default if None)
+    image_max_pixels: Optional[int] = None
+    image_workers: int = 4                # threads loading media per GPU worker (all modalities)
+    image_prefetch_batches: int = 2       # batches of pixels prepared ahead of the GPU
+
+    # ── Phase 2: chat-format / local-files plumbing ────────────────────────
+    # Name of a registered format renderer (chatml, alpaca, sharegpt, or
+    # whatever you @register_format yourself). When set, TokenizerActor
+    # renders each row to a single string before tokenising.
+    format: Optional[str] = None
+    # Free-form dict passed to the renderer. Hashed into the cache key,
+    # so changing it triggers a re-tokenize automatically.
+    format_options: dict = field(default_factory=dict)
+
+    # Local data sources (used by the "local" dataset and the tokenize CLI).
+    # Each may be a single file, a directory, or a glob pattern.
+    path: Optional[str] = None        # single-source shorthand (used as train)
+    train_path: Optional[str] = None
+    val_path: Optional[str] = None
+
+    # Optional pre-tokenized validation set, populated by bhaskera-tokenize
+    # when run with --split both. Loaded by the trainer alongside
+    # tokenized_path. (Wire this into your training loop where it makes
+    # sense — see launcher/train.py.)
+    val_tokenized_path: Optional[str] = None
+
+    # ── External / custom pre-tokenized caches ──────────────────────────────
+    # For tokenized_path datasets that didn't come from bhaskera-tokenize (e.g.
+    # a teammate's own packing script). column_map renames source columns to
+    # bhaskera's expected names before use; pack_sequences (see above) tells
+    # load_tokenized() it's safe to synthesize an all-ones attention_mask when
+    # the cache doesn't have one (only true for fixed-length/packed data with
+    # no padding).
+    column_map: dict = field(default_factory=dict)
+
+
+@dataclass
+class FSDPConfig:
+    sharding_strategy: str = "FULL_SHARD"
+    transformer_layer_cls: list[str] = field(default_factory=list)
+    param_dtype: str = "bfloat16"
+    reduce_dtype: str = "bfloat16"
+    buffer_dtype: str = "bfloat16"
+    activation_checkpointing: bool = True
+    cpu_offload: bool = False
+    shard_experts_individually: bool = True
+    # Multimodal models: every encoder block (vision, audio) is its own shard unit, so the
+    # tower is gathered one block at a time instead of all at once with the root.
+    shard_encoder_blocks: bool = True
+    # Activation checkpointing for encoder blocks too (the towers are small; usually off).
+    checkpoint_encoders: bool = False
+
+    # ── Forward/backward overlap scheduling ─────────────────────────────────
+    # Root params are needed again at the very start of backward, so
+    # resharding them right after forward just to re-gather microseconds
+    # later is wasted communication — default False.
+    root_reshard_after_forward: bool = False
+    # Explicit next/previous-layer prefetch hints for a per-layer-wrapped
+    # transformer stack (see _apply_prefetch_hints in distributed/fsdp.py).
+    # Without these FSDP2 falls back to implicit prefetch heuristics that
+    # often fail to overlap a layer's all-gather with the previous layer's
+    # compute, leaving every layer blocked on its own gather.
+    forward_prefetch: bool = False
+    backward_prefetch: bool = False
+    # How many layers ahead each layer prefetches (1 = next layer only). Deeper
+    # lets a slow all-gather start earlier, at the cost of more gathered layers
+    # resident at once.
+    prefetch_depth: int = 1
+    # Each rank reads its own slice of every weight straight from the checkpoint's
+    # safetensors files instead of rank 0 reading everything and broadcasting it
+    # (distributed/fsdp.py). Falls back to the broadcast for anything not in the files.
+    sharded_load: bool = True
+    # Backward all-gather cost (distributed/fsdp.py, Step 2). 0 = off (default,
+    # old behaviour). reshard_after_forward_group=K keeps a 1/K weight shard
+    # after forward so backward gathers inside blocks of K ranks; K must divide
+    # the world size. keep_gathered_layers=N keeps the last N layers whole
+    # between forward and backward (no backward gather for them).
+    reshard_after_forward_group: int = 0
+    keep_gathered_layers: int = 0
+
+    # ── HSDP (sharding_strategy: "HYBRID_SHARD") ────────────────────────────
+    # GPUs per shard group. Weights are sharded within a group and replicated
+    # across groups, so the per-layer all-gathers only span the group while
+    # the cross-group traffic is one gradient all-reduce per step (tiny under
+    # LoRA, where only adapter params have grads). 0 = one node's worth
+    # (LOCAL_WORLD_SIZE). Must divide world_size, and the model's weights /
+    # group_size must still leave activation headroom on each GPU.
+    hsdp_shard_size: int = 0
+
+
+@dataclass
+class DDPConfig:
+    find_unused_parameters: bool = False
+    gradient_as_bucket_view: bool = True
+    broadcast_buffers: bool = False
+
+    # ── DDP-parity additions ───────────────────────────────────────────────
+    # Activation checkpointing under DDP. Identical mechanism to FSDP's AC
+    # (same activation_ckpt.apply_activation_checkpointing call), but applied
+    # to the raw module BEFORE the DDP wrap so DDP's parameter-graph snapshot
+    # sees the checkpoint-wrapped modules.
+    # Works for both dense (decoder-layer granularity) and MoE
+    # (per-expert granularity), driven off the ModelProfile from
+    # introspect.py — no hardcoded layer names.
+    activation_checkpointing: bool = False
+
+    # DDP static_graph optimisation. When True, DDP caches the autograd
+    # reduction order from iteration 1 and reuses it, enabling extra
+    # bucketing optimisations. NOTE: mutually exclusive with
+    # find_unused_parameters=True (DDP itself enforces this) and with
+    # manual grad-sync toggling for grad accumulation. The training loop
+    # detects static_graph and falls back to per-micro-step all-reduces.
+    static_graph: bool = False
+
+
+@dataclass
+class PipelineConfig:
+    """strategy: pipeline. The frozen model is split by layers across `stages` GPUs and
+    stays there; only activations cross stages and only LoRA grads cross pipeline copies.
+    A step runs `microbatches` micro-batches of training.batch_size sequences through
+    each pipeline copy (grad_accum is not used). See distributed/pipeline.py."""
+    stages: int = 4
+    microbatches: int = 16
+    schedule: str = "1f1b"              # "1f1b" | "gpipe"
+    activation_checkpointing: bool = True
+    eval_micro_batches: int = 16        # per pipeline copy, per periodic eval (bounds eval time)
+    moe_experts: str = "auto"           # frozen-expert compute: auto | loop | bmm | hf (HF's per-expert loop)
+
+
+@dataclass
+class DistributedConfig:
+    strategy: str = "fsdp"
+    fsdp: FSDPConfig = field(default_factory=FSDPConfig)
+    ddp: DDPConfig = field(default_factory=DDPConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+
+
+@dataclass
+class TrainingConfig:
+    batch_size: int = 2
+    grad_accum: int = 4
+    lr: float = 2e-4
+    weight_decay: float = 0.01
+    max_steps: int = 1000
+    num_epochs: int = 1
+    warmup_steps: int = 100
+    max_grad_norm: float = 1.0
+    seed: int = 42
+    deterministic: bool = False
+    grad_clip: Optional[float] = 1.0          # Phase 1: used by no_sync loop
+    max_grad_skip_steps: int = 100
+    # Seconds a worker may take from start to its first completed
+    # forward+backward (dist init, model load/wrap, first batch). On expiry the
+    # worker dumps every thread's stack and exits (utils/watchdog.py), instead
+    # of hanging silently -- two runs sat 3.5h/1.4h at 0 steps before this.
+    # 0 disables. Raise it for very large models whose load is slow.
+    startup_timeout_s: int = 3600
+    distributed: DistributedConfig = field(default_factory=DistributedConfig)
+
+    # ── Eval / MLPerf-style convergence early-stop ──────────────────────────
+    # eval_steps=0 disables periodic eval entirely (default — no behavior
+    # change for existing configs). Requires data.val_tokenized_path to be
+    # set; a value here with no val cache configured is a no-op.
+    eval_steps: int = 0
+    eval_batch_size: int = 0                  # 0 -> reuse training batch_size
+    eval_max_rows: int = 0                    # cap on validation rows per eval, all ranks together (0 = whole set)
+    target_eval_loss: Optional[float] = None  # stop once eval_loss <= this
+
+
+@dataclass
+class CheckpointConfig:
+    enabled: bool = True
+    save_dir: str = "./checkpoints"
+    save_interval: int = 1
+    keep_last_n: int = 2
+
+
+@dataclass
+class LoggingConfig:
+    # str | list[str] | None — see _normalize_trackers in loggers/__init__
+    tracker: Optional[Union[str, list]] = None
+    project: str = "bhaskera"
+    run_name: str = "run"
+    mlflow_tracking_uri: Optional[str] = None
+    log_gpu_every_n_steps: int = 10
+    # Which curves MLflow gets: essential (default), detailed or full; see utils/loggers/mlflow_metrics.py.
+    mlflow_metrics: str = "essential"
+    mlflow_experiment: Optional[str] = None      # experiment name; default: project
+    mlflow_log_all_ranks: bool = False           # also log from ranks other than 0 (one curve set per node)
+    mlflow_log_artifacts_every: int = 50         # steps between uploads of training.log
+    # Export the trained LoRA adapter in the standard PEFT format when training ends, keep it with the MLflow run,
+    # and (mlflow_register_model) register it as a version of that model in the MLflow model registry.
+    mlflow_log_adapter: bool = False
+    # Record evaluations, checkpoints and epochs as traces in MLflow (the Traces tab). Off by default.
+    mlflow_tracing: bool = False
+    # Store the evaluation history and a summary with the run, and (mlflow_eval_samples > 0) that many
+    # teacher-forced example predictions at each evaluation.
+    mlflow_eval_report: bool = True
+    mlflow_eval_samples: int = 0
+    mlflow_register_model: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    group: Optional[str] = None
+
+
+# ── Monitoring sub-configs ────────────────────────────────────────────────
+
+
+@dataclass
+class MetricsConfig:
+    """Per-step custom-metric toggles."""
+    enabled: bool = True
+    system_every_n_steps: int = 10
+    cuda_every_n_steps: int = 10
+    gpu: bool = True
+    cpu: bool = True
+    cuda_memory: bool = True
+    throughput: bool = True
+    peak_tflops_per_gpu: float = 312.0
+    throughput_window: int = 50
+    throughput_warmup: int = 5
+    # Per-step data/compute/optimizer breakdown (trainer/step_timing.py) and,
+    # every straggler_every_n_steps, a cross-rank all-gather naming the
+    # slowest rank and host. 0 disables the straggler check.
+    step_timing: bool = True
+    straggler_every_n_steps: int = 10
+    # GPU and host readings of every node, gathered to rank 0 (utils/node_stats.py); 0 disables it.
+    # Per-node curves are logged only while the job has at most node_stats_per_node_max nodes.
+    node_stats_every_n_steps: int = 10
+    node_stats_per_node_max: int = 16
+
+@dataclass
+class MonitoringConfig:
+    """Ray Dashboard + per-step metrics (MLflow handles experiment tracking)."""
+    dashboard:           bool          = True
+    dashboard_host:      str           = "127.0.0.1"   # the Ray Dashboard can submit jobs: not on all interfaces by default
+    dashboard_port:      int           = 8265
+    metrics_export_port: int           = 8080
+    metrics:             MetricsConfig = field(default_factory=MetricsConfig)
+
+
+# Root config
+
+@dataclass
+class Config:
+    model: ModelConfig            = field(default_factory=ModelConfig)
+    data: DataConfig              = field(default_factory=DataConfig)
+    lora: LoraConfig              = field(default_factory=LoraConfig)
+    moe: MoEConfig                = field(default_factory=MoEConfig)
+    training: TrainingConfig      = field(default_factory=TrainingConfig)
+    checkpoint: CheckpointConfig  = field(default_factory=CheckpointConfig)
+    logging: LoggingConfig        = field(default_factory=LoggingConfig)
+    inference: InferenceConfig    = field(default_factory=InferenceConfig)
+    monitoring: MonitoringConfig  = field(default_factory=MonitoringConfig)
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Config":
+        return _dict_to_config(d or {})
+
+
+# Loader
+
+def _get(d: Any, *keys, default=None):
+    for k in keys:
+        if not isinstance(d, dict):
+            return default
+        d = d.get(k, default)
+        if d is default:
+            return default
+    return d
+
+
+def _as_str_list(value) -> list[str]:
+    """A YAML scalar or list as a lower-cased list of strings ("vision" -> ["vision"])."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    return [str(v).lower() for v in value]
+
+
+def _dict_to_config(raw: dict) -> Config:
+    fsdp_raw    = _get(raw, "training", "distributed", "fsdp", default={}) or {}
+    ddp_raw     = _get(raw, "training", "distributed", "ddp",  default={}) or {}
+    pp_raw      = _get(raw, "training", "distributed", "pipeline", default={}) or {}
+    dist_raw    = _get(raw, "training", "distributed", default={}) or {}
+    train_raw   = _get(raw, "training", default={}) or {}
+    log_raw     = _get(raw, "logging",  default={}) or {}
+    ckpt_raw    = _get(raw, "checkpoint", default={}) or {}
+    model_raw   = _get(raw, "model",    default={}) or {}
+    data_raw    = _get(raw, "data",     default={}) or {}
+    lora_raw    = _get(raw, "lora",     default={}) or {}
+    moe_raw     = _get(raw, "moe",      default={}) or {}
+    infer_raw   = _get(raw, "inference", default={}) or {}
+    tq_raw      = _get(raw, "inference", "turboquant", default={}) or {}
+    spec_raw    = _get(raw, "inference", "speculative", default={}) or {}
+
+    mon_raw     = _get(raw, "monitoring", default={}) or {}
+    prom_raw    = _get(raw, "monitoring", "prometheus", default={}) or {}
+    graf_raw    = _get(raw, "monitoring", "grafana",    default={}) or {}
+    metrics_raw = _get(raw, "monitoring", "metrics",    default={}) or {}
+
+    return Config(
+        model=ModelConfig(
+            name=model_raw.get("name", "tiiuae/falcon-7b"),
+            dtype=model_raw.get("dtype", "bfloat16"),
+            attn_impl=model_raw.get("attn_impl"),
+            trust_remote_code=model_raw.get("trust_remote_code", False),
+            use_liger_kernel=bool(model_raw.get("use_liger_kernel", True)),
+            quantization=str(model_raw.get("quantization", "none") or "none").lower(),
+            kind=str(model_raw.get("kind", "auto") or "auto").lower(),
+            freeze_encoders=_as_str_list(model_raw.get("freeze_encoders", ["all"])),
+        ),
+        data=DataConfig(
+            name=data_raw.get("name", "ultrachat"),
+            seq_len=int(data_raw.get("seq_len", 2048)),
+            num_workers=int(data_raw.get("num_workers", 4)),
+
+            tokenized_path=data_raw.get("tokenized_path"),
+            cache_dir=data_raw.get("cache_dir"),
+            overwrite_cache=bool(data_raw.get("overwrite_cache", False)),
+            tokenize_batch_size=int(data_raw.get("tokenize_batch_size", 128)),
+            tokenize_compression=str(data_raw.get("tokenize_compression", "snappy")),
+            prefetch_batches=int(data_raw.get("prefetch_batches", 2)),
+            local_shuffle_buffer_multiplier=int(
+                data_raw.get("local_shuffle_buffer_multiplier", 10)
+            ),
+            pack_sequences=bool(data_raw.get("pack_sequences", False)),
+            runtime_packing=bool(data_raw.get("runtime_packing", False)),
+            packing_window_rows=int(data_raw.get("packing_window_rows", 2048)),
+            modalities=_as_str_list(data_raw.get("modalities", ["text"])) or ["text"],
+            media_root=data_raw.get("media_root"),
+            image_root=data_raw.get("image_root"),
+            loss_on=str(data_raw.get("loss_on", "assistant") or "assistant").lower(),
+            video_fps=(float(data_raw["video_fps"]) if data_raw.get("video_fps") else None),
+            video_max_frames=(int(data_raw["video_max_frames"]) if data_raw.get("video_max_frames") else None),
+            video_max_pixels=(int(data_raw["video_max_pixels"]) if data_raw.get("video_max_pixels") else None),
+            audio_max_seconds=(float(data_raw["audio_max_seconds"]) if data_raw.get("audio_max_seconds") else None),
+            image_min_pixels=(int(data_raw["image_min_pixels"]) if data_raw.get("image_min_pixels") else None),
+            image_max_pixels=(int(data_raw["image_max_pixels"]) if data_raw.get("image_max_pixels") else None),
+            image_workers=int(data_raw.get("image_workers", 4)),
+            image_prefetch_batches=int(data_raw.get("image_prefetch_batches", 2)),
+
+            format=data_raw.get("format"),
+            format_options=dict(data_raw.get("format_options", {}) or {}),
+            path=data_raw.get("path"),
+            train_path=data_raw.get("train_path"),
+            val_path=data_raw.get("val_path"),
+            val_tokenized_path=data_raw.get("val_tokenized_path"),
+            column_map=dict(data_raw.get("column_map", {}) or {}),
+        ),
+        lora=LoraConfig(
+            enabled=bool(lora_raw.get("enabled", False)),
+            r=int(lora_raw.get("r", 16)),
+            alpha=int(lora_raw.get("alpha", 32)),
+            dropout=float(lora_raw.get("dropout", 0.05)),
+            target_modules=list(lora_raw.get("target_modules", ["auto"])),
+            include_experts=bool(lora_raw.get("include_experts", False)),
+            freeze_router=bool(lora_raw.get("freeze_router", True)),
+            modules_to_save=list(lora_raw.get("modules_to_save", [])),
+            encoders=_as_str_list(lora_raw.get("encoders", [])),
+        ),
+        moe=MoEConfig(
+            aux_loss_weight=float(moe_raw.get("aux_loss_weight", 0.01)),
+            router_z_loss_weight=float(moe_raw.get("router_z_loss_weight", 0.001)),
+            freeze_router=bool(moe_raw.get("freeze_router", True)),
+            log_expert_utilization=bool(moe_raw.get("log_expert_utilization", True)),
+            log_every_n_steps=int(moe_raw.get("log_every_n_steps", 10)),
+        ),
+        training=TrainingConfig(
+            batch_size=int(train_raw.get("batch_size", 2)),
+            grad_accum=int(train_raw.get("grad_accum", 4)),
+            lr=float(train_raw.get("lr", 2e-4)),
+            weight_decay=float(train_raw.get("weight_decay", 0.01)),
+            max_steps=int(train_raw.get("max_steps", 1000)),
+            num_epochs=int(train_raw.get("num_epochs", 1)),
+            warmup_steps=int(train_raw.get("warmup_steps", 100)),
+            max_grad_norm=float(train_raw.get("max_grad_norm", 1.0)),
+            seed=int(train_raw.get("seed", 42)),
+            deterministic=bool(train_raw.get("deterministic", False)),
+            grad_clip=train_raw.get("grad_clip", 1.0),
+            max_grad_skip_steps=int(train_raw.get("max_grad_skip_steps", 100)),
+            startup_timeout_s=int(train_raw.get("startup_timeout_s", 3600) or 0),
+            eval_steps=int(train_raw.get("eval_steps", 0)),
+            eval_batch_size=int(train_raw.get("eval_batch_size", 0)),
+            eval_max_rows=int(train_raw.get("eval_max_rows", 0)),
+            target_eval_loss=(
+                float(train_raw["target_eval_loss"])
+                if train_raw.get("target_eval_loss") is not None
+                else None
+            ),
+            distributed=DistributedConfig(
+                strategy=str(dist_raw.get("strategy", "fsdp")),
+                fsdp=FSDPConfig(
+                    sharding_strategy=fsdp_raw.get("sharding_strategy", "FULL_SHARD"),
+                    transformer_layer_cls=list(fsdp_raw.get("transformer_layer_cls", [])),
+                    param_dtype=fsdp_raw.get("param_dtype", "bfloat16"),
+                    reduce_dtype=fsdp_raw.get("reduce_dtype", "bfloat16"),
+                    buffer_dtype=fsdp_raw.get("buffer_dtype", "bfloat16"),
+                    activation_checkpointing=bool(fsdp_raw.get("activation_checkpointing", True)),
+                    cpu_offload=bool(fsdp_raw.get("cpu_offload", False)),
+                    shard_experts_individually=bool(
+                        fsdp_raw.get("shard_experts_individually", True)
+                    ),
+                    shard_encoder_blocks=bool(fsdp_raw.get("shard_encoder_blocks", True)),
+                    checkpoint_encoders=bool(fsdp_raw.get("checkpoint_encoders", False)),
+                    root_reshard_after_forward=bool(
+                        fsdp_raw.get("root_reshard_after_forward", False)
+                    ),
+                    sharded_load=bool(fsdp_raw.get("sharded_load", True)),
+                    reshard_after_forward_group=int(fsdp_raw.get("reshard_after_forward_group", 0) or 0),
+                    keep_gathered_layers=int(fsdp_raw.get("keep_gathered_layers", 0) or 0),
+                    forward_prefetch=bool(fsdp_raw.get("forward_prefetch", False)),
+                    backward_prefetch=bool(fsdp_raw.get("backward_prefetch", False)),
+                    prefetch_depth=max(1, int(fsdp_raw.get("prefetch_depth", 1) or 1)),
+                    hsdp_shard_size=int(fsdp_raw.get("hsdp_shard_size", 0) or 0),
+                ),
+                ddp=DDPConfig(
+                    find_unused_parameters=bool(ddp_raw.get("find_unused_parameters", False)),
+                    gradient_as_bucket_view=bool(ddp_raw.get("gradient_as_bucket_view", True)),
+                    broadcast_buffers=bool(ddp_raw.get("broadcast_buffers", False)),
+                    # ── DDP-parity additions ──
+                    activation_checkpointing=bool(ddp_raw.get("activation_checkpointing", False)),
+                    static_graph=bool(ddp_raw.get("static_graph", False)),
+                ),
+                pipeline=PipelineConfig(
+                    stages=int(pp_raw.get("stages", 4)),
+                    microbatches=int(pp_raw.get("microbatches", 16)),
+                    schedule=str(pp_raw.get("schedule", "1f1b")).lower(),
+                    activation_checkpointing=bool(pp_raw.get("activation_checkpointing", True)),
+                    eval_micro_batches=int(pp_raw.get("eval_micro_batches", 16)),
+                    moe_experts=str(pp_raw.get("moe_experts", "auto")),
+                ),
+            ),
+        ),
+        checkpoint=CheckpointConfig(
+            enabled=bool(ckpt_raw.get("enabled", True)),
+            save_dir=str(ckpt_raw.get("save_dir", "./checkpoints")),
+            save_interval=int(ckpt_raw.get("save_interval", 1)),
+            keep_last_n=int(ckpt_raw.get("keep_last_n", 2)),
+        ),
+        logging=LoggingConfig(
+            tracker=log_raw.get("tracker"),
+            project=str(log_raw.get("project", "bhaskera")),
+            run_name=str(log_raw.get("run_name", "run")),
+            mlflow_tracking_uri=log_raw.get("mlflow_tracking_uri"),
+            log_gpu_every_n_steps=int(log_raw.get("log_gpu_every_n_steps", 10)),
+            mlflow_metrics=str(log_raw.get("mlflow_metrics", "essential")),
+            mlflow_experiment=(str(log_raw["mlflow_experiment"]) if log_raw.get("mlflow_experiment") else None),
+            mlflow_log_all_ranks=bool(log_raw.get("mlflow_log_all_ranks", False)),
+            mlflow_log_artifacts_every=int(log_raw.get("mlflow_log_artifacts_every", 50)),
+            mlflow_log_adapter=bool(log_raw.get("mlflow_log_adapter", False)),
+            mlflow_tracing=bool(log_raw.get("mlflow_tracing", False)),
+            mlflow_eval_report=bool(log_raw.get("mlflow_eval_report", True)),
+            mlflow_eval_samples=int(log_raw.get("mlflow_eval_samples", 0) or 0),
+            mlflow_register_model=(str(log_raw["mlflow_register_model"]) if log_raw.get("mlflow_register_model") else None),
+            tags=list(log_raw.get("tags", []) or []),
+            group=log_raw.get("group"),
+        ),
+        inference=InferenceConfig(
+            max_new_tokens=int(infer_raw.get("max_new_tokens", 512)),
+            temperature=float(infer_raw.get("temperature", 1.0)),
+            top_p=float(infer_raw.get("top_p", 0.9)),
+            top_k=int(infer_raw.get("top_k", 50)),
+            do_sample=bool(infer_raw.get("do_sample", True)),
+            batch_size=int(infer_raw.get("batch_size", 1)),
+            kv_cache=str(infer_raw.get("kv_cache", "static")),
+            device=str(infer_raw.get("device", "auto")),
+            torch_compile=bool(infer_raw.get("torch_compile", False)),
+            turboquant=TurboQuantConfig(
+                enabled=bool(tq_raw.get("enabled", False)),
+                key_bits=int(tq_raw.get("key_bits", 4)),
+                value_bits=int(tq_raw.get("value_bits", 2)),
+                residual_window=int(tq_raw.get("residual_window", 128)),
+                protected_layers=int(tq_raw.get("protected_layers", 2)),
+            ),
+            speculative=SpeculativeConfig(
+                enabled=bool(spec_raw.get("enabled", False)),
+                draft_model_name=str(spec_raw.get("draft_model_name", "")),
+                num_draft_tokens=int(spec_raw.get("num_draft_tokens", 5)),
+            ),
+        ),
+        monitoring=MonitoringConfig(
+            dashboard=bool(mon_raw.get("dashboard", True)),
+            dashboard_host=str(mon_raw.get("dashboard_host", "127.0.0.1")),
+            dashboard_port=int(mon_raw.get("dashboard_port", 8265)),
+            metrics_export_port=int(mon_raw.get("metrics_export_port", 8080)),
+            metrics=MetricsConfig(
+                enabled=bool(metrics_raw.get("enabled", True)),
+                system_every_n_steps=int(metrics_raw.get("system_every_n_steps", 10)),
+                cuda_every_n_steps=int(metrics_raw.get("cuda_every_n_steps", 10)),
+                gpu=bool(metrics_raw.get("gpu", True)),
+                cpu=bool(metrics_raw.get("cpu", True)),
+                cuda_memory=bool(metrics_raw.get("cuda_memory", True)),
+                throughput=bool(metrics_raw.get("throughput", True)),
+                peak_tflops_per_gpu=float(metrics_raw.get("peak_tflops_per_gpu", 312.0)),
+                throughput_window=int(metrics_raw.get("throughput_window", 50)),
+                throughput_warmup=int(metrics_raw.get("throughput_warmup", 5)),
+                step_timing=bool(metrics_raw.get("step_timing", True)),
+                straggler_every_n_steps=int(metrics_raw.get("straggler_every_n_steps", 10)),
+                node_stats_every_n_steps=int(metrics_raw.get("node_stats_every_n_steps", 10)),
+                node_stats_per_node_max=int(metrics_raw.get("node_stats_per_node_max", 16)),
+            ),
+        ),
+    )
+
+
+class _Tracked(dict):
+    """A recipe section that remembers which keys the parser asked for, so that keys it never looked at (a
+    typo, a misplaced option, an option that does not exist) can be reported. Looking at all keys at once
+    (``items()``, ``**section`` and so on) counts as having asked for every one of them."""
+
+    def __init__(self, data: dict, path: str = "") -> None:
+        super().__init__(data)
+        self.path = path
+        self.asked: set = set()
+        self.looked_at_all = False
+        self.children = {k: _Tracked(v, f"{path}{k}.") for k, v in data.items() if isinstance(v, dict)}
+
+    def get(self, key, default=None):
+        self.asked.add(key)
+        return self.children[key] if key in self.children else super().get(key, default)
+
+    def __getitem__(self, key):
+        self.asked.add(key)
+        return self.children[key] if key in self.children else super().__getitem__(key)
+
+    def __contains__(self, key):
+        self.asked.add(key)
+        return super().__contains__(key)
+
+    def keys(self):
+        self.looked_at_all = True
+        return super().keys()
+
+    def items(self):
+        self.looked_at_all = True
+        return super().items()
+
+    def values(self):
+        self.looked_at_all = True
+        return super().values()
+
+    def __iter__(self):
+        self.looked_at_all = True
+        return super().__iter__()
+
+
+def find_unknown_keys(tracked: "_Tracked") -> list[str]:
+    """One sentence for every recipe key the parser never looked at, with the closest known name when there is one."""
+    import difflib
+    problems: list[str] = []
+    if tracked.looked_at_all:
+        return problems
+    for key in dict.keys(tracked):
+        if key in tracked.asked:
+            if key in tracked.children:
+                problems += find_unknown_keys(tracked.children[key])
+            continue
+        if str(key).startswith(("_", "#")):
+            continue
+        near = difflib.get_close_matches(str(key), sorted(map(str, tracked.asked)), n=1, cutoff=0.6)
+        hint = f" (did you mean '{near[0]}'?)" if near else ""
+        problems.append(f"'{tracked.path}{key}' is not an option and has no effect{hint}")
+    return problems
+
+
+def load_config_checked(path: str) -> tuple[Config, list[str]]:
+    """The config of a recipe file, and a sentence for every key in it that does nothing."""
+    with open(path) as f:
+        raw = yaml.safe_load(f) or {}
+    tracked = _Tracked(raw) if isinstance(raw, dict) else raw
+    cfg = _dict_to_config(tracked)
+    return cfg, (find_unknown_keys(tracked) if isinstance(tracked, _Tracked) else [])
+
+
+def load_config(path: str) -> Config:
+    """Load a recipe. Keys that do nothing are reported as warnings (an error with BHASKERA_STRICT_CONFIG=1)."""
+    import logging
+    import os
+    cfg, problems = load_config_checked(path)
+    for text in problems:
+        logging.getLogger(__name__).warning(f"{path}: {text}")
+    if problems and os.environ.get("BHASKERA_STRICT_CONFIG") == "1":
+        raise ValueError(f"{path} has options that do nothing:\n  " + "\n  ".join(problems))
+    return cfg

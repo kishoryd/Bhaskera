@@ -1,0 +1,20 @@
+# Tokenise chat data with images and video for a vision-language model (Qwen3-VL). Run once before training:
+#   bhaskera-tokenize --config configs/multimodal/tokenize_vision.yaml --split both
+# Only token ids, the prompt text and media paths are cached; images and video are decoded again while training.
+model:
+  name: /scratch/<project>/<username>/models/Qwen3-VL-2B-Instruct
+
+data:
+  name: local
+  modalities: [text, image, video]      # drop what your data does not have
+  train_path: /scratch/<project>/<username>/data/train.jsonl
+  val_path: /scratch/<project>/<username>/data/val.jsonl
+  seq_len: 1280
+  loss_on: assistant
+  image_max_pixels: 1048576             # at most 1024 visual tokens per image (32x32 px each)
+  video_fps: 4
+  video_max_frames: 16
+  cache_dir: /scratch/<project>/<username>/cache
+  num_workers: 4
+  tokenize_batch_size: 16
+  tokenize_compression: snappy

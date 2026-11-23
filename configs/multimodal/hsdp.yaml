@@ -1,0 +1,70 @@
+# Multimodal, HSDP: shard inside a node, replicate across nodes. LoRA on Qwen3-VL-2B with images.
+# Tokenise first (configs/multimodal/tokenize_vision.yaml), put the two printed paths below, replace <project>/<username>, then:
+#   ./submit.sh configs/multimodal/hsdp.yaml <nodes> <hours>
+
+model:
+  name: "/scratch/<project>/<username>/models/Qwen3-VL-2B-Instruct"
+  kind: "multimodal"
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  use_liger_kernel: false        # compute nodes have no C headers for new Triton kernels
+  freeze_encoders: ["all"]
+data:
+  name: "local"
+  modalities: ["text", "image"]
+  seq_len: 1280
+  image_max_pixels: 1048576
+  tokenized_path: "/scratch/<project>/<username>/cache/local_train_<hash>"
+  num_workers: 8
+  image_workers: 8
+  image_prefetch_batches: 4
+  local_shuffle_buffer_multiplier: 10
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["auto"]
+training:
+  batch_size: 4                  # per GPU
+  grad_accum: 1
+  lr: 1.0e-4
+  weight_decay: 0.0
+  max_steps: 20
+  num_epochs: 100
+  warmup_steps: 2
+  max_grad_norm: 1.0
+  grad_clip: 1.0
+  max_grad_skip_steps: 100
+  eval_steps: 0
+  seed: 42
+  startup_timeout_s: 1800
+  distributed:
+    strategy: "fsdp"
+    fsdp:
+      sharding_strategy: "HYBRID_SHARD"
+      hsdp_shard_size: 2         # the 2 GPUs of a node
+      param_dtype: "bfloat16"
+      reduce_dtype: "float32"
+      buffer_dtype: "bfloat16"
+      activation_checkpointing: true
+      shard_encoder_blocks: true
+      forward_prefetch: true
+      backward_prefetch: true
+checkpoint:
+  enabled: false
+logging:
+  tracker: "mlflow"
+  project: "bhaskera-multimodal-scaling"
+  run_name: "RUN_NAME"
+  mlflow_tracking_uri: ""
+monitoring:
+  dashboard: false
+  metrics:
+    enabled: true
+    system_every_n_steps: 5
+    cuda_every_n_steps: 5
+    throughput: true
+    peak_tflops_per_gpu: 312.0
+    throughput_window: 5
+    throughput_warmup: 3

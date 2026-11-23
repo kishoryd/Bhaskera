@@ -1,0 +1,579 @@
+"""
+bhaskera.data.tokenize
+======================
+Stateful Ray-Data tokeniser with persistent caching.
+
+
+"""
+from __future__ import annotations
+
+import datetime
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any, Optional
+
+import numpy as np
+import ray.data
+import torch.distributed as dist
+
+logger = logging.getLogger(__name__)
+
+# Bhaskera version written into metadata.json -- single source of truth is pyproject.toml
+try:
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    _BHASKERA_VERSION = _pkg_version("bhaskera")
+except PackageNotFoundError:          # running from a source tree that was never pip-installed
+    _BHASKERA_VERSION = "unknown"
+
+
+# Cache helpers
+
+def _cache_version_hash(
+    model_name: str,
+    seq_len: int,
+    dataset_name: str,
+    format_name: Optional[str] = None,
+    format_options: Optional[dict] = None,
+) -> str:
+    """
+    Deterministic 16-char hex hash.
+
+    NEVER use Python's hash() — it is randomised per-process since Python 3.3
+    (PEP 456). hashlib.sha256 is stable across runs and machines.
+
+    Phase 2: format_name + format_options are mixed into the key so a config
+    change like ``format: chatml -> alpaca`` invalidates the cache without
+    the user having to clear it manually. Old configs (no format set) hash
+    to the same value as before, so existing caches keep working.
+    """
+    parts = [model_name, str(seq_len), dataset_name]
+    if format_name:
+        parts.append(f"fmt:{format_name}")
+    if format_options:
+        parts.append(f"opts:{json.dumps(format_options, sort_keys=True, default=str)}")
+    key = "|".join(parts)
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _write_metadata(
+    cache_path: str,
+    model_name: str,
+    seq_len: int,
+    dataset_name: str,
+    num_rows: int,
+    format_name: Optional[str] = None,
+    format_options: Optional[dict] = None,
+    schema: Optional[list] = None,
+) -> None:
+    """
+    Write metadata.json alongside the parquet files.
+    Must only be called from rank 0.
+    """
+    if dist.is_available() and dist.is_initialized() and dist.get_rank() != 0:
+        return
+
+    meta = {
+        "model_name":       model_name,
+        "seq_len":          seq_len,
+        "dataset_name":     dataset_name,
+        "num_rows":         num_rows,
+        "schema":           schema or ["input_ids", "attention_mask", "labels"],
+        "created_at":       datetime.datetime.utcnow().isoformat() + "Z",
+        "bhaskera_version": _BHASKERA_VERSION,
+        "format_name":      format_name,
+        "format_options":   format_options or {},
+    }
+    meta_path = os.path.join(cache_path, "metadata.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2, default=str)
+    logger.info(f"Tokenizer cache metadata written → {meta_path}")
+
+
+def _verify_cache(
+    cache_path: str,
+    model_name: str,
+    seq_len: int,
+    dataset_name: str,
+    format_name: Optional[str] = None,
+) -> bool:
+    """
+    Returns True only if ALL of:
+      - metadata.json exists at cache_path
+      - model_name, seq_len, dataset_name match
+      - (if provided) format_name matches
+      - at least one .parquet file exists in cache_path
+    """
+    meta_path = os.path.join(cache_path, "metadata.json")
+    if not os.path.isfile(meta_path):
+        return False
+
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        logger.warning(f"Cache metadata corrupt or unreadable at {meta_path}")
+        return False
+
+    for key, expected in (
+        ("model_name",   model_name),
+        ("seq_len",      seq_len),
+        ("dataset_name", dataset_name),
+    ):
+        if meta.get(key) != expected:
+            logger.info(
+                f"Cache miss: {key} mismatch "
+                f"(cached={meta.get(key)!r}, requested={expected!r})"
+            )
+            return False
+
+    # format_name is only checked if the caller supplied one. This means caches
+    # written by older Bhaskera versions (no format_name in metadata) still
+    # validate when the new code is asked for "no format" (format_name=None).
+    if format_name is not None and meta.get("format_name") != format_name:
+        logger.info(
+            f"Cache miss: format_name mismatch "
+            f"(cached={meta.get('format_name')!r}, requested={format_name!r})"
+        )
+        return False
+
+    parquet_files = list(Path(cache_path).glob("*.parquet"))
+    if not parquet_files:
+        logger.warning(f"Cache dir exists but contains no .parquet files: {cache_path}")
+        return False
+
+    return True
+
+
+# Partition calculation (fix #10)
+
+def _compute_num_partitions(cfg, world_size: int) -> int:
+    """Round up to the nearest multiple of world_size; minimum 16."""
+    base = max(world_size * 4, cfg.data.num_workers * 4, 16)
+    return ((base + world_size - 1) // world_size) * world_size
+
+
+# Persistent cache (fix #2)
+
+def persist_tokenized(
+    ds: ray.data.Dataset,
+    cfg,
+    text_col: str,
+    dataset_name: str,
+) -> str:
+    """
+    Tokenize *ds* once and write to disk as snappy/zstd/uncompressed parquet.
+
+    Reads format settings from cfg.data:
+      * cfg.data.format          — name of a registered format (or None)
+      * cfg.data.format_options  — free-form dict, hashed into cache key
+
+    Returns the absolute path to the cache directory.
+    """
+    if not cfg.data.cache_dir:
+        raise ValueError(
+            "cfg.data.cache_dir must be set to use persist_tokenized(). "
+            "Set data.cache_dir in your config or pass --cache-dir."
+        )
+
+    model_name     = cfg.model.name
+    seq_len        = cfg.data.seq_len
+    format_name    = getattr(cfg.data, "format", None)
+    format_options = dict(getattr(cfg.data, "format_options", None) or {})
+
+    # Multimodal rows: media settings (modalities, pixel bounds, fps, frames) change the
+    # token ids, so they are part of the cache key and recorded in metadata.json.
+    from bhaskera.data.multimodal import is_multimodal_data, media_options
+    schema = None
+    if is_multimodal_data(cfg):
+        format_options = {**format_options, "media": media_options(cfg)}
+        schema = ["input_ids", "attention_mask", "labels", "text", "media"]
+
+    version    = _cache_version_hash(model_name, seq_len, dataset_name,
+                                     format_name, format_options)
+    cache_path = os.path.join(cfg.data.cache_dir, f"{dataset_name}_{version}")
+
+    if (_verify_cache(cache_path, model_name, seq_len, dataset_name, format_name)
+            and not cfg.data.overwrite_cache):
+        logger.info(
+            f"Tokenizer cache hit → {cache_path} "
+            f"(model={model_name!r}, seq_len={seq_len}, "
+            f"dataset={dataset_name!r}, format={format_name!r})"
+        )
+        return cache_path
+
+    if cfg.data.overwrite_cache and os.path.exists(cache_path):
+        logger.info(f"overwrite_cache=True — removing existing cache: {cache_path}")
+        import shutil
+        shutil.rmtree(cache_path)
+
+    logger.info(
+        f"Tokenizing dataset '{dataset_name}' → {cache_path} "
+        f"(model={model_name!r}, seq_len={seq_len}, "
+        f"format={format_name!r}, compression={cfg.data.tokenize_compression!r})"
+    )
+
+    tokenized_ds = _apply_map_batches(ds, cfg, text_col)
+
+    Path(cache_path).mkdir(parents=True, exist_ok=True)
+    tokenized_ds.write_parquet(
+        cache_path,
+        compression=cfg.data.tokenize_compression,
+        num_rows_per_file=50_000,
+    )
+
+    try:
+        num_rows = tokenized_ds.count()
+    except Exception:
+        num_rows = -1
+
+    _write_metadata(cache_path, model_name, seq_len, dataset_name, num_rows,
+                    format_name, format_options, schema)
+
+    logger.info(f"Tokenization complete → {cache_path}")
+    return cache_path
+
+
+# Load pre-tokenized cache (called from driver before TorchTrainer)
+
+def _add_all_ones_attention_mask(batch: dict) -> dict:
+    batch["attention_mask"] = np.array(
+        [np.ones(len(row), dtype=np.int64) for row in batch["input_ids"]],
+        dtype=object,
+    )
+    return batch
+
+
+def _validate_tokenized_cache(tokenized_path: str, cfg) -> None:
+    """
+    Check a pre-tokenized cache against the training config before using it.
+
+    load_tokenized() reads parquet rows as-is and never re-pads or truncates,
+    so data.seq_len in the training config has no effect on a cache built at
+    a different length: a run configured for seq_len 512 on a 4096 cache
+    trains on 4096-token rows while every log and config claims 512. That is
+    an error. A different model_name is only a warning, since models sharing
+    a tokenizer (e.g. Qwen3-14B / Qwen3-30B-A3B) can legitimately share a
+    cache; a genuinely different tokenizer would produce wrong token ids.
+    """
+    meta_path = os.path.join(tokenized_path, "metadata.json")
+    if not os.path.isfile(meta_path):
+        logger.warning(
+            f"{tokenized_path} has no metadata.json, so its seq_len and tokenizer "
+            "cannot be checked against the config (external cache?)."
+        )
+        return
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not read {meta_path} ({e}); skipping cache validation.")
+        return
+
+    cached_len = meta.get("seq_len")
+    wanted_len = getattr(cfg.data, "seq_len", None)
+    if cached_len is not None and wanted_len is not None and int(cached_len) != int(wanted_len):
+        raise ValueError(
+            f"Tokenized cache {tokenized_path} was built with seq_len={cached_len}, "
+            f"but data.seq_len={wanted_len}. The cache is used as-is (rows are never "
+            f"re-padded), so this run would silently train on {cached_len}-token rows. "
+            f"Re-tokenize at seq_len={wanted_len} and point tokenized_path at the new "
+            f"cache, or set data.seq_len={cached_len}."
+        )
+
+    cached_model = meta.get("model_name")
+    wanted_model = getattr(cfg.model, "name", None)
+    if cached_model and wanted_model and (
+        os.path.realpath(str(cached_model)) != os.path.realpath(str(wanted_model))
+    ):
+        logger.warning(
+            f"Tokenized cache {tokenized_path} was built with the tokenizer of "
+            f"{cached_model!r}, but model.name is {wanted_model!r}. Fine if both share "
+            "a tokenizer; otherwise every token id is wrong for this model."
+        )
+
+
+def load_tokenized(tokenized_path: str, cfg, world_size: int) -> ray.data.Dataset:
+    if not os.path.isdir(tokenized_path):
+        raise FileNotFoundError(
+            f"tokenized_path='{tokenized_path}' does not exist or is not a directory. "
+            "Run: bhaskera-tokenize --config <config.yaml>"
+        )
+
+    parquet_files = list(Path(tokenized_path).glob("*.parquet"))
+    if not parquet_files:
+        raise FileNotFoundError(
+            f"tokenized_path='{tokenized_path}' exists but contains no .parquet files."
+        )
+
+    logger.info(
+        f"Loading pre-tokenized dataset from {tokenized_path} "
+        f"({len(parquet_files)} parquet file(s))"
+    )
+    _validate_tokenized_cache(tokenized_path, cfg)
+
+    ds = ray.data.read_parquet(tokenized_path)
+
+    column_map = getattr(cfg.data, "column_map", None) or {}
+    if column_map:
+        present = {k: v for k, v in column_map.items() if k in ds.schema().names}
+        if present:
+            ds = ds.rename_columns(present)
+            logger.info(f"tokenized_path columns renamed via data.column_map: {present}")
+
+    if "attention_mask" not in ds.schema().names:
+        if not cfg.data.pack_sequences:
+            raise ValueError(
+                f"tokenized_path='{tokenized_path}' has no 'attention_mask' column. "
+                "This cache wasn't produced by bhaskera-tokenize. If it's packed/"
+                "truncated to a fixed length with no padding, set data.pack_sequences: "
+                "true to synthesize an all-ones mask (use data.column_map first if the "
+                "source columns are named differently). Otherwise re-tokenize via "
+                "bhaskera-tokenize so the cache carries a real mask."
+            )
+        logger.warning(
+            f"tokenized_path='{tokenized_path}' has no 'attention_mask' column — "
+            "data.pack_sequences=true, synthesizing all-ones masks."
+        )
+        ds = ds.map_batches(_add_all_ones_attention_mask, batch_format="numpy")
+
+    num_partitions = _compute_num_partitions(cfg, world_size)
+    ds = ds.repartition(num_partitions)
+    logger.info(
+        f"Dataset repartitioned to {num_partitions} partitions "
+        f"for world_size={world_size}"
+    )
+    return ds
+
+
+# Public tokenize_dataset (dispatch)
+
+def tokenize_dataset(
+    ds: ray.data.Dataset,
+    cfg,
+    text_col: str,
+    world_size: int = 1,
+) -> ray.data.Dataset:
+    """
+    If cfg.data.tokenized_path is set, load from cache.
+    Otherwise tokenize on the fly (re-tokenizes every run — use the CLI for prod).
+    """
+    if cfg.data.tokenized_path:
+        return load_tokenized(cfg.data.tokenized_path, cfg, world_size)
+    return _apply_map_batches(ds, cfg, text_col)
+
+
+# Internal: TokenizerActor (now format-aware)
+
+
+def ensure_pad_token(tokenizer, model_name: str, trust_remote_code: bool = False) -> None:
+    """Make sure `tokenizer` has a pad token (padding rows to seq_len needs one).
+
+    Order: the tokenizer's own pad token, then its EOS token (Falcon, GPT-2, Llama-2, Param2), then the
+    pad/EOS id from the model's config.json for tokenizers that declare no special tokens at all
+    (BharatGen Param-1-7B). Padded positions are masked out of the loss, so which id is used does not
+    change training.
+    """
+    if tokenizer.pad_token is not None:
+        return
+    if tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+        return
+    from transformers import AutoConfig
+    cfg = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+    for attr in ("pad_token_id", "eos_token_id"):
+        tid = getattr(cfg, attr, None)
+        if isinstance(tid, (list, tuple)):
+            tid = tid[0] if tid else None
+        if tid is not None:
+            tokenizer.pad_token = tokenizer.convert_ids_to_tokens(int(tid))
+            return
+    raise ValueError(
+        f"{model_name}: the tokenizer has no pad or EOS token and config.json has no pad_token_id or "
+        "eos_token_id. Add a pad token to the tokenizer (special_tokens_map.json) and retry.")
+
+class TokenizerActor:
+    """
+    Loads the tokenizer once per Ray worker, tokenizes many batches.
+
+    When ``format_name`` is set, each row is rendered to a string by the
+    format registry before tokenisation, so the same actor handles raw
+    pretrain text *and* chat data without an extra .map() pass.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        seq_len: int,
+        text_col: str = "text",
+        trust_remote_code: bool = False,
+        format_name: Optional[str] = None,
+        format_options: Optional[dict] = None,
+    ):
+        from transformers import AutoTokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code,
+        )
+        ensure_pad_token(self.tokenizer, model_name, trust_remote_code)
+        self.seq_len        = seq_len
+        self.text_col       = text_col
+        self.format_name    = format_name
+        self.format_options = format_options or {}
+
+        # Pre-import the format registry on this worker so the lookup is hot.
+        if self.format_name:
+            from bhaskera.data.formats import _ensure_builtins_loaded
+            _ensure_builtins_loaded()
+
+    def _render_batch(self, batch: dict) -> list[str]:
+        """Render every row in the batch to a string using the chosen format."""
+        from bhaskera.data.formats import render_with_format
+
+        # Find the batch length from any column.
+        any_col = next(iter(batch.values()))
+        n = len(any_col)
+
+        # Build per-row dicts. batch values arrive as numpy arrays / object arrays.
+        texts: list[str] = []
+        for i in range(n):
+            row = {k: v[i] for k, v in batch.items()}
+            texts.append(
+                render_with_format(
+                    self.format_name, row, self.tokenizer, self.format_options,
+                )
+            )
+        return texts
+
+    def __call__(self, batch: dict) -> dict:
+        if self.format_name:
+            texts = self._render_batch(batch)
+        else:
+            texts = batch[self.text_col]
+            if hasattr(texts, "tolist"):
+                texts = texts.tolist()
+
+        out = self.tokenizer(
+            texts,
+            max_length=self.seq_len,
+            truncation=True,
+            padding="max_length",
+            return_tensors="np",
+        )
+
+        input_ids      = out["input_ids"]
+        attention_mask = out["attention_mask"]
+
+        # CRITICAL: mask pad positions so the LM loss ignores them.
+        labels = input_ids.copy()
+        labels[attention_mask == 0] = -100
+
+        # fix #27: filter empty rows
+        valid_mask = attention_mask.sum(axis=1) > 0
+        if not valid_mask.all():
+            n_bad = int((~valid_mask).sum())
+            logger.warning(
+                f"TokenizerActor: filtered {n_bad} empty row(s) "
+                f"(text was empty or rendered to empty string)"
+            )
+            input_ids      = input_ids[valid_mask]
+            attention_mask = attention_mask[valid_mask]
+            labels         = labels[valid_mask]
+
+        if len(input_ids) == 0:
+            dummy = np.zeros((1, self.seq_len), dtype=np.int32)
+            return {
+                "input_ids":      dummy,
+                "attention_mask": dummy,
+                "labels":         np.full_like(dummy, -100),
+            }
+
+        return {
+            "input_ids":      input_ids,
+            "attention_mask": attention_mask,
+            "labels":         labels,
+        }
+
+
+class _TokenizerActorFactory:
+    """
+    Lazy per-process initialiser for Ray-Data map_batches.
+
+    fix #6: tokenizer is initialised lazily so Ray pickles a tiny stateless
+    object instead of a live tokenizer. Phase 2 just adds format fields.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        seq_len: int,
+        text_col: str,
+        trust_remote_code: bool = False,
+        format_name: Optional[str] = None,
+        format_options: Optional[dict] = None,
+    ):
+        self.model_name        = model_name
+        self.seq_len           = seq_len
+        self.text_col          = text_col
+        self.trust_remote_code = trust_remote_code
+        self.format_name       = format_name
+        self.format_options    = format_options
+        self._actor: Optional[TokenizerActor] = None
+
+    def __call__(self, batch: dict) -> dict:
+        if self._actor is None:
+            self._actor = TokenizerActor(
+                model_name=self.model_name,
+                seq_len=self.seq_len,
+                text_col=self.text_col,
+                trust_remote_code=self.trust_remote_code,
+                format_name=self.format_name,
+                format_options=self.format_options,
+            )
+        return self._actor(batch)
+
+
+def _apply_map_batches(
+    ds: ray.data.Dataset,
+    cfg,
+    text_col: str,
+) -> ray.data.Dataset:
+    """
+    Apply tokenisation via Ray Data map_batches.
+
+    fix #27: batch_size from cfg.data.tokenize_batch_size.
+    Phase 2: format_name / format_options pulled from cfg.data and threaded
+    through the factory.
+    """
+    from bhaskera.data.multimodal import apply_multimodal_tokenizer, is_multimodal_data
+    if is_multimodal_data(cfg):
+        # Image / video / audio rows go through the model's processor (data/multimodal.py).
+        return apply_multimodal_tokenizer(ds, cfg)
+
+    model_name        = cfg.model.name
+    seq_len           = cfg.data.seq_len
+    trust_remote_code = getattr(cfg.model, "trust_remote_code", False)
+    num_workers       = getattr(cfg.data, "num_workers", 4)
+    batch_size        = getattr(cfg.data, "tokenize_batch_size", 128)
+    format_name       = getattr(cfg.data, "format", None)
+    format_options    = dict(getattr(cfg.data, "format_options", None) or {})
+
+    factory = _TokenizerActorFactory(
+        model_name=model_name,
+        seq_len=seq_len,
+        text_col=text_col,
+        trust_remote_code=trust_remote_code,
+        format_name=format_name,
+        format_options=format_options,
+    )
+
+    ds = ds.repartition(max(num_workers * 2, 1))
+
+    return ds.map_batches(
+        factory,
+        batch_format="numpy",
+        batch_size=batch_size,
+        num_cpus=1,
+        concurrency=num_workers,
+    )

@@ -1,0 +1,17 @@
+# Tokenise chat data for a text model (dense or MoE). Run once before training:
+#   bhaskera-tokenize --config configs/text/tokenize.yaml --split both
+# The two printed paths go into data.tokenized_path and data.val_tokenized_path of the training config.
+model:
+  name: /scratch/<project>/<username>/models/Qwen3-14B        # the tokenizer is read from the model folder
+  trust_remote_code: false
+
+data:
+  name: local
+  format: chatml                        # chatml | alpaca | sharegpt
+  train_path: /scratch/<project>/<username>/data/train.jsonl
+  val_path: /scratch/<project>/<username>/data/val.jsonl
+  seq_len: 4096
+  cache_dir: /scratch/<project>/<username>/cache
+  num_workers: 8
+  tokenize_batch_size: 32
+  tokenize_compression: snappy

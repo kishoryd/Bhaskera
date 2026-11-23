@@ -1,0 +1,17 @@
+# Tokenise chat data with audio for an audio-language model (Qwen2.5-Omni thinker). Run once before training:
+#   bhaskera-tokenize --config configs/multimodal/tokenize_audio.yaml --split both
+model:
+  name: /scratch/<project>/<username>/models/Qwen2.5-Omni-3B
+
+data:
+  name: local
+  modalities: [text, audio]
+  train_path: /scratch/<project>/<username>/data/train.jsonl
+  val_path: /scratch/<project>/<username>/data/val.jsonl
+  seq_len: 768
+  audio_max_seconds: 30
+  loss_on: assistant
+  cache_dir: /scratch/<project>/<username>/cache
+  num_workers: 4
+  tokenize_batch_size: 16
+  tokenize_compression: snappy
