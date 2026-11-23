@@ -337,6 +337,17 @@ def _clean(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
 
 
+def resolve_run(store: str | Path, ref: str) -> str:
+    """A run id as it is, or the run behind a registry name (name, name:3, name@champion)."""
+    from .register import RUN_ID, RegisterError, resolve_in_store
+    if RUN_ID.match(ref or "") or list(Path(store).glob(f"*/{ref}/meta.yaml")):
+        return ref
+    try:
+        return resolve_in_store(str(store), ref)
+    except RegisterError as e:
+        raise EvalError(f"no run {ref} in {store}, and {e}")
+
+
 def from_run(store: str | Path, run_id: str) -> tuple[str, Optional[str]]:
     """(base model path, adapter folder) of a training run in an MLflow file store."""
     store = Path(store)
@@ -399,6 +410,7 @@ def cmd_run(args) -> int:
         raise EvalError("give at least one task with --tasks")
     model, adapter = args.model, args.adapter
     if args.run:
+        args.run = resolve_run(args.store, args.run)        # the result is stored with this run, so it must be an id, not a registry name
         m, a = from_run(args.store, args.run)
         model, adapter = model or m, adapter or a
     if not model:
