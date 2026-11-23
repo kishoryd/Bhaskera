@@ -287,9 +287,10 @@ def cmd_review(args) -> int:
 
 
 _TASK_TEMPLATE = """# Your own test, written by: python -m bhaskera.launcher.evaluate init-task
-# Each line of the data file has a question and an answer; the model passes an example when its first line matches the answer
-# (ignoring case and punctuation). Change `metric_list` or `output_type` for other kinds of tests (the harness's documentation
-# describes them), then run:  ./submit.sh eval --run <run id> --tasks {name} --save-samples
+# Each line of the data file has a question and an answer. The model is asked "Question: ... Answer:" and passes an example when the
+# first line of its reply contains the expected answer (ignoring case and punctuation). The check is in {name}_utils.py next to this
+# file: change it, or `metric_list`, for other kinds of tests (the harness's documentation describes them). Run it with:
+#   ./submit.sh eval --run <run id> --tasks {name} --save-samples
 task: {name}
 dataset_path: json
 dataset_kwargs:
@@ -297,20 +298,31 @@ dataset_kwargs:
     test: {data}
 test_split: test
 output_type: generate_until
-doc_to_text: "{{{{{question}}}}}"
+doc_to_text: "Question: {{{{{question}}}}}\\nAnswer:"
 doc_to_target: "{{{{{answer}}}}}"
+process_results: !function {name}_utils.process_results
 generation_kwargs:
   until: ["\\n"]
   do_sample: false
-  max_gen_toks: 128
+  max_gen_toks: 64
 metric_list:
-  - metric: exact_match
+  - metric: contains
     aggregation: mean
     higher_is_better: true
-    ignore_case: true
-    ignore_punctuation: true
 metadata:
   version: 1.0
+"""
+
+_UTILS_TEMPLATE = """import re
+
+
+def _words(text):
+    return " ".join(re.sub(r"[^a-z0-9 ]", "", str(text).lower()).split())
+
+
+def process_results(doc, results):
+    got, want = _words(results[0]), _words(doc["{answer}"])
+    return {{"contains": float(bool(want) and want in got)}}
 """
 
 
@@ -329,12 +341,24 @@ def cmd_init_task(args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{args.name}.yaml"
     path.write_text(_TASK_TEMPLATE.format(name=args.name, data=data, question=args.question_field, answer=args.answer_field))
+    (out / f"{args.name}_utils.py").write_text(_UTILS_TEMPLATE.format(answer=args.answer_field))
     print(f"wrote {path}\nrun it with:  ./submit.sh eval --run <run id> --tasks {args.name} --save-samples")
     return 0
 
 
 def _clean(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+
+
+def resolve_run(store: str | Path, ref: str) -> str:
+    """A run id as it is, or the run behind a registry name (name, name:3, name@champion)."""
+    from .register import RUN_ID, RegisterError, resolve_in_store
+    if RUN_ID.match(ref or "") or list(Path(store).glob(f"*/{ref}/meta.yaml")):
+        return ref
+    try:
+        return resolve_in_store(str(store), ref)
+    except RegisterError as e:
+        raise EvalError(f"no run {ref} in {store}, and {e}")
 
 
 def from_run(store: str | Path, run_id: str) -> tuple[str, Optional[str]]:
@@ -399,6 +423,7 @@ def cmd_run(args) -> int:
         raise EvalError("give at least one task with --tasks")
     model, adapter = args.model, args.adapter
     if args.run:
+        args.run = resolve_run(args.store, args.run)        # the result is stored with this run, so it must be an id, not a registry name
         m, a = from_run(args.store, args.run)
         model, adapter = model or m, adapter or a
     if not model:

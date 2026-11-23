@@ -141,3 +141,28 @@ def test_a_registered_version_carries_a_hand_off_note():
         assert part in text, part
     assert "Results:" in register.model_card(NS(info=NS(run_name=""), data=NS(params={}, metrics={})), RUN) and "not evaluated yet" in register.model_card(NS(info=NS(run_name=""), data=NS(params={}, metrics={})), RUN)
     assert register.listing(c)[0]["versions"][0]["description"] == text
+
+
+def test_a_benchmark_by_registry_name_is_stored_with_the_run_id(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    run = tmp_path / "1" / RUN
+    (run / "params").mkdir(parents=True)
+    (run / "artifacts" / "adapter").mkdir(parents=True)
+    (run / "meta.yaml").write_text("run_name: x\n")
+    (run / "params" / "model.name").write_text("/models/Qwen3-14B")
+    (run / "artifacts" / "adapter" / "adapter_config.json").write_text("{}")
+    c = FakeClient()
+    register.add(c, RUN, "my-model", alias="champion")
+    monkeypatch.setattr(register, "make_client", lambda store: c)
+    stored = {}
+    monkeypatch.setattr(evaluate, "tasks_dir", lambda given=None: None)
+    monkeypatch.setattr(evaluate, "check_tasks", lambda *a, **k: None)
+    monkeypatch.setattr(evaluate, "load_harness", lambda: (None, None))
+    monkeypatch.setattr(evaluate, "evaluate_pair", lambda *a, **k: {"comparison": []})
+    monkeypatch.setattr(evaluate, "table", lambda rows: "")
+    monkeypatch.setattr(evaluate, "log_to_mlflow", lambda result, store, run_id, **k: stored.setdefault("run", run_id) or "x")
+    args = SimpleNamespace(tasks="a", model=None, adapter=None, run="my-model@champion", store=str(tmp_path), skip_base=False, tasks_dir=None, save_samples=False,
+                           samples_dir=None, out=str(tmp_path / "out.json"), limit=None, num_fewshot=None, batch_size="auto", dtype="bfloat16", four_bit=False,
+                           device=None, mlflow=False)
+    assert evaluate.cmd_run(args) == 0
+    assert stored["run"] == RUN
