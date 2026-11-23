@@ -46,8 +46,8 @@ rows that are too long.
 ## Recipes and starter configs
 
 `slurm/recipes/` has eleven tested recipes for nine models (Qwen3, Llama 3.3, Mistral Large, BharatGen Param), each with
-its measured speed in the header. For a model that is not there, copy a starter from `configs/`: one for each parallelism,
-for text and for multimodal, plus a tokenizer config for each model type. `configs/config.yaml` lists every option. A key
+its measured speed in the header. For a model that is not there, copy a starter from `configs/`: DDP, FSDP2, HSDP and pipeline for text models, and image, video
+and audio for multimodal ones, each with its tokenizer config. `configs/config.yaml` lists every option. A key
 that does nothing, like a typo, is reported with the closest real name.
 
 ## Parallelism
@@ -123,8 +123,15 @@ read-only through the home page. [SECURITY.md](SECURITY.md) says what is protect
 - DDP needs the whole model on each GPU. Qwen3-235B does not fit with QLoRA.
 - gpt-oss (MXFP4) cannot be trained; `scripts/convert_mxfp4_to_bf16.py` converts it for A100s.
 
-## Where things are
+## What you control, and what Bhaskera handles
 
-`src/bhaskera/` is the package. `slurm/` has the job scripts, recipes, cluster profiles and the install kit. `configs/` has the
-starters. `scripts/` has a few tools: multimodal job submission and sample data, adapter export, and the MXFP4 converter. The
-history is in [CHANGELOG.md](CHANGELOG.md).
+**Yours to edit:** the recipe or config for a run (`slurm/recipes/`, `configs/`), the cluster profile (`slurm/clusters/`), the
+environment variables named in `src/bhaskera/launcher/README.md`, and your data. Each config key is described in the README of the
+folder it belongs to: `data/`, `models/`, `distributed/`, `trainer/` and `utils/` under `src/bhaskera/`.
+
+**Handled for you:** starting Ray on the nodes Slurm gives you, finding the layers LoRA and the parallel strategies need, sharding,
+checkpoint writing and resuming, node checks, choosing the partition, and the home page. These are in `src/bhaskera/`, and you do not
+need to touch them.
+
+`scripts/` has a few tools: multimodal job submission and sample data, adapter export, and the MXFP4 converter. The history is in
+[CHANGELOG.md](CHANGELOG.md).

@@ -62,7 +62,7 @@ checkpoint:
 logging:
   tracker: "mlflow"
   project: "bhaskera-multimodal"
-  run_name: "qwen3_vl_2b_pokemon_fsdp_5node"
+  run_name: "qwen3_vl_2b_image"
   mlflow_tracking_uri: ""
 monitoring:
   dashboard: false

@@ -1,0 +1,76 @@
+# Multimodal, FSDP2: audio. LoRA on Qwen2.5-Omni-3B (the thinker) with speech clips.
+# Tokenise first (configs/multimodal/tokenize_audio.yaml), put the two printed paths below, replace <project>/<username>, then:
+#   ./submit.sh configs/multimodal/audio.yaml <nodes> <hours>
+
+model:
+  name: "/scratch/<project>/<username>/models/Qwen2.5-Omni-3B"
+  kind: "multimodal"           # auto would also pick it (the config has an encoder)
+  dtype: "bfloat16"
+  attn_impl: "flash_attention_2"
+  # Off: the compute nodes have no C headers (stdlib.h), so Triton cannot build launchers for
+  # kernels missing from ~/.triton/cache, and Qwen3-VL needs new ones. Text configs are unaffected.
+  use_liger_kernel: false
+  freeze_encoders: ["all"]
+data:
+  name: "local"
+  modalities: ["text", "audio"]
+  seq_len: 768
+  audio_max_seconds: 30
+  loss_on: "assistant"
+  tokenized_path: "TOKENIZED_TRAIN"
+  val_tokenized_path: "TOKENIZED_VAL"
+  num_workers: 8
+  image_workers: 8             # threads loading media per GPU worker
+  image_prefetch_batches: 4
+  local_shuffle_buffer_multiplier: 10
+  runtime_packing: false       # text-only feature
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["auto"]     # language-model linears; encoders excluded
+  encoders: []                 # e.g. [vision] to also adapt the vision tower
+training:
+  batch_size: 2
+  grad_accum: 1
+  lr: 0.0001
+  weight_decay: 0.0
+  max_steps: 40
+  num_epochs: 100              # max_steps is the limit
+  warmup_steps: 5
+  max_grad_norm: 1.0
+  grad_clip: 1.0
+  max_grad_skip_steps: 100
+  eval_steps: 10
+  eval_batch_size: 2
+  seed: 42
+  distributed:
+    strategy: "fsdp"
+    fsdp:
+      sharding_strategy: "FULL_SHARD"
+      param_dtype: "bfloat16"
+      reduce_dtype: "float32"
+      buffer_dtype: "bfloat16"
+      activation_checkpointing: true
+      shard_encoder_blocks: true
+      checkpoint_encoders: false
+      cpu_offload: false
+checkpoint:
+  enabled: false
+  save_dir: "/scratch/<project>/<username>/checkpoints/qwen25_omni_3b"
+logging:
+  tracker: "mlflow"
+  project: "bhaskera-multimodal"
+  run_name: "qwen25_omni_3b_audio"
+  mlflow_tracking_uri: ""
+monitoring:
+  dashboard: false
+  metrics:
+    enabled: true
+    system_every_n_steps: 5
+    cuda_every_n_steps: 5
+    throughput: true
+    peak_tflops_per_gpu: 312.0
+    throughput_window: 5
+    throughput_warmup: 3

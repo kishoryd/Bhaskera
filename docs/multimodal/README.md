@@ -74,15 +74,17 @@ PYTHONPATH=src python -m bhaskera.launcher.tokenize --config configs/multimodal/
 sbatch scripts/submit_multimodal.sh configs/multimodal/fsdp.yaml
 ```
 
-`submit_multimodal.sh` defaults to 5 nodes on `gpu-small` (that partition's QOS minimum:
-5 nodes, 10 GPUs, 240 CPUs). `BHASKERA_MM_GPU_TEST=1` runs the 2-GPU FSDP2 check first.
+`submit_multimodal.sh` defaults to 5 nodes on `gpu-small`, the minimum that partition accepts on PARAM Rudra; change it with `sbatch --nodes=...`.
 
-| Config | Model | Data |
-|---|---|---|
-| `configs/multimodal/fsdp.yaml` (also `ddp.yaml`, `hsdp.yaml`) | Qwen3-VL-2B | image |
+Starters, one per input type, in `configs/multimodal/`:
 
-For video, set `data.modalities: [text, image, video]`; for audio, use Qwen2.5-Omni with `[text, audio]`. The tokenize
-configs for both are `configs/multimodal/tokenize_vision.yaml` and `tokenize_audio.yaml`.
+| Input | Training config | Tokenize config | Model |
+|---|---|---|---|
+| Image | `fsdp.yaml` (also `ddp.yaml`, `hsdp.yaml`) | `tokenize_vision.yaml` | Qwen3-VL-2B |
+| Video | `video.yaml` | `tokenize_vision.yaml` | Qwen3-VL-2B |
+| Audio | `audio.yaml` | `tokenize_audio.yaml` | Qwen2.5-Omni-3B |
+
+A row may mix types: list them in `data.modalities`.
 
 ## 4. How it works
 
@@ -120,40 +122,26 @@ tests check that the loss is unchanged to 1e-4.
 language model only: encoder parameters run once per image or clip, not per token, so they
 are left out of the per-token FLOPs (a slight under-estimate).
 
-## 5. Measured (PARAM Rudra, 5 nodes x 2 A100 80GB, `gpu-small`, 2026-11-22)
+## 5. Measured (PARAM Rudra, 5 nodes × 2 A100 80 GB)
 
-LoRA r=16 on the language model, encoders frozen, FSDP2 FULL_SHARD, flash-attention 2,
-Liger off (see below). Eval accuracy is next-token accuracy on the assistant tokens of the
-held-out split.
+LoRA r=16 on the language model, encoders frozen, FSDP2, flash-attention 2, Liger off. Eval accuracy is next-token accuracy on the
+assistant tokens of the held-out split.
 
-| Run (job) | Data | Steps | Train loss | Eval loss | Eval acc | Step time | Mem / GPU |
-|---|---|---|---|---|---|---|---|
-| Qwen3-VL-2B, image (130401) | Pokemon 750 / 83 | 60 | 5.59 → ~0.7 | 1.22 → 0.909 | 70.4% → 76.2% | 1.85 s | 12.5 GiB |
-| Qwen3-VL-2B, video (130404) | moving square 540 / 60 | 60 | 1.13 → 0.000 | 0.0002 → 0.0000 | 100% | 1.6 s | 5.6 GiB |
-| Qwen2.5-Omni-3B, audio (130407) | LibriSpeech 66 / 7 | 40 | 0.67 → 0.00 | 0.198 → 0.168 (step 20) → 0.185 | 96.2% → 97.1% | 3.0 s | 5.6 GiB |
-| Qwen3-VL-8B, image (130408) | Pokemon 750 / 83 | 60 | queued: `gpu-small` had no free 5-node slot (estimated start 2026-11-23 04:40) | | | | |
+| Run | Data | Steps | Eval loss | Eval accuracy | Step time | Memory per GPU |
+|---|---|---|---|---|---|---|
+| Qwen3-VL-2B, image | Pokemon, 750 / 83 | 60 | 1.22 → 0.909 | 70.4% → 76.2% | 1.85 s | 12.5 GiB |
+| Qwen3-VL-2B, video | moving square, 540 / 60 | 60 | 0.0002 → 0.0000 | 100% | 1.6 s | 5.6 GiB |
+| Qwen2.5-Omni-3B, audio | LibriSpeech, 66 / 7 | 40 | 0.198 → 0.185 | 96.2% → 97.1% | 3.0 s | 5.6 GiB |
 
-- Video: every clip has the same prompt and one of 16 colour x direction answers, so 100%
-  held-out accuracy is only reachable by reading the frames. A pipeline check, not a quality
-  benchmark.
-- Audio: 66 training clips, so the model memorises them (train loss ~0); eval loss is best at
-  step 20.
-- Media loading keeps up: data wait is 0 s except the first batch of each epoch (2-5 s).
-- Each run, including Ray start-up, model load and 6 evaluations, took under 7 minutes.
+The video set has the same prompt for every clip and 16 possible answers, so 100% is reachable only by reading the frames: it checks the
+pipeline, not quality. The audio set is tiny, so the model memorises it. Media loading keeps up: data wait is zero except for the first
+batch of each epoch. Each run, with Ray start-up, model load and six evaluations, took under seven minutes.
 
-**Problems found on the cluster and fixed**
+Liger is off for these models because compute nodes without C headers cannot build Triton launchers for kernels missing from the cache.
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| All ranks hung in the weight broadcast before step 1 | Qwen3-VL-2B ties lm_head to the embeddings; rank 0 (real load) was tied, ranks > 0 (meta build) were not, so they held one tensor more | `tie_weights()` after the meta build (`models/loader.py`); a cross-rank tensor check now fails at once instead of hanging (`distributed/fsdp.py`) |
-| `stdlib.h: No such file or directory` in the first backward | compute nodes have no C headers, so Triton cannot build launchers for Liger kernels not already in `~/.triton/cache` | `use_liger_kernel: false` in the multimodal configs |
-| `__init__() got an unexpected keyword argument 'trust_remote_code'` on ranks > 0 (Omni) | concrete classes' `_from_config` forwards extra kwargs to `__init__` | drop the argument for concrete classes |
+## 6. Limits
 
-## 6. Not done yet
-
-- Liger kernels for multimodal runs (needs C headers on the compute nodes, or a pre-built
-  Triton cache).
-
+- Liger kernels (they need C headers on the compute nodes, or a pre-built Triton cache).
 - Packing of multimodal rows (3-D position ids), pipeline strategy, QLoRA.
 - Vision-tower LoRA is wired (`lora.encoders`) but not benchmarked.
 - MoE variants (Qwen3-VL-MoE, Qwen3-Omni-MoE) load through the same code but are untested.

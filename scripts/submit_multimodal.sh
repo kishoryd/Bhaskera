@@ -16,7 +16,6 @@
 #SBATCH --exclusive
 #SBATCH --cpus-per-task=48
 #SBATCH --mem=170G
-#SBATCH --exclude=cbgpu0003,cbgpu0009,cbgpu0017,cbgpu0024,cbgpu0026,cbgpu0037,cbgpu0059,cbgpu0071,cbgpu0074,cbgpu0081,cbgpu0085,cbgpu0091,cbgpu0100,cbgpu0101,cbgpu0109,cbgpu0110,cbgpu0111,cbgpu0129,cbgpu0133,cbgpu0135,cbgpu0138,cbgpu0146,cbgpu0147,cbgpu0149,cbgpu0157,cbgpu0168,cbgpu0192,cbgpu0203,cbgpu0214,cbgpu0294,cbgpu0295,cbgpu0299,cbgpu0317,cbgpu0086,cbgpu0264
 #SBATCH --partition=gpu-small
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/bhaskera-mm_%j_%N.out

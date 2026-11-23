@@ -1,19 +1,31 @@
-# configs/
+# configs
 
-Starter configs. Each file is complete and loads with `bhaskera.config.load_config(path)`: copy one, replace the paths,
-and run it.
+Starters to copy. Each file is a complete config; replace the `<project>/<username>` paths and run it with `./submit.sh <file> <nodes> <hours>`. Everything in here is yours to edit.
 
-| | Text | Multimodal (image, video, audio) |
+## Text models
+
+| Parallelism | Config |
+|---|---|
+| DDP | `text/ddp.yaml` |
+| FSDP2 | `text/fsdp.yaml` |
+| HSDP | `text/hsdp.yaml` |
+| Pipeline | `text/pipeline.yaml` |
+| Tokenise first | `text/tokenize.yaml` |
+
+## Multimodal models
+
+| Input | Config | Tokenise first |
 |---|---|---|
-| DDP | `text/ddp.yaml` | `multimodal/ddp.yaml` |
-| FSDP2 | `text/fsdp.yaml` | `multimodal/fsdp.yaml` |
-| HSDP | `text/hsdp.yaml` | `multimodal/hsdp.yaml` |
-| Pipeline | `text/pipeline.yaml` | not supported for multimodal models |
-| Tokenise first | `text/tokenize.yaml` | `multimodal/tokenize_vision.yaml` (image, video), `multimodal/tokenize_audio.yaml` |
+| Image | `multimodal/fsdp.yaml`, `ddp.yaml`, `hsdp.yaml` | `multimodal/tokenize_vision.yaml` |
+| Video | `multimodal/video.yaml` | `multimodal/tokenize_vision.yaml` |
+| Audio | `multimodal/audio.yaml` | `multimodal/tokenize_audio.yaml` |
 
-`config.yaml` lists every option with its default. `inference_turboquant.yaml` generates text with a quantised KV cache.
+Pipeline is not available for multimodal models. A row can mix inputs: list them in `data.modalities`.
 
-Ready-to-run recipes for the supported models are in `slurm/recipes/`.
+## Everything else
 
-A key that does nothing (a typo, a misplaced option) is reported with the closest real name when the config is loaded.
-The meaning of each key is in `src/bhaskera/config.py`.
+- `config.yaml` lists every option with its default.
+- `inference_turboquant.yaml` generates text with a quantised KV cache.
+- Tested recipes for the supported models are in `slurm/recipes/`.
+
+A key that does nothing, like a typo, is reported with the closest real name when the config loads. The meaning of each key is in `src/bhaskera/config.py`.
