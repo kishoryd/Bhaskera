@@ -210,3 +210,45 @@ def test_register_refuses_bad_fields(kit, form):
     with pytest.raises(launch.LaunchError):
         make(kit, fake).launch({"action": "start", **form})
     assert fake.calls == []
+
+
+JOBS = [{"id": "501", "name": "my-train", "state": "RUNNING", "comment": "bhaskera"},
+        {"id": "502", "name": "bhaskera-serve", "state": "RUNNING", "comment": "bhaskera-serve"},
+        {"id": "503", "name": "bhaskera-eval", "state": "PENDING", "comment": "bhaskera-eval"},
+        {"id": "900", "name": "someone-elses", "state": "RUNNING", "comment": ""},
+        {"id": "901", "name": "other-tool", "state": "RUNNING", "comment": "nextflow"}]
+
+
+def make_with_jobs(kit, fake=None):
+    return launch.Launcher(kit, runs=lambda: [], env={"BHASKERA_DIR": "/x", "SLURM_ACCOUNT": "a"}, run=fake or Fake(), jobs=lambda: JOBS)
+
+
+@pytest.mark.parametrize("job", ["501", "502", "503"])
+def test_own_bhaskera_jobs_can_be_cancelled(kit, job):
+    fake = Fake(out="")
+    out = make_with_jobs(kit, fake).launch({"action": "start", "kind": "cancel", "job": job})
+    assert fake.calls[-1][0] == ["scancel", job] and out["ok"] and out["job"] == job and not out["dry"]
+
+
+def test_cancel_check_changes_nothing(kit):
+    fake = Fake()
+    out = make_with_jobs(kit, fake).launch({"action": "check", "kind": "cancel", "job": "501"})
+    assert out["ok"] and out["dry"] and "my-train" in out["output"] and fake.calls == []
+
+
+@pytest.mark.parametrize("job", ["900", "901", "999", "501; scancel 900", "-u dlapp", "", None, 501, "5" * 20])
+def test_nothing_else_can_be_cancelled(kit, job):
+    fake = Fake()
+    with pytest.raises(launch.LaunchError):
+        make_with_jobs(kit, fake).launch({"action": "start", "kind": "cancel", "job": job})
+    assert fake.calls == []
+
+
+def test_cancel_without_a_job_list_is_refused(kit):
+    with pytest.raises(launch.LaunchError):
+        make(kit).launch({"action": "start", "kind": "cancel", "job": "501"})
+
+
+def test_scancel_failing_is_reported(kit):
+    out = make_with_jobs(kit, Fake(out="scancel: error: Invalid job id", code=1)).launch({"action": "start", "kind": "cancel", "job": "501"})
+    assert not out["ok"] and "Invalid job id" in out["output"]

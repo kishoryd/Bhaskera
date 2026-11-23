@@ -250,6 +250,7 @@ dialog::backdrop{background:rgba(31,28,23,.45)}
             <label class="muted" title="Higher gives more varied answers">Creativity <input id="chat-temp" type="range" min="0" max="1.5" step="0.1" value="0.7"></label>
             <label class="muted">Longest answer <select id="chat-max" aria-label="Longest answer in tokens"><option>128</option><option selected>256</option><option>512</option><option>1024</option></select></label></div></details>
           <button class="btn small" id="chat-clear" type="button">Clear</button>
+          <button class="btn small" id="chat-close" type="button" title="Stops the chat server and frees its GPU node">Close server</button>
         </div>
       </div>
       <div class="msgs" id="chat-msgs" aria-live="polite"></div>
@@ -398,17 +399,23 @@ function nodesHtml(nodes,id){
     return '<div class="node"><div class="h"><b>'+esc(n.host)+'</b><span class="muted">'+(n.alive?"up":"down")+'</span></div>'+gpus+'</div>';
   }).join("")+'</div></details>';
 }
+var armed={id:null,until:0};
+function cancelBtn(j,label,cls){
+  var on=armed.id===String(j.id)&&Date.now()<armed.until;
+  return '<button class="btn '+(cls||"")+(on?" confirm":"")+'" data-cancel="'+esc(j.id)+'" data-label="'+esc(label)+'" title="Stops this job on the cluster">'+(on?"Click again to "+label.toLowerCase():label)+'</button>';
+}
 function serviceCard(j){
   var running=(j.state==="RUNNING"||j.state==="COMPLETING"), s=j.serve||{}, serve=j.kind==="serve";
   var h='<article class="card job" data-job-card="'+esc(j.id)+'"><div class="job-head">'+badge(j.state)+'<span class="job-name">'+esc(j.name)+'</span><span class="muted mono">#'+esc(j.id)+'</span>'+
         '<div class="meta"><span class="chip">'+(serve?"chat server":"benchmark")+'</span><span class="chip">'+esc(j.partition)+'</span>'+
         (!running&&j.reason?'<span class="chip">'+esc(j.reason)+'</span>':"")+'</div></div>';
-  if(!running) return h+'</article>';
+  if(!running) return h+'<div class="actions" style="margin-top:12px">'+cancelBtn(j,"Cancel job")+'</div></article>';
   var used=j.limit_s?Math.min(100,Math.round(100*j.elapsed_s/j.limit_s)):null;
   h+='<div class="progress"><div class="row"><span>'+(serve?(s.ready?'<b>Ready</b> · '+esc(s.model||"")+(s.adapter?' + adapter '+esc(s.adapter):''):'loading the model (a few minutes)'):'running the benchmarks')+'</span><span>'+dur(j.elapsed_s)+(j.limit_s?' of '+dur(j.limit_s):'')+'</span></div>'+
      (used!=null?'<div class="bar thin'+(used>=85?" hot":"")+'"><i style="width:'+used+'%"></i></div>':"")+'</div><div class="actions">'+
      (serve&&s.ready?'<a class="btn primary" href="#chat">'+ICON.flask+'Open the chat</a>':"")+
-     '<button class="btn" data-log="'+esc(j.id)+'" data-name="'+esc(j.name)+'">'+ICON.log+'Logs</button></div></article>';
+     '<button class="btn" data-log="'+esc(j.id)+'" data-name="'+esc(j.name)+'">'+ICON.log+'Logs</button>'+
+     cancelBtn(j,serve?"Close server":"Cancel job")+'</div></article>';
   return h;
 }
 function jobCard(j){
@@ -440,14 +447,14 @@ function jobCard(j){
     h+=nodesHtml(j.nodes,j.id);
   }
   if(!running){
-    return h+'</article>';
+    return h+'<div class="actions" style="margin-top:12px">'+cancelBtn(j,"Cancel job")+'</div></article>';
   }
   h+='<div class="actions">';
   if(running){
     h+=link(j.linked?base:null,"Ray Dashboard","ray",true)+link(j.linked?charts:null,"GPU charts","chart")+
        '<button class="btn" data-log="'+esc(j.id)+'" data-name="'+esc(j.name)+'">'+ICON.log+'Logs</button>';
   }
-  h+=link(j.run?runUrl(j.run):(running?MLFLOW:null),j.run?"MLflow run":"MLflow","flask")+'</div></article>';
+  h+=link(j.run?runUrl(j.run):(running?MLFLOW:null),j.run?"MLflow run":"MLflow","flask")+cancelBtn(j,"Cancel job")+'</div></article>';
   return h;
 }
 function emptyJobs(){
@@ -691,6 +698,22 @@ $("#jobs").addEventListener("toggle", function(e){ var d=e.target; if(d.classLis
 $("#runs").addEventListener("click", function(e){
   var s=e.target.closest("[data-start]"); if(s) openStart(s.getAttribute("data-start"), s.getAttribute("data-run"));
 });
+
+/* ---- cancel a job, close a chat server ---- */
+function doCancel(id,label,btn){
+  var now=Date.now();
+  if(!(armed.id===String(id)&&now<armed.until)){            // the first click only arms the button
+    armed={id:String(id),until:now+5000}; if(btn){ btn.classList.add("confirm"); btn.textContent="Click again to "+label.toLowerCase(); }
+    setTimeout(function(){ if(armed.id===String(id)&&Date.now()>=armed.until){ armed={id:null,until:0}; refresh(); } },5200); return;
+  }
+  armed={id:null,until:0}; if(btn){ btn.disabled=true; btn.textContent="Cancelling …"; }
+  api("/api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify({action:"start",kind:"cancel",job:String(id)})}).then(function(r){
+    if(r.j.error){ toast(r.j.error); if(btn){ btn.disabled=false; btn.textContent=label; } return; }
+    toast(r.j.ok?("Job #"+id+" cancelled. It disappears from this page in a few seconds."):("Could not cancel job #"+id+": "+r.j.output)); refresh();
+  }).catch(function(){ toast("The page could not reach the hub."); if(btn){ btn.disabled=false; btn.textContent=label; } });
+}
+$("#jobs").addEventListener("click", function(e){ var b=e.target.closest("[data-cancel]"); if(b) doCancel(b.getAttribute("data-cancel"),b.getAttribute("data-label")||"Cancel job",b); });
+$("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(chat.job,"Close server",$("#chat-close")); });
 
 /* ---- start a job ---- */
 var L = {opts:null, kind:"train", run:"", rinfo:null, step:0, regname:"", alias:"champion", nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};

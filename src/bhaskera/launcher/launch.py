@@ -28,7 +28,7 @@ TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
 RECIPE_FILE = re.compile(r"^[A-Za-z0-9_.\-]{1,100}\.ya?ml$")
 SUBMITTED = re.compile(r"submitted job (\d+)")
 PLACEHOLDER = re.compile(r"<project>|<username>|REPLACE_")
-KINDS = ("train", "serve", "eval", "resume", "register")
+KINDS = ("train", "serve", "eval", "resume", "register", "cancel")
 MAX_NODES, MAX_HOURS, MAX_LIMIT = 1024, 720, 100000
 STARTS_PER_HOUR = 12
 MIN_GAP_S = 2.0
@@ -111,8 +111,9 @@ def _int(value, name: str, low: int, high: int, required: bool = True) -> Option
 class Launcher:
     def __init__(self, kit: Optional[Path], *, runs: Callable[[], list[dict]], env: Optional[dict] = None,
                  run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run, clock: Callable[[], float] = time.time,
-                 store: Optional[str] = None, describe: Optional[Callable[[str, str], dict]] = None):
-        self.kit, self._store, self._describe = kit, store, describe
+                 store: Optional[str] = None, describe: Optional[Callable[[str, str], dict]] = None,
+                 jobs: Optional[Callable[[], list[dict]]] = None):
+        self.kit, self._store, self._describe, self._jobs = kit, store, describe, jobs
         self._runs, self._env, self._run, self._clock = runs, dict(os.environ if env is None else env), run, clock
         self._lock = threading.Lock()
         self._starts: list[float] = []
@@ -185,6 +186,24 @@ class Launcher:
         except subprocess.TimeoutExpired:
             return {"ok": False, "job": None, "dry": False, "output": "registering took too long; try again"}
         return {"ok": done.returncode == 0, "job": None, "dry": False, "output": ((done.stdout or "") + (done.stderr or "")).strip()[-2000:]}
+
+    def _cancel(self, form: dict, dry: bool) -> dict:
+        """Cancel one of the user's own Bhaskera jobs (training, chat server, benchmark): `scancel <job>`. Never another job."""
+        job = form.get("job")
+        if not isinstance(job, str) or not re.fullmatch(r"\d{1,12}", job):
+            raise LaunchError("pick a job from the list")
+        mine = {str(j["id"]): j for j in (self._jobs() if self._jobs else []) if str(j.get("comment", "")).startswith("bhaskera")}
+        if job not in mine:
+            raise LaunchError("that is not one of your running Bhaskera jobs, or it has already ended")
+        if dry:
+            return {"ok": True, "job": job, "dry": True, "output": f"Job {job} ({mine[job].get('name', '')}) would be cancelled"}
+        try:
+            done = self._run(["scancel", job], cwd=str(self.kit), env=dict(self._env), capture_output=True, text=True, timeout=30,
+                             stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as e:
+            return {"ok": False, "job": job, "dry": False, "output": f"could not run scancel: {e}"}
+        return {"ok": done.returncode == 0, "job": job, "dry": False,
+                "output": ((done.stdout or "") + (done.stderr or "")).strip()[-1000:] or f"job {job} cancelled"}
 
     def _stopped(self) -> list[dict]:
         """Runs that stopped half way (failed, killed, or no longer writing) and know their Slurm job."""
@@ -262,6 +281,8 @@ class Launcher:
         dry = form.get("action") == "check"
         if form.get("kind") == "register":
             return self._register(form, dry)
+        if form.get("kind") == "cancel":
+            return self._cancel(form, dry)
         args, extra = self.build(form)
         if not self._lock.acquire(blocking=False):
             raise LaunchError("another start is still running; wait for it to finish")

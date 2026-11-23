@@ -82,7 +82,8 @@ show both ways side by side, including chatting from the terminal. `BHASKERA_HUB
 
 To test a model on your own questions, `python -m bhaskera.launcher.evaluate init-task` turns a question/answer JSONL file into a test,
 `./submit.sh eval ... --tasks <your test> --save-samples` runs it, and `evaluate review` shows what tuning fixed, what it broke and what
-is still wrong, with a file of the examples to correct in your training data.
+is still wrong, with a file of the examples to correct in your training data. A job can be cancelled, and a chat server closed, from the
+page (two clicks) or with `scancel`.
 
 A trained model can be saved in the MLflow model registry under a name and version (`python -m bhaskera.launcher.register add`, or the
 **Register a model** card), with an alias such as `champion`; chat and benchmark accept `name@alias` wherever a run id goes.

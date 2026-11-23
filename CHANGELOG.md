@@ -32,6 +32,7 @@ clusters with Ray.
 ### Home page and results
 - `bhaskera-dashboard ray`: one web page with your jobs (state, progress, live loss, MFU and GPU load per node), a log window, links to
   the Ray Dashboard, GPU charts and MLflow, and your recent runs.
+- Cancel a job, or close a chat server, from the page (two clicks; only your own Bhaskera jobs).
 - Start a training job, a chat server or a benchmark from the page. *Check first* runs the limits and preflight without submitting.
 - Chat with a tuned model, the base model, or both side by side, from the same weights (`./submit.sh serve`).
 - Benchmark a tuned model against its base with the lm-evaluation-harness (`./submit.sh eval`); results are stored with the run.

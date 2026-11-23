@@ -184,3 +184,36 @@ def test_hub_jobs_are_the_running_bhaskera_jobs_or_the_one_asked_for():
     assert [j["id"] for j in dashboard.hub_jobs(jobs)] == ["2", "5"]
     assert [j["id"] for j in dashboard.hub_jobs(jobs, "4")] == ["4"]       # any running job, by id
     assert dashboard.hub_jobs(jobs, "3") == []                              # queued: nothing to link yet
+
+
+def test_mlflow_page_state():
+    assert dashboard.mlflow_page_state(1, fetch=lambda p: (200, b"<html>MLflow</html>")) is True
+    assert dashboard.mlflow_page_state(1, fetch=lambda p: (200, b"Unable to display MLflow UI - landing page (index.html) not found.")) is False
+    assert dashboard.mlflow_page_state(1, fetch=lambda p: (500, b"error")) is False
+    assert dashboard.mlflow_page_state(1, fetch=lambda p: (_ for _ in ()).throw(OSError("refused"))) is None
+
+
+def test_a_broken_mlflow_on_the_port_is_left_alone_and_a_new_one_starts_elsewhere(monkeypatch, tmp_path, capsys):
+    started = []
+    monkeypatch.setattr(dashboard, "_read_pid", lambda: None)
+    monkeypatch.setattr(dashboard, "close_orphan_runs", lambda cfg: 0)
+    monkeypatch.setattr(dashboard, "mlflow_page_state", lambda port, fetch=None: False)
+    monkeypatch.setattr(dashboard.ray_hub, "free_port", lambda: 45678)
+    monkeypatch.setattr(dashboard, "cmd_start", lambda cfg: started.append((cfg.port, cfg.host)))
+    cfg = _cfg(login_node="x", user="u")
+    cfg.port = 5055
+    dashboard.ensure_mlflow(cfg)
+    assert started == [(45678, "127.0.0.1")] and "does not work" in capsys.readouterr().out
+    assert dashboard.mlflow_port(cfg) == 45678, "the hub follows the new port"
+
+
+def test_a_working_mlflow_on_the_port_is_reused(monkeypatch, capsys):
+    started = []
+    monkeypatch.setattr(dashboard, "_read_pid", lambda: None)
+    monkeypatch.setattr(dashboard, "close_orphan_runs", lambda cfg: 0)
+    monkeypatch.setattr(dashboard, "mlflow_page_state", lambda port, fetch=None: True)
+    monkeypatch.setattr(dashboard, "cmd_start", lambda cfg: started.append(cfg.port))
+    cfg = _cfg(login_node="x", user="u")
+    cfg.port = 5055
+    dashboard.ensure_mlflow(cfg)
+    assert started == [5055] and "does not work" not in capsys.readouterr().out

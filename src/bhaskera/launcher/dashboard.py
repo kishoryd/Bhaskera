@@ -344,6 +344,24 @@ def close_orphan_runs(cfg: DashboardConfig) -> int:
         return 0
 
 
+def mlflow_page_state(port: int, fetch=None) -> Optional[bool]:
+    """What answers on a port: None when nothing does, True for a working MLflow page, False for anything else (for example an
+    old MLflow whose web files were removed, which answers with 'Unable to display MLflow UI')."""
+    import urllib.error
+    import urllib.request
+    try:
+        if fetch is not None:
+            status, body = fetch(port)
+        else:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=4) as r:
+                status, body = r.status, r.read(4000)
+    except urllib.error.HTTPError as e:
+        return False if e.code >= 500 else True
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return None
+    return status == 200 and b"Unable to display MLflow UI" not in body
+
+
 def ensure_mlflow(cfg: DashboardConfig) -> None:
     """Start the MLflow UI on this login node unless it already runs. A failure only costs the MLflow page."""
     cfg.port = mlflow_port(cfg)
@@ -355,6 +373,13 @@ def ensure_mlflow(cfg: DashboardConfig) -> None:
     if pid and _pid_alive(pid):
         print(f"MLflow is running on {socket.gethostname()}, port {cfg.port}.")
         return
+    if mlflow_page_state(cfg.port) is False:
+        # something answers on the port but is not a working MLflow (an old one whose files are gone, say): leave it alone and
+        # start a fresh one on a free port
+        old = cfg.port
+        cfg.port = ray_hub.free_port()
+        print(f"The MLflow page on port {old} of {socket.gethostname()} does not work (it is probably an old MLflow whose files were "
+              f"removed); starting a new one on port {cfg.port}.")
     try:
         cmd_start(cfg)
     except SystemExit:
@@ -480,7 +505,7 @@ def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_
         hub, cfg.store, os.environ.get("USER", ""), version=_bhaskera_version,
         docs_url=os.environ.get("BHASKERA_DOCS_URL", "https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/"))
     hub.state_provider, hub.log_provider = builder.build, builder.log
-    hub.launcher = launch.Launcher(launch.find_kit(), runs=lambda: hub_state.recent_runs(cfg.store), store=cfg.store)
+    hub.launcher = launch.Launcher(launch.find_kit(), runs=lambda: hub_state.recent_runs(cfg.store), store=cfg.store, jobs=my_jobs)
     try:
         server = ray_hub.serve(hub, hub_port())
     except OSError as e:
