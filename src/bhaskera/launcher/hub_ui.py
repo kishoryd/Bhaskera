@@ -788,7 +788,7 @@ function renderMenus(){
   $("#mn-user").className="gp acct";
   $("#mn-user").innerHTML='<div class="mu"><b>'+esc(s.user||"")+'</b><span>'+esc(s.cluster||"")+'</span></div>'+mcol("",[{ic:"help",t:"Words used on this page",d:"What a recipe, an adapter or a step is",attrs:'data-dialog="guide"'},
     {ic:"logout",t:"Log out",d:PROXY?"Sign out of the portal":"Stop this page; your jobs keep running",attrs:'data-act="logout"'}]);
-  $("#ag-home").innerHTML=cards([I.text,I.chat,I.bench,I.register]);
+  $("#ag-home").innerHTML=cards([I.text,I.image,I.chat,I.bench]);
   $("#ag-train").innerHTML=cards([I.text,I.image,I.prep,I.custom,I.train,I.resume]);
   $("#ag-serve").innerHTML=cards([I.chat].concat(I.serving,[I.register]));
   $("#ag-evaluate").innerHTML=cards([I.bench,I.register]);
