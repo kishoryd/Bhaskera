@@ -240,7 +240,8 @@ dialog::backdrop{background:rgba(31,28,23,.5);backdrop-filter:blur(2px)}
 .msg .files span{font:12px var(--mono);opacity:.85;border:1px solid rgba(255,255,255,.35);padding:1px 7px;border-radius:4px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 #path{margin-top:22px}
-.path-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;font-size:13px}.path-head b{font:500 15px var(--serif)}
+.path-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;font-size:13px}
+#path.collapsed .path-head{margin-bottom:0}.path-head b{font:500 15px var(--serif)}
 .linkbtn{border:0;background:transparent;color:var(--muted);font-size:12.5px;text-decoration:underline;text-underline-offset:3px;padding:2px 4px}.linkbtn:hover{color:var(--text)}
 .steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
 .step{display:flex;flex-direction:column;gap:3px;text-align:left;width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);transition:border-color .12s,background .12s}
@@ -590,7 +591,9 @@ function loadModels(){
 function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
 function renderPath(){
   var sec=$("#path"); if(!sec) return;
-  if(!pathOpts||!pathOpts.enabled||pathHidden()){ sec.hidden=true; return; }
+  if(!pathOpts||!pathOpts.enabled){ sec.hidden=true; return; }
+  var hid=pathHidden(); $("#pathhide").textContent=hid?"Show":"Hide"; $("#steps").hidden=hid; sec.classList.toggle("collapsed",hid);
+  if(hid){ sec.hidden=false; return; }
   var runs=(state&&state.runs)||[], mine=(pathOpts.recipes||[]).filter(function(r){return r.ready});
   var adapter=runs.some(function(r){return r.has_adapter}), bench=runs.some(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length});
   var steps=[
@@ -613,7 +616,7 @@ $("#steps").addEventListener("click", function(e){
   L.hours=""; openStart(b.getAttribute("data-path"));
 });
 $("#nav").addEventListener("click", function(e){ var a=e.target.closest("a"); if(a&&a.getAttribute("href")==="#guide"){ e.preventDefault(); $("#guide").showModal(); } });
-$("#pathhide").addEventListener("click", function(){ try{ localStorage.setItem("bhaskera-path","hidden"); }catch(e){} renderPath(); toast("The path is hidden. Open the Guide at the top any time to read the words used here."); });
+$("#pathhide").addEventListener("click", function(){ try{ if(pathHidden()) localStorage.removeItem("bhaskera-path"); else localStorage.setItem("bhaskera-path","hidden"); }catch(e){} renderPath(); });
 $("#guideclose").addEventListener("click", function(){ $("#guide").close(); });
 function renderModels(){
   var rows=[]; (regModels||[]).forEach(function(m){ (m.refs||[]).forEach(function(v){ rows.push({name:m.name,v:v}); }); });
