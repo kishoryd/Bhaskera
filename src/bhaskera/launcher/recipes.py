@@ -187,6 +187,8 @@ def model_catalog(shared: list[Path], mine: list[str]) -> list[dict]:
             continue
         info = _model_info(path)
         if info:
+            if group == "yours" and any(m["group"] == "shared" and m["name"] == info["name"] and m["size_gb"] == info["size_gb"] for m in found):
+                continue                                       # your recipe uses a copy of a model that is shared: offer the shared one only
             seen.add(key)
             found.append({**info, "group": group})
     return found

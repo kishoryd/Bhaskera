@@ -274,3 +274,24 @@ def test_the_page_offers_shared_models_and_marks_shared_data(world, tmp_path):
     assert [(m["name"], m["group"]) for m in o["model_catalog"]] == [("Shared-Model", "shared"), ("Qwen3-14B", "yours")]
     flags = {c["name"]: c["shared"] for c in o["caches"]}
     assert flags["local_train_shared"] is True and flags["local_train_aaaa"] is False
+
+
+def test_your_copy_of_a_shared_model_or_cache_is_not_offered_twice(world, tmp_path):
+    work, model, cache = world
+    shared = tmp_path / "apps" / "models"
+    _model_dir(shared, "Qwen3-14B", {"architectures": ["Qwen3ForCausalLM"]})
+    _model_dir(tmp_path / "other", "Qwen3-14B", {"architectures": ["Qwen3ForCausalLM"]})          # same name and size as the shared one
+    bigger = _model_dir(tmp_path / "big", "Qwen3-14B", {"architectures": ["Qwen3ForCausalLM"]})
+    with open(bigger / "model-00001.safetensors", "r+b") as f:
+        f.truncate(300_000_000)                                                                          # same name, a different model: kept
+    cat = recipes.model_catalog([shared], [str(tmp_path / "other" / "Qwen3-14B"), str(bigger)])
+    assert [(m["name"], m["group"], m["size_gb"]) for m in cat] == [("Qwen3-14B", "shared", 0.0), ("Qwen3-14B", "yours", 0.3)]
+    data = tmp_path / "apps" / "data"
+    for name in ("local_train_aaaa",):
+        d = data / name
+        d.mkdir(parents=True)
+        (d / "p.parquet").write_text("x")
+        (d / "metadata.json").write_text(json.dumps({"model_name": str(model), "seq_len": 2048, "num_rows": 1000}))
+    L = launch.Launcher(work, runs=lambda: [], env={"BHASKERA_DIR": "/x", "SLURM_ACCOUNT": "a", "BHASKERA_HOME": str(tmp_path / "apps" / "1.0.0")})
+    names = [(c["name"], c["shared"]) for c in L.options()["caches"]]
+    assert names.count(("local_train_aaaa", True)) == 1 and ("local_train_aaaa", False) not in names and ("local_val_bbbb", False) in names
