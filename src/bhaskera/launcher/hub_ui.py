@@ -994,7 +994,7 @@ function cacheOptions(list,sel,none,other){
     '<option value="__other"'+(other?" selected":"")+'>Another folder (type its path) …</option>';
 }
 function modelOptions(cat,sel,other){
-  var item=function(m){ return '<option value="'+esc(m.path)+'"'+(!other&&m.path===sel?" selected":"")+'>'+esc(m.name+" · "+(m.kind==="multimodal"?"multimodal":"text")+(m.size_gb?" · "+m.size_gb+" GB":""))+'</option>'; };
+  var item=function(m){ return '<option value="'+esc(m.path)+'"'+(!other&&m.path===sel?" selected":"")+'>'+esc(m.name+" · "+(m.kind==="multimodal"?"multimodal":"text")+(m.size_gb?" · "+m.size_gb+" GB":"")+(m.custom_code?" · own code":""))+'</option>'; };
   var sh=cat.filter(function(m){return m.group==="shared"}), mine=cat.filter(function(m){return m.group!=="shared"});
   return (sh.length?'<optgroup label="Shared on this cluster">'+sh.map(item).join("")+'</optgroup>':"")+(mine.length?'<optgroup label="Used by your recipes">'+mine.map(item).join("")+'</optgroup>':"")+
     '<option value="__other"'+(other?" selected":"")+'>Another folder (type its path) …</option>';
@@ -1045,7 +1045,8 @@ function recipeForm(o){
     var typed=r.modelOther||!cat.length||(r.model&&!cat.some(function(m){return m.path===r.model}));
     h+='<div class="srow"><label class="lbl" for="f-rmodelsel">Base model</label>'+(cat.length?'<select id="f-rmodelsel">'+modelOptions(cat,r.model,typed)+'</select>':"")+
       (typed?'<input id="f-rmodel" type="text" value="'+esc(r.model)+'" placeholder="/path/to/'+(multi?"Qwen3-VL-8B-Instruct":"Qwen3-14B")+'"'+(cat.length?' style="margin-top:8px"':"")+'>':"")+
-      '<div class="sub">The model you want to teach. Pick one shared on this cluster, or type the path of your own Hugging Face model folder. It has to be on disk already: the machines that run training have no internet.</div></div>';
+      '<div class="sub">The model you want to teach. Pick one shared on this cluster, or type the path of your own Hugging Face model folder. It has to be on disk already: the machines that run training have no internet.</div>'+
+      ((cat.filter(function(m){return m.path===r.model&&m.custom_code})[0])?'<div class="sub"><b>This model comes with its own code</b> (the Param models do), so the recipe turns on <code>trust_remote_code</code>. Only use model folders you trust.</div>':"")+'</div>';
     h+='<div class="sec">The data</div><div class="srow"><label class="lbl">Which data</label><div class="chips">'+chip("Data that is already prepared (tokenised)",mode==="ready",'data-dmode="ready"')+chip("My own files: prepare them here",mode==="raw",'data-dmode="raw"')+'</div>'+
        '<div class="sub">The model reads numbers, not text. Prepared data is your examples converted to numbers once; a new set of files needs that step first.</div></div>';
     if(mode==="ready"){

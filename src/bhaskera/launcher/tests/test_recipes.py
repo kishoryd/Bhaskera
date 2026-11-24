@@ -295,3 +295,13 @@ def test_your_copy_of_a_shared_model_or_cache_is_not_offered_twice(world, tmp_pa
     L = launch.Launcher(work, runs=lambda: [], env={"BHASKERA_DIR": "/x", "SLURM_ACCOUNT": "a", "BHASKERA_HOME": str(tmp_path / "apps" / "1.0.0")})
     names = [(c["name"], c["shared"]) for c in L.options()["caches"]]
     assert names.count(("local_train_aaaa", True)) == 1 and ("local_train_aaaa", False) not in names and ("local_val_bbbb", False) in names
+
+
+def test_a_model_that_ships_its_own_code_gets_trust_remote_code(world):
+    work, model, cache = world
+    own = _model_dir(model.parent, "Param-like", {"architectures": ["ParamForCausalLM"], "auto_map": {"AutoModelForCausalLM": "modeling_param.ParamForCausalLM"}})
+    assert recipes.needs_remote_code(str(own)) is True and recipes.needs_remote_code(str(model)) is False and recipes.needs_remote_code("/does/not/exist") is False
+    assert recipes.build(form(own, cache, method="fsdp"), work)["model"]["trust_remote_code"] is True
+    assert recipes.build(form(model, cache, method="fsdp"), work)["model"]["trust_remote_code"] is False
+    assert next(m for m in recipes.model_catalog([own.parent], []) if m["name"] == "Param-like")["custom_code"] is True
+    assert yaml.safe_load(recipes.tokenize_recipe({"name": "t", "model": str(own), "train_path": str(work / "submit.sh")}, work)[1].split("\n", 1)[1])["model"]["trust_remote_code"] is True

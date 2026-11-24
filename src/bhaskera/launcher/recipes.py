@@ -164,7 +164,18 @@ def _model_info(path: Path) -> Optional[dict]:
             size = sum(e.stat().st_size for e in it if e.name.endswith((".safetensors", ".bin")) and e.is_file())
     except OSError:
         pass
-    return {"path": str(path), "name": path.name, "kind": "multimodal" if multi else "text", "arch": arch, "size_gb": round(size / 1e9, 1)}
+    return {"path": str(path), "name": path.name, "kind": "multimodal" if multi else "text", "arch": arch, "size_gb": round(size / 1e9, 1),
+            "custom_code": bool(cfg.get("auto_map"))}
+
+
+def needs_remote_code(folder: str) -> bool:
+    """True when the model folder brings its own Python code (``auto_map`` in config.json, as the BharatGen Param models do): loading it needs
+    ``trust_remote_code``. Only use model folders you trust."""
+    try:
+        cfg = json.loads((Path(folder) / "config.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(cfg, dict) and bool(cfg.get("auto_map"))
 
 
 def model_catalog(shared: list[Path], mine: list[str]) -> list[dict]:
@@ -263,7 +274,7 @@ def build(form: dict, workdir: Path) -> dict:
     else:
         data.update({"runtime_packing": True, "num_workers": 8, "prefetch_batches": 2})
     recipe: dict[str, Any] = {
-        "model": {"name": model, "dtype": "bfloat16", "attn_impl": "flash_attention_2", "trust_remote_code": False,
+        "model": {"name": model, "dtype": "bfloat16", "attn_impl": "flash_attention_2", "trust_remote_code": needs_remote_code(model),
                   "use_liger_kernel": not multi, "quantization": method["quantization"],
                   **({"kind": "multimodal", "freeze_encoders": ["all"]} if multi else {})},
         "data": data,
@@ -560,5 +571,5 @@ def tokenize_recipe(form: dict, workdir: Path) -> tuple[str, str]:
         data["loss_on"] = "assistant"
     import yaml
     text = ("# Written by the Bhaskera home page (Prepare data): tokenises your files once. The training recipe then uses the cache it makes.\n"
-            + yaml.safe_dump({"model": {"name": model, "trust_remote_code": False, **({"kind": "multimodal"} if multi else {})}, "data": data}, sort_keys=False))
+            + yaml.safe_dump({"model": {"name": model, "trust_remote_code": needs_remote_code(model), **({"kind": "multimodal"} if multi else {})}, "data": data}, sort_keys=False))
     return f"tokenize-{name}.yaml", text
