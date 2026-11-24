@@ -7,6 +7,10 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Where your files go
+- Everything a user creates stays in the run folder (the one with `submit.sh`): the MLflow store (`mlflow-runs/`, with the registry), small settings (`.bhaskera/`) and the benchmark data cache
+  (`.cache/huggingface/`) now default to it. A copy already kept in the home folder is used until a copy or link exists in the run folder, so no run disappears. `src/bhaskera/paths.py` decides.
+
 ### Home page
 - **Create recipe** (Start menu): a recipe from a few choices for text and multimodal models, with QLoRA + DDP, DDP, FSDP2, HSDP and Pipeline,
   *All settings* (every option, searchable, with its meaning), a *Custom* mode (paste or start from a starter) and *Prepare data* for raw JSONL.

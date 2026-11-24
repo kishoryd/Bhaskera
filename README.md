@@ -68,6 +68,14 @@ Qwen3-VL (image, video) and Qwen2.5-Omni (audio) train with DDP, FSDP2 or HSDP, 
 files stay on disk and are decoded while training. Pipeline, QLoRA and packing are not available for these models yet.
 See `docs/multimodal/README.md`.
 
+## Where your files go
+
+Everything you create stays in the folder you set up, the one that holds `submit.sh` (your *run folder*): `recipes/`, `checkpoints/`, `cache/` (prepared data), `logs/`,
+`tasks/` (your own tests), benchmark results, `mlflow-runs/` (every run, its adapter, and the model registry), `.bhaskera/` (small settings) and `.cache/huggingface/`
+(benchmark data). Nothing is written to your home folder or to the shared install. If you already keep `~/mlflow-runs`, `~/.bhaskera` or `~/.cache/huggingface`, Bhaskera keeps
+using them until a copy or a link of the same name exists in the run folder (`ln -s ~/mlflow-runs mlflow-runs` brings them in with nothing moved). `MLFLOW_TRACKING_URI` overrides the MLflow place.
+Shared models and prepared data (`BHASKERA_MODELS`, `BHASKERA_DATA`) are read-only copies kept by the administrators.
+
 ## The home page
 
 ```bash
@@ -104,7 +112,7 @@ trials within your Slurm limits, and lists them best first.
 ## Other clusters
 
 ```bash
-cp slurm/clusters/example.yaml ~/.bhaskera/cluster.yaml     # then edit it
+cp slurm/clusters/example.yaml .bhaskera/cluster.yaml          # in your run folder; then edit it
 python -m bhaskera.launcher.cluster_profile show
 ```
 

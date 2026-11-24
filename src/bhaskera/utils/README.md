@@ -14,7 +14,7 @@ Under `logging` in a recipe:
 | `mlflow_metrics` | `essential` (about 20 curves, default), `detailed` or `full` (also per GPU and per node) |
 | `mlflow_log_adapter`, `mlflow_register_model` (or later, `python -m bhaskera.launcher.register add`) | Store the trained LoRA adapter (PEFT format) with the run, and optionally register it |
 | `mlflow_eval_report`, `mlflow_eval_samples`, `mlflow_tracing` | The evaluation table, example predictions, and traces |
-| `mlflow_tracking_uri` | Where MLflow writes (default `~/mlflow-runs`) |
+| `mlflow_tracking_uri` | Where MLflow writes (default `mlflow-runs` in your run folder, see the main README) |
 
 Under `monitoring.metrics`: `throughput`, `peak_tflops_per_gpu` (default 312, an A100 in bf16, so set it for other GPUs), `node_stats_every_n_steps` and `node_stats_per_node_max`. Weights & Biases is optional and imported only when you ask for it.
 

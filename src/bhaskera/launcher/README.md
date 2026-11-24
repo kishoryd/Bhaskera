@@ -23,7 +23,7 @@ Environment variables:
 | Variable | Meaning |
 |---|---|
 | `BHASKERA_DIR`, `SLURM_ACCOUNT` | Where Bhaskera is installed, and the account jobs are charged to. `submit.sh` needs both |
-| `BHASKERA_CLUSTER_PROFILE` | A cluster profile file (default `~/.bhaskera/cluster.yaml`) |
+| `BHASKERA_CLUSTER_PROFILE` | A cluster profile file (default `.bhaskera/cluster.yaml` in your run folder) |
 | `BHASKERA_PARTITION`, `BHASKERA_MAX_HOURS`, `BHASKERA_GPUS_PER_NODE`, `BHASKERA_CPUS_PER_NODE`, `BHASKERA_MEM_PER_NODE`, `BHASKERA_NET_INTERFACE` | The same facts as the profile, for a cluster without one |
 | `BHASKERA_EXCLUDE` | Nodes to keep jobs off (comma separated) |
 | `EVAL_HOURS`, `SERVE_HOURS` | Time limit of a benchmark or chat job (default 2 hours) |
