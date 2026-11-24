@@ -589,6 +589,7 @@ function loadModels(){
 }
 /* ---- the path from data to a usable model ---- */
 function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
+function chattedBefore(){ try{ return localStorage.getItem("bhaskera-chatted")==="1"; }catch(e){ return false; } }
 function renderPath(){
   var sec=$("#path"); if(!sec) return;
   if(!pathOpts||!pathOpts.enabled){ sec.hidden=true; return; }
@@ -600,7 +601,7 @@ function renderPath(){
     {t:"Prepare data",d:"Turn your examples into numbers the model reads",tab:"recipe",raw:true,done:(pathOpts.caches||[]).length>0},
     {t:"Create recipe",d:"Choose the model, the data and how long",tab:"recipe",done:mine.length>0},
     {t:"Train",d:"Run the recipe on the cluster",tab:"train",done:runs.length>0},
-    {t:"Chat",d:"Talk to the model you trained",tab:"serve",done:false,off:!adapter},
+    {t:"Chat",d:"Talk to the model you trained",tab:"serve",done:chattedBefore(),off:!adapter},
     {t:"Benchmark",d:"Score it on questions with known answers",tab:"eval",done:bench,off:!adapter},
     {t:"Register",d:"Keep it under a name you can find again",tab:"register",done:(regModels||[]).length>0,off:!adapter}
   ];
@@ -841,11 +842,12 @@ function streamAnswer(history,useAdapter,el){
     })
     .catch(function(e){ if(e.name!=="AbortError") el.textContent=(text?text+"\n":"")+"[could not get an answer: "+e.message+"]"; return text; });
 }
+function markChatted(){ try{ localStorage.setItem("bhaskera-chatted","1"); }catch(e){} renderPath(); }
 function ask(text){
   chat.busy=true; $("#chat-send").hidden=true; $("#chat-stop").hidden=false;
   var files=chat.pending; chat.pending=[]; renderAttached();
   var content = files.length ? [{type:"text",text:text}].concat(files.map(function(a){ return {type:a.kind,data:a.data}; })) : text;
-  var history=chat.messages.concat([{role:"user",content:content}]); addUser(text,files);
+  var history=chat.messages.concat([{role:"user",content:content}]); addUser(text,files); markChatted();
   var done;
   if(chat.mode==="both"){
     var els=addPair();
