@@ -869,9 +869,8 @@ $("#chat-files").addEventListener("click", function(e){ var b=e.target.closest("
 $("#chat-mode").addEventListener("click", function(e){ var b=e.target.closest("button"); if(b&&!b.disabled) setMode(b.getAttribute("data-m")); });
 $("#chat-jobsel").addEventListener("change", function(e){ chat.job=e.target.value; chat.messages=[]; $("#chat-msgs").innerHTML=""; renderChat(); });
 $("#jobs").addEventListener("toggle", function(e){ var d=e.target; if(d.classList&&d.classList.contains("nodebox")) openNodes[d.getAttribute("data-job")]=d.open; }, true);
-$("#runs").addEventListener("click", function(e){
-  var s=e.target.closest("[data-start]"); if(s) openStart(s.getAttribute("data-start"), s.getAttribute("data-run"));
-});
+function startClick(e){ var s=e.target.closest("[data-start]"); if(s) openStart(s.getAttribute("data-start"), s.getAttribute("data-run")); }
+["#runs","#jobs","#models"].forEach(function(id){ $(id).addEventListener("click", startClick); });      // the buttons of the Runs table, the empty Jobs box and the Models list
 
 /* ---- cancel a job, close a chat server ---- */
 function doCancel(id,label,btn){
