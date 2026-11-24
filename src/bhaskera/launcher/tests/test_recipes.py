@@ -225,3 +225,52 @@ def test_ddp_recipes_checkpoint_activations(world):
         r = recipes.build(form(model, cache, method=method), work)
         assert r["training"]["distributed"]["ddp"] == {"activation_checkpointing": True}
     recipes.validate(recipes.render(recipes.build(form(model, cache, method="qlora"), work)))
+
+
+def _model_dir(base, name, config, size=1000):
+    d = base / name
+    d.mkdir(parents=True)
+    (d / "config.json").write_text(json.dumps(config))
+    (d / "model-00001.safetensors").write_bytes(b"x" * size)
+    return d
+
+
+def test_model_catalog_lists_shared_models_with_their_kind_and_size(tmp_path):
+    shared = tmp_path / "shared"
+    _model_dir(shared, "Qwen3-14B", {"architectures": ["Qwen3ForCausalLM"]}, 2_000_000)
+    _model_dir(shared, "Qwen3-VL-2B", {"architectures": ["Qwen3VLForConditionalGeneration"], "vision_config": {}})
+    _model_dir(shared, "Omni", {"architectures": ["Qwen2_5OmniForConditionalGeneration"], "thinker_config": {}})
+    (shared / "not-a-model").mkdir()
+    mine = _model_dir(tmp_path / "mine", "my-own", {"architectures": ["LlamaForCausalLM"]})
+    cat = recipes.model_catalog([shared], [str(mine), str(shared / "Qwen3-14B")])          # the last one is also shared: listed once
+    assert [(m["name"], m["kind"], m["group"]) for m in cat] == [("Omni", "multimodal", "shared"), ("Qwen3-14B", "text", "shared"), ("Qwen3-VL-2B", "multimodal", "shared"), ("my-own", "text", "yours")]
+    assert next(m for m in cat if m["name"] == "Qwen3-14B")["size_gb"] == 0.0 and all(m["arch"] for m in cat)
+
+
+def test_shared_folders_come_from_the_environment_or_sit_next_to_the_install(tmp_path):
+    (tmp_path / "apps" / "models").mkdir(parents=True)
+    (tmp_path / "apps" / "data").mkdir()
+    (tmp_path / "apps" / "1.0.0").mkdir()
+    env = {"BHASKERA_HOME": str(tmp_path / "apps" / "1.0.0")}
+    assert recipes.shared_folders(env, "models") == [tmp_path / "apps" / "models"] and recipes.shared_folders(env, "data") == [tmp_path / "apps" / "data"]
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    assert recipes.shared_folders({**env, "BHASKERA_MODELS": f"{other}:/does/not/exist"}, "models") == [other]
+    assert recipes.shared_folders({}, "models") == []
+
+
+def test_the_page_offers_shared_models_and_marks_shared_data(world, tmp_path):
+    work, model, cache = world
+    shared = tmp_path / "apps" / "models"
+    _model_dir(shared, "Shared-Model", {"architectures": ["LlamaForCausalLM"]})
+    data = tmp_path / "apps" / "data"
+    d = data / "local_train_shared"
+    d.mkdir(parents=True)
+    (d / "part-0.parquet").write_text("x")
+    (d / "metadata.json").write_text(json.dumps({"model_name": "/m/Shared-Model", "seq_len": 1024, "num_rows": 5}))
+    (work / "recipes" / "ready.yaml").write_text(yaml.safe_dump({"model": {"name": str(model)}}))
+    L = launch.Launcher(work, runs=lambda: [], env={"BHASKERA_DIR": "/x", "SLURM_ACCOUNT": "a", "BHASKERA_HOME": str(tmp_path / "apps" / "1.0.0")})
+    o = L.options()
+    assert [(m["name"], m["group"]) for m in o["model_catalog"]] == [("Shared-Model", "shared"), ("Qwen3-14B", "yours")]
+    flags = {c["name"]: c["shared"] for c in o["caches"]}
+    assert flags["local_train_shared"] is True and flags["local_train_aaaa"] is False

@@ -157,7 +157,7 @@ class Launcher:
         recipes = list_recipes(self.kit, self._env) if self.kit else []
         runs = [{"run_id": r["run_id"], "name": r["name"], "status": r["status"]} for r in self._runs() if r.get("has_adapter")]
         return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "models": self._models(),
-                "caches": self._caches(), "model_folders": self._model_folders(), "methods": {k: {"label": v["label"], "about": v["about"], "kinds": list(v["kinds"])} for k, v in _methods().items()},
+                "caches": self._caches(), "model_folders": self._model_folders(), "model_catalog": self._model_catalog(), "methods": {k: {"label": v["label"], "about": v["about"], "kinds": list(v["kinds"])} for k, v in _methods().items()},
                 "starters": self._starters(), "schema": self._schema(), "own_tests": self._own_tests(),
                 "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
@@ -238,8 +238,21 @@ class Launcher:
         """Tokenised data already made, found in the cache folders the recipes use and next to submit.sh."""
         try:
             from . import recipes
-            extra = [p for p in (self._env.get("BHASKERA_CACHE") or "").split(":") if p]
-            return recipes.find_caches(recipes.cache_folders(self.kit, self._recipe_files(), extra))
+            shared = recipes.shared_folders(self._env, "data")
+            extra = [p for p in (self._env.get("BHASKERA_CACHE") or "").split(":") if p] + [str(p) for p in shared]
+            found = recipes.find_caches(recipes.cache_folders(self.kit, self._recipe_files(), extra))
+            roots = [str(p.resolve()) for p in shared]
+            for c in found:
+                c["shared"] = any(str(Path(c["path"]).resolve()).startswith(r + os.sep) for r in roots)
+            return found
+        except Exception:
+            return []
+
+    def _model_catalog(self) -> list[dict]:
+        """The base models to choose from: those shared on this cluster and those your own recipes use, with their kind and size."""
+        try:
+            from . import recipes
+            return recipes.model_catalog(recipes.shared_folders(self._env, "models"), recipes.suggested_models(self._recipe_files()))
         except Exception:
             return []
 

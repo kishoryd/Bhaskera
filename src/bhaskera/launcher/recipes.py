@@ -138,6 +138,60 @@ def find_caches(folders: list[Path]) -> list[dict]:
     return out
 
 
+def shared_folders(env: dict, kind: str) -> list[Path]:
+    """Folders of models or data shared on this cluster: $BHASKERA_MODELS / $BHASKERA_DATA (colon separated), else a ``models`` or ``data``
+    folder next to the Bhaskera install (the parent of $BHASKERA_HOME). Only folders that exist are returned."""
+    var = {"models": "BHASKERA_MODELS", "data": "BHASKERA_DATA"}[kind]
+    found = [Path(p) for p in (env.get(var) or "").split(":") if p]
+    if not found and env.get("BHASKERA_HOME"):
+        found = [Path(env["BHASKERA_HOME"]).parent / kind]
+    return [p for p in found if p.is_dir()]
+
+
+def _model_info(path: Path) -> Optional[dict]:
+    """What the model list shows about a model folder: its name, whether it reads images or sound, and its size on disk."""
+    try:
+        cfg = json.loads((path / "config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(cfg, dict):
+        return None
+    arch = str((cfg.get("architectures") or [""])[0])
+    multi = any(k in cfg for k in ("vision_config", "audio_config", "thinker_config")) or any(w in arch for w in ("VL", "Omni", "ImageText"))
+    size = 0
+    try:
+        with os.scandir(path) as it:
+            size = sum(e.stat().st_size for e in it if e.name.endswith((".safetensors", ".bin")) and e.is_file())
+    except OSError:
+        pass
+    return {"path": str(path), "name": path.name, "kind": "multimodal" if multi else "text", "arch": arch, "size_gb": round(size / 1e9, 1)}
+
+
+def model_catalog(shared: list[Path], mine: list[str]) -> list[dict]:
+    """The models to offer: every model folder inside the shared folders, then those named by your own recipes."""
+    found: list[dict] = []
+    seen: set[str] = set()
+    candidates: list[tuple[str, Path]] = []
+    for folder in shared:
+        try:
+            candidates += [("shared", c) for c in sorted(folder.iterdir()) if c.is_dir()]
+        except OSError:
+            continue
+    candidates += [("yours", Path(m)) for m in mine]
+    for group, path in candidates:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        info = _model_info(path)
+        if info:
+            seen.add(key)
+            found.append({**info, "group": group})
+    return found
+
+
 def suggested_models(recipe_files: list[Path]) -> list[str]:
     """Model folders that existing, ready recipes use, to offer in the form."""
     out = []

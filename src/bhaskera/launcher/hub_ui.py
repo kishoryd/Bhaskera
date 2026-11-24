@@ -612,7 +612,7 @@ function renderPath(){
 }
 $("#steps").addEventListener("click", function(e){
   var b=e.target.closest("[data-path]"); if(!b) return;
-  if(b.hasAttribute("data-raw")) L.rc.open.raw=true;
+  if(b.hasAttribute("data-raw")) L.rc.dataMode="raw";
   L.hours=""; openStart(b.getAttribute("data-path"));
 });
 $("#nav").addEventListener("click", function(e){ var a=e.target.closest("a"); if(a&&a.getAttribute("href")==="#guide"){ e.preventDefault(); $("#guide").showModal(); } });
@@ -893,7 +893,7 @@ $("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(cha
 
 /* ---- start a job ---- */
 var L = {opts:null, kind:"train", run:"", note:"", evalSel:[], own:{name:"",data:"",q:"question",a:"answer"}, shots:"", skipBase:false, rinfo:null, step:0, regname:"", alias:"",
-  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""}}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""},modelOther:false,dataMode:"",trainOther:false,valOther:false,trainPath:"",valPath:""}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -985,8 +985,17 @@ function renderStart(){
   if(k==="resume") loadResume();
 }
 function cacheLabel(c){ return c.name+" · "+(c.model||"?")+" · sequence "+(c.seq_len||"?")+" · "+(c.rows!=null?Number(c.rows).toLocaleString()+" rows":""); }
-function cacheOptions(list,sel,none){
-  return (none?'<option value="">none (no evaluation during training)</option>':'')+list.map(function(c){ return '<option value="'+esc(c.path)+'"'+(c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join("");
+function cacheOptions(list,sel,none,other){
+  var group=function(items,label){ return items.length?'<optgroup label="'+label+'">'+items.map(function(c){ return '<option value="'+esc(c.path)+'"'+(!other&&c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join("")+'</optgroup>':""; };
+  var sh=list.filter(function(c){return c.shared}), mine=list.filter(function(c){return !c.shared});
+  return (none?'<option value="">none (no evaluation during training)</option>':'')+(sh.length&&mine.length?group(sh,"Shared on this cluster")+group(mine,"Yours"):list.map(function(c){ return '<option value="'+esc(c.path)+'"'+(!other&&c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join(""))+
+    '<option value="__other"'+(other?" selected":"")+'>Another folder (type its path) …</option>';
+}
+function modelOptions(cat,sel,other){
+  var item=function(m){ return '<option value="'+esc(m.path)+'"'+(!other&&m.path===sel?" selected":"")+'>'+esc(m.name+" · "+(m.kind==="multimodal"?"multimodal":"text")+(m.size_gb?" · "+m.size_gb+" GB":""))+'</option>'; };
+  var sh=cat.filter(function(m){return m.group==="shared"}), mine=cat.filter(function(m){return m.group!=="shared"});
+  return (sh.length?'<optgroup label="Shared on this cluster">'+sh.map(item).join("")+'</optgroup>':"")+(mine.length?'<optgroup label="Used by your recipes">'+mine.map(item).join("")+'</optgroup>':"")+
+    '<option value="__other"'+(other?" selected":"")+'>Another folder (type its path) …</option>';
 }
 function aliasNames(){ var out=[]; (L.opts.models||[]).forEach(function(m){ (m.aliases||[]).forEach(function(a){ if(out.indexOf(a)<0) out.push(a); }); }); return out; }
 function methodOk(o,m,kind){ var x=(o.methods||{})[m]; return !!x&&(x.kinds||["text","multimodal"]).indexOf(kind)>=0; }
@@ -1016,9 +1025,12 @@ function customForm(o,r){
 }
 function recipeForm(o){
   var r=L.rc, caches=o.caches||[], tr=caches.filter(function(c){return c.side!=="val"}), va=caches.filter(function(c){return c.side!=="train"});
-  if(!r.train||!caches.some(function(c){return c.path===r.train})) r.train=(tr[0]||{}).path||"";
-  if(r.val!==""&&!caches.some(function(c){return c.path===r.val})) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
-  if(r.val===""&&L.rcValTouched!==true) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
+  if(!r.trainOther&&(!r.train||!caches.some(function(c){return c.path===r.train}))) r.train=(tr[0]||{}).path||"";
+  if(!r.valOther&&r.val!==""&&!caches.some(function(c){return c.path===r.val})) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
+  if(!r.valOther&&r.val===""&&L.rcValTouched!==true) r.val=(va.filter(function(c){return c.path!==r.train})[0]||{}).path||"";
+  var cat=o.model_catalog||[];
+  if(!r.model&&!r.modelOther&&cat.length){ var first=cat.filter(function(m){return m.kind===r.kind})[0]||cat[0]; r.model=first.path; r.kind=first.kind; }
+  var mode=r.dataMode||(caches.length?"ready":"raw");
   var methods=Object.keys(o.methods||{}).filter(function(m){return methodOk(o,m,r.kind)});
   if(methods.indexOf(r.method)<0) r.method=methods[0]||"fsdp";
   var multi=r.kind==="multimodal", custom=r.method==="custom";
@@ -1028,14 +1040,28 @@ function recipeForm(o){
     '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label+(m===(multi?"fsdp":"qlora")?" · start here":""),r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div><div class="sub">The method decides how the model is spread over the GPUs. If you are new, keep the one marked start here.</div></div>';
   if(custom){ h+='<div class="sec">The recipe</div>'+customForm(o,r); }
   else {
-    h+='<div class="srow"><label class="lbl" for="f-rmodel">Model folder</label><input id="f-rmodel" type="text" list="f-rmodels" value="'+esc(r.model)+'" placeholder="/scratch/<project>/<username>/models/'+(multi?"Qwen3-VL-8B-Instruct":"Qwen3-14B")+'">'+
-      '<datalist id="f-rmodels">'+(o.model_folders||[]).map(function(m){return '<option value="'+esc(m)+'">'}).join("")+'</datalist><div class="sub">The base model you want to teach: a Hugging Face model folder that is already downloaded. The cluster machines that run training have no internet, so it has to be on disk.</div></div>';
-    h+='<div class="sec">The data</div>';
-    if(caches.length){
-      h+='<div class="srow half"><label class="lbl" for="f-rtrain">Training data</label><select id="f-rtrain">'+cacheOptions(tr,r.train,false)+'</select><div class="sub">The examples the model learns from, already turned into the numbers it reads (this is called tokenised).</div></div>'+
-         '<div class="srow half"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true)+'</select><div class="sub">Examples kept aside to check progress. The model never learns from them, so a better score here means it is really improving. Optional.</div></div>';
+    var typed=r.modelOther||!cat.length||(r.model&&!cat.some(function(m){return m.path===r.model}));
+    h+='<div class="srow"><label class="lbl" for="f-rmodelsel">Base model</label>'+(cat.length?'<select id="f-rmodelsel">'+modelOptions(cat,r.model,typed)+'</select>':"")+
+      (typed?'<input id="f-rmodel" type="text" value="'+esc(r.model)+'" placeholder="/path/to/'+(multi?"Qwen3-VL-8B-Instruct":"Qwen3-14B")+'"'+(cat.length?' style="margin-top:8px"':"")+'>':"")+
+      '<div class="sub">The model you want to teach. Pick one shared on this cluster, or type the path of your own Hugging Face model folder. It has to be on disk already: the machines that run training have no internet.</div></div>';
+    h+='<div class="sec">The data</div><div class="srow"><label class="lbl">Which data</label><div class="chips">'+chip("Data that is already prepared (tokenised)",mode==="ready",'data-dmode="ready"')+chip("My own files: prepare them here",mode==="raw",'data-dmode="raw"')+'</div>'+
+       '<div class="sub">The model reads numbers, not text. Prepared data is your examples converted to numbers once; a new set of files needs that step first.</div></div>';
+    if(mode==="ready"){
+      var trOther=r.trainOther||!tr.length, vaOther=r.valOther;
+      h+='<div class="srow half"><label class="lbl" for="f-rtrain">Training data</label>'+(tr.length?'<select id="f-rtrain">'+cacheOptions(tr,r.train,false,trOther)+'</select>':"")+
+         (trOther?'<input id="f-rtrain-path" type="text" value="'+esc(r.trainPath)+'" placeholder="/path/to/the/tokenised/training/folder"'+(tr.length?' style="margin-top:8px"':"")+'>':"")+
+         '<div class="sub">The examples the model learns from, already turned into numbers.'+(tr.length?"":" None was found in the usual places: type the folder, or prepare your own files with the other choice above.")+'</div></div>'+
+         '<div class="srow half"><label class="lbl" for="f-rval">Validation data</label><select id="f-rval">'+cacheOptions(va,r.val,true,vaOther)+'</select>'+
+         (vaOther?'<input id="f-rval-path" type="text" value="'+esc(r.valPath)+'" placeholder="/path/to/the/tokenised/validation/folder" style="margin-top:8px">':"")+
+         '<div class="sub">Examples kept aside to check progress. The model never learns from them, so a better score here means it is really improving. Optional.</div></div>';
     } else {
-      h+='<div class="srow"><div class="sub">No tokenised data was found yet. The model reads numbers, not text, so your files have to be converted once. Open <b>My data is not tokenised yet</b> at the bottom and press Prepare data; it appears here when that job has finished.</div></div>';
+      h+='<div class="srow"><div class="sub">Give the JSONL files (one conversation per line'+(multi?", with the paths of the images, video or audio in each row":"")+'). A short CPU job converts them once. When it has finished, choose <b>Data that is already prepared</b> above: the result is listed there.</div>'+
+         '<input id="f-rawtrain" type="text" value="'+esc(r.raw.train)+'" placeholder="training file: /path/to/train.jsonl" style="margin-top:8px">'+
+         '<input id="f-rawval" type="text" value="'+esc(r.raw.val)+'" placeholder="validation file (optional)" style="margin-top:6px">'+
+         (multi?'<input id="f-rawmedia" type="text" value="'+esc(r.raw.media)+'" placeholder="folder the media paths in the file are relative to (optional)" style="margin-top:6px">':"")+
+         '<div class="chips" style="margin-top:8px">'+["chatml","alpaca","sharegpt"].map(function(f){return chip(f,r.raw.format===f,'data-fmt="'+f+'"')}).join("")+
+         '<label class="muted">Sequence length <input id="f-rawseq" type="number" min="128" value="'+esc(r.raw.seq)+'" placeholder="'+(multi?"1280":"4096")+'"></label>'+
+         '<button class="btn small" id="f-rawgo" type="button">Prepare data</button></div></div>';
     }
     h+='<div class="sec">The training</div><div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div><div class="sub">One step teaches the model one batch of examples. 100 to 300 steps is a quick trial; use 1000 or more for a real run.</div></div>'+
@@ -1052,14 +1078,6 @@ function recipeForm(o){
          (r.method==="hsdp"||r.method==="pipeline"?'<div class="sub">'+(r.method==="hsdp"?"The shard group must divide the number of GPUs you start with.":"The number of GPUs must divide by the stages.")+' The check on the Train page tells you if it does not.</div>':""));
   }
   h+='<div class="sec">'+(custom?"Settings on top":"More")+'</div>'+det(r,"all","All settings ("+((o.schema||[]).reduce(function(n,g){return n+g.fields.length},0))+" options)",allSettings(o,r));
-  if(!custom) h+=det(r,"raw","My data is not tokenised yet",'<div style="margin-top:8px">'+
-       '<div class="sub">Give the JSONL files (one conversation per line'+(multi?", with the paths of the images, video or audio in each row":"")+'). A CPU job tokenises them once; then they show up as training data above.</div>'+
-       '<input id="f-rawtrain" type="text" value="'+esc(r.raw.train)+'" placeholder="training file: /scratch/<project>/<username>/data/train.jsonl" style="margin-top:8px">'+
-       '<input id="f-rawval" type="text" value="'+esc(r.raw.val)+'" placeholder="validation file (optional)" style="margin-top:6px">'+
-       (multi?'<input id="f-rawmedia" type="text" value="'+esc(r.raw.media)+'" placeholder="folder the media paths in the file are relative to (optional)" style="margin-top:6px">':"")+
-       '<div class="chips" style="margin-top:8px">'+["chatml","alpaca","sharegpt"].map(function(f){return chip(f,r.raw.format===f,'data-fmt="'+f+'"')}).join("")+
-       '<label class="muted">Sequence length <input id="f-rawseq" type="number" min="128" value="'+esc(r.raw.seq)+'" placeholder="'+(multi?"1280":"4096")+'"></label>'+
-       '<button class="btn small" id="f-rawgo" type="button">Prepare data</button></div></div>');
   return h;
 }
 function goLabel(k){ return k==="register"?"Register":k==="recipe"?"Create recipe":"Start"; }
@@ -1135,7 +1153,7 @@ function formData(action){
     f.settings=r.settings;
     if(r.method==="custom"){ f.yaml=r.yaml; f.copy=r.copy; }
     else {
-      f.model=r.model; f.train_cache=r.train; f.val_cache=r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
+      f.model=r.model; f.train_cache=r.trainOther?r.trainPath:r.train; f.val_cache=r.valOther?r.valPath:r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
       if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; if(r.evals!=="") f.eval_steps=r.evals;
       if(r.method==="hsdp"&&r.hsdp!=="") f.hsdp_shard_size=r.hsdp; if(r.method==="pipeline"){ if(r.stages) f.stages=r.stages; if(r.micro) f.microbatches=r.micro; }
     }
@@ -1248,6 +1266,7 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
   else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
   else if(b.hasAttribute("data-method")){ L.rc.method=b.getAttribute("data-method"); renderStart(); }
+  else if(b.hasAttribute("data-dmode")){ L.rc.dataMode=b.getAttribute("data-dmode"); renderStart(); }
   else if(b.hasAttribute("data-kind")){ L.rc.kind=b.getAttribute("data-kind"); renderStart(); }
   else if(b.hasAttribute("data-mod")){ var mm=b.getAttribute("data-mod"), ix=L.rc.mods.indexOf(mm); if(ix>=0){ if(L.rc.mods.length>1) L.rc.mods.splice(ix,1); } else L.rc.mods.push(mm); renderStart(); }
   else if(b.id==="f-rload"){ loadBase(); }
@@ -1276,8 +1295,15 @@ $("#startfields").addEventListener("input", function(e){
   else if(e.target.id==="f-name"){ L.regname=e.target.value.trim(); L.regnameFor=L.run; }
   else if(e.target.id==="f-rname"){ L.rc.name=e.target.value.trim(); }
   else if(e.target.id==="f-rmodel"){ L.rc.model=e.target.value.trim(); }
-  else if(e.target.id==="f-rtrain"){ L.rc.train=e.target.value; }
-  else if(e.target.id==="f-rval"){ L.rc.val=e.target.value; L.rcValTouched=true; }
+  else if(e.target.id==="f-rmodelsel"){
+    var mv=e.target.value, mm=(L.opts.model_catalog||[]).filter(function(x){return x.path===mv})[0];
+    if(mv==="__other"){ L.rc.modelOther=true; L.rc.model=""; } else { L.rc.modelOther=false; L.rc.model=mv; if(mm) L.rc.kind=mm.kind; }
+    renderStart();
+  }
+  else if(e.target.id==="f-rtrain"){ if(e.target.value==="__other"){ L.rc.trainOther=true; } else { L.rc.trainOther=false; L.rc.train=e.target.value; } renderStart(); }
+  else if(e.target.id==="f-rval"){ L.rcValTouched=true; if(e.target.value==="__other"){ L.rc.valOther=true; } else { L.rc.valOther=false; L.rc.val=e.target.value; } renderStart(); }
+  else if(e.target.id==="f-rtrain-path"){ L.rc.trainPath=e.target.value.trim(); }
+  else if(e.target.id==="f-rval-path"){ L.rc.valPath=e.target.value.trim(); }
   else if(e.target.id==="f-rsteps"){ if(e.target.value.trim()) L.rc.steps=e.target.value.trim(); }
   else if(e.target.id==="f-rbatch"){ L.rc.batch=e.target.value.trim(); }
   else if(e.target.id==="f-raccum"){ L.rc.accum=e.target.value.trim(); }
