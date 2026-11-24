@@ -578,7 +578,7 @@ def cmd_portal(cfg: DashboardConfig, bind: str, port: int) -> None:
 
     def with_portal_links() -> dict:
         out = state()
-        out["portal"] = {"mlflow": bool(hub.mlflow_port), "jobs": "/pun/sys/dashboard/activejobs",
+        out["portal"] = {"mlflow": bool(hub.mlflow_port), "jobs": "/pun/sys/dashboard/activejobs", "logout": "/logout",
                          "files": f"/pun/sys/dashboard/files/fs{workdir}" if workdir else ""}
         return out
 
@@ -610,7 +610,9 @@ def _watch(hub: "ray_hub.Hub", server, quiet: bool = False) -> None:
             if not quiet and not hub.links() and not announced_idle:
                 print("no Bhaskera job is running yet; waiting (MLflow already lists finished runs) ...", flush=True)
             announced_idle = not hub.links()
-            time.sleep(10)
+            if hub.stopping.wait(10):                               # the user logged out on the page
+                print("Logged out from the page: stopping. Your jobs keep running; run the same command to open the page again.", flush=True)
+                break
     except KeyboardInterrupt:
         print()
     finally:

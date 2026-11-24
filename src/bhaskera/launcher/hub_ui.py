@@ -271,14 +271,15 @@ dialog.small{width:min(640px,94vw);height:auto;max-height:86vh}
 .mnone{padding:8px 12px 10px;font-size:12.5px;color:var(--muted)}
 .gcta{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 16px;border-radius:10px;font-weight:600;font-size:13.5px;background:var(--ink);color:var(--paper);border:0;margin:0 6px 0 10px;flex:none;white-space:nowrap;transition:background .14s,transform .14s}
 .gcta:hover{background:var(--accent);color:#fff}.gcta svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
-.pill.user{gap:8px;color:var(--text);font-weight:550}
+.gb.ub{padding:5px 10px 5px 6px;gap:8px;color:var(--text);font-weight:600}.gp.acct{min-width:260px}.mu{padding:10px 12px 8px;border-bottom:1px solid var(--border);margin:-2px -2px 6px}.mu b{display:block;font-size:14px}.mu span{font-size:12.5px;color:var(--muted)}
+.byepage{max-width:520px;margin:20vh auto 0;padding:0 24px;text-align:center}.byepage h1{margin:18px 0 8px;font:650 26px/1.2 var(--sans);letter-spacing:-.02em}.byepage p{color:var(--muted);line-height:1.6}.byepage code{display:inline-block;margin-top:6px}
 .av{width:26px;height:26px;border-radius:50%;display:inline-grid;place-items:center;background:var(--accent-soft);color:var(--accent-ink);font-size:12px;font-weight:700}
 .pill.status{flex:none;padding:5px 11px;border:1px solid var(--border);border-radius:999px;background:var(--surface)}
 section,details.more,#chat-live,#cmpsec,#modsec{scroll-margin-top:84px}
 @media (max-width:900px){
   .top .wrap{flex-wrap:wrap;height:auto;padding-top:8px;padding-bottom:8px;row-gap:4px}
   .gnav{order:5;width:100%;overflow-x:auto}.gp{position:fixed;left:12px;right:12px;top:118px;flex-direction:column;max-height:70vh;overflow:auto}.gi.right>.gp{left:12px}
-  .pill.user,#updated{display:none}
+  #updated{display:none}
 }
 /* pages */
 .phead{padding:30px 0 4px}.phead h1{margin:0;font:650 28px/1.15 var(--sans);letter-spacing:-.02em}.phead p{margin:7px 0 0;color:var(--muted);font-size:14.5px;max-width:72ch}
@@ -324,7 +325,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
   </nav>
   <div class="spacer"></div>
   <button class="gcta" id="startbtn" type="button"><svg viewBox="0 0 14 14"><path d="M7 2v10M2 7h10"/></svg>New run</button>
-  <span class="pill user" id="who" hidden></span>
+  <nav class="gnav" id="unav" aria-label="Account"><div class="gi right" data-menu="user"><button type="button" class="gb ub" id="who" aria-haspopup="true" aria-expanded="false" hidden></button><div class="gp" id="mn-user" role="menu"></div></div></nav>
   <span class="pill status" title="The page refreshes by itself"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
   <button class="icon-btn" id="theme" aria-label="Switch between light and dark" title="Light / dark"></button>
 </div></header>
@@ -436,6 +437,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
   </div>
   <div class="dlg-foot"><div class="ssum" id="startsum"></div><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the recipe check; submits nothing">Check first</button>
     <button class="btn primary" id="startgo" type="button">Start</button></div>
+</dialog>
+<dialog id="bye" class="small">
+  <div class="dlg-head"><b>Log out</b></div>
+  <div class="dlgbody" style="padding:14px 22px 6px"><p id="bye-text" style="margin:0 0 10px;line-height:1.6"></p></div>
+  <div class="dlg-foot"><button class="btn" id="bye-cancel" type="button">Stay</button><button class="btn primary" id="bye-ok" type="button">Log out</button></div>
 </dialog>
 <dialog id="guide" class="small">
   <div class="dlg-head"><b>Words used on this page</b><span class="spacer" style="flex:1"></span><button class="btn" id="guideclose" type="button">Close</button></div>
@@ -718,7 +724,8 @@ var MI={
  book:'<svg viewBox="0 0 24 24"><path d="M5 5a2 2 0 0 1 2-2h12v16H7a2 2 0 0 0-2 2z"/><path d="M5 19V5"/></svg>',
  help:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.5a2.4 2.4 0 1 1 3.4 2.2c-.7.4-1.1.9-1.1 1.8M12 16.6h.01"/></svg>',
  folder:'<svg viewBox="0 0 24 24"><path d="M4 7a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/></svg>',
- wrench:'<svg viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 0 0 5 5L11 20a2.1 2.1 0 0 1-3-3z"/></svg>'
+ wrench:'<svg viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 0 0 5 5L11 20a2.1 2.1 0 0 1-3-3z"/></svg>',
+ logout:'<svg viewBox="0 0 24 24"><path d="M10 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h4M14 8l4 4-4 4M18 12H9"/></svg>'
 };
 function mi(o){
   var inner='<span class="mic">'+MI[o.ic]+'</span><span class="mt"><b>'+esc(o.t)+'</b>'+(o.d?'<span>'+esc(o.d)+'</span>':"")+'</span>', cls="mi"+(o.cls?" "+o.cls:"")+(o.off?" off":"");
@@ -778,6 +785,9 @@ function renderMenus(){
       {ic:"box",t:"Models and the registry",d:"Save, name and find your models",href:base?base+"registry/":"#",off:!base},
       {ic:"wrench",t:"Troubleshooting",d:"Where it breaks and what to do",href:base?base+"troubleshooting/":"#",off:!base},
       {ic:"code",t:"Source code",d:"The project on GitHub",href:DOCS_SOURCE}]);
+  $("#mn-user").className="gp acct";
+  $("#mn-user").innerHTML='<div class="mu"><b>'+esc(s.user||"")+'</b><span>'+esc(s.cluster||"")+'</span></div>'+mcol("",[{ic:"help",t:"Words used on this page",d:"What a recipe, an adapter or a step is",attrs:'data-dialog="guide"'},
+    {ic:"logout",t:"Log out",d:PROXY?"Sign out of the portal":"Stop this page; your jobs keep running",attrs:'data-act="logout"'}]);
   $("#ag-home").innerHTML=cards([I.text,I.chat,I.bench,I.register]);
   $("#ag-train").innerHTML=cards([I.text,I.image,I.prep,I.custom,I.train,I.resume]);
   $("#ag-serve").innerHTML=cards([I.chat].concat(I.serving,[I.register]));
@@ -794,8 +804,8 @@ function renderMenus(){
 }
 var menuOpen=null, menuOpenT=null, menuCloseT=null, TOUCH=window.matchMedia&&window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 function setMenu(el,on){ el.classList.toggle("open",on); var b=el.querySelector(".gb"); if(b) b.setAttribute("aria-expanded",on?"true":"false"); }
-function closeMenus(){ clearTimeout(menuOpenT); clearTimeout(menuCloseT); document.querySelectorAll("#gnav .gi.open").forEach(function(e){ setMenu(e,false); }); menuOpen=null; }
-Array.prototype.forEach.call(document.querySelectorAll("#gnav .gi"),function(el){
+function closeMenus(){ clearTimeout(menuOpenT); clearTimeout(menuCloseT); document.querySelectorAll(".gnav .gi.open").forEach(function(e){ setMenu(e,false); }); menuOpen=null; }
+Array.prototype.forEach.call(document.querySelectorAll("#gnav .gi, #unav .gi"),function(el){
   el.addEventListener("mouseenter",function(){ if(TOUCH) return; clearTimeout(menuCloseT); clearTimeout(menuOpenT); menuOpenT=setTimeout(function(){ if(menuOpen&&menuOpen!==el) setMenu(menuOpen,false); setMenu(el,true); menuOpen=el; },60); });
   el.addEventListener("mouseleave",function(){ clearTimeout(menuOpenT); menuCloseT=setTimeout(function(){ setMenu(el,false); if(menuOpen===el) menuOpen=null; },170); });
   el.querySelector(".gb").addEventListener("click",function(e){
@@ -804,14 +814,15 @@ Array.prototype.forEach.call(document.querySelectorAll("#gnav .gi"),function(el)
     var on=!el.classList.contains("open"); closeMenus(); if(on){ setMenu(el,true); menuOpen=el; }
   });
 });
-document.addEventListener("click",function(e){ if(!e.target.closest("#gnav")) closeMenus(); });
+document.addEventListener("click",function(e){ if(!e.target.closest(".gnav")) closeMenus(); });
 document.addEventListener("keydown",function(e){ if(e.key==="Escape") closeMenus(); });
 $("#brand").addEventListener("click",function(e){ e.preventDefault(); closeMenus(); go("home"); });
 $("#startbtn").addEventListener("click",function(){ L.hours=""; openStart("recipe"); });
 document.addEventListener("click",function(e){
   var it=e.target.closest(".mi,.sumtile"); if(!it||it.classList.contains("off")) return;
   closeMenus();
-  var kind=it.getAttribute("data-open"), gp=it.getAttribute("data-go"), sc=it.getAttribute("data-scroll"), dg=it.getAttribute("data-dialog");
+  var kind=it.getAttribute("data-open"), gp=it.getAttribute("data-go"), sc=it.getAttribute("data-scroll"), dg=it.getAttribute("data-dialog"), act=it.getAttribute("data-act");
+  if(act==="logout"){ askLogout(); return; }
   if(kind){
     L.hours="";
     if(kind==="recipe"){
@@ -826,6 +837,24 @@ document.addEventListener("click",function(e){
   if(dg){ $("#"+dg).showModal(); return; }
   if(gp){ go(gp, sc); return; }
   if(sc){ var t=document.querySelector(sc); if(t&&!t.hidden){ if(t.tagName==="DETAILS") t.open=true; t.scrollIntoView({behavior:"smooth",block:"start"}); } }
+});
+
+/* ---- log out ---- */
+function askLogout(){
+  $("#bye-text").textContent=PROXY?"This signs you out of the portal. Jobs you started keep running, and you can open Bhaskera again from the portal.":
+    "This stops the page on the login node and closes its links to your jobs. Jobs you started keep running. To open the page again, run the same command you used to start it.";
+  $("#bye-ok").disabled=false; $("#bye").showModal();
+}
+$("#bye-cancel").addEventListener("click",function(){ $("#bye").close(); });
+$("#bye-ok").addEventListener("click",function(){
+  $("#bye-ok").disabled=true;
+  api("api/logout",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:"{}"}).then(function(r){
+    $("#bye").close();
+    if(!r.j||!r.j.ok){ toast("Could not log out: "+((r.j&&r.j.error)||"the hub did not answer")); return; }
+    if(r.j.mode==="portal"){ var pl=(state&&state.portal)||{}; location.href=pl.logout||"/logout"; return; }
+    document.body.innerHTML='<div class="byepage"><svg class="logo" viewBox="0 0 36 36" style="width:56px;height:56px" aria-hidden="true"><rect width="36" height="36" rx="10" fill="var(--accent)"/><path d="M9.5 19.5a8.5 8.5 0 0 1 17 0z" fill="#fff"/><rect x="8" y="22" width="20" height="2.4" rx="1.2" fill="#fff"/><rect x="11.5" y="26" width="13" height="2.4" rx="1.2" fill="#fff" opacity=".85"/><rect x="15" y="30" width="6" height="2.4" rx="1.2" fill="#fff" opacity=".7"/></svg>'+
+      '<h1>Bhaskera has stopped</h1><p>You are logged out. Your jobs keep running on the cluster.<br>To open the page again, run the same command you used to start it, then reload this tab.</p></div>';
+  }).catch(function(){ $("#bye").close(); toast("The page could not reach the hub."); });
 });
 
 /* ---- compare benchmarked models ---- */
@@ -871,7 +900,7 @@ function renderSide(){
 function render(){
   var s=state; if(!s) return;
   GPN = s.gpus_per_node || null;
-  $("#who").hidden=false; $("#who").innerHTML='<span class="av">'+esc((s.user||"?").charAt(0).toUpperCase())+'</span>'+esc(s.user);
+  $("#who").hidden=false; $("#who").innerHTML='<span class="av">'+esc((s.user||"?").charAt(0).toUpperCase())+'</span>'+esc(s.user)+'<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg>';
   $("#tag").textContent = s.cluster || ""; $("#tag").hidden = !s.cluster;
   setTitle();
   var T=s.totals||{}, bad=(s.bad_nodes||[]).length;

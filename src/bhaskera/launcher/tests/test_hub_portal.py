@@ -123,3 +123,28 @@ def test_mlflow_pages_need_the_token_and_a_portal_that_keeps_the_prefix_also_wor
     assert status == 200 and seen[-1][0] == "/rnode/node17/20001/mlflow/x"
     status, _, page = call(srv, path="/rnode/node17/20001/", headers={"Cookie": f"bhaskera_session={TOKEN}"})
     assert status == 200 and "var PROXY=true;" in page
+
+
+# ---- logging out
+
+def test_logout_on_the_stand_alone_page_stops_it_and_needs_the_pages_own_header():
+    hub = ray_hub.Hub(lambda: [], lambda n: n, lambda h, r, g: [h], spawn=lambda c: _Proc(), peer_check=lambda c, s: True)
+    srv = ray_hub.serve(hub, ray_hub.free_port())
+    try:
+        def post(headers):
+            c = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=10)
+            c.request("POST", "/api/logout", b"{}", {"Host": "localhost:8265", **headers})
+            r = c.getresponse()
+            return r.status, json.loads(r.read() or b"{}")
+        assert post({})[0] == 403 and not hub.stopping.is_set()                                                    # a request from anywhere else
+        assert post({"X-Requested-With": "bhaskera", "Origin": "https://evil.example.org"})[0] == 403 and not hub.stopping.is_set()
+        assert post({"X-Requested-With": "bhaskera"}) == (200, {"ok": True, "mode": "local"}) and hub.stopping.is_set()
+    finally:
+        srv.shutdown()
+
+
+def test_logout_behind_a_portal_clears_the_pages_cookie_and_leaves_the_session_alone(portal):
+    cookie = {"Cookie": f"bhaskera_session={TOKEN}"}
+    assert call(portal, "POST", "/api/logout", cookie, "{}")[0] == 403
+    status, head, body = call(portal, "POST", "/api/logout", {**cookie, "X-Requested-With": "bhaskera"}, "{}")
+    assert status == 200 and json.loads(body)["mode"] == "portal" and "bhaskera_session=;" in head["Set-Cookie"] and "Max-Age=0" in head["Set-Cookie"]

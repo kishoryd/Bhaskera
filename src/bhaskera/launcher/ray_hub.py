@@ -87,6 +87,7 @@ class Hub:
         self._serve_forward_cmd = serve_forward_cmd
         self._links: dict[str, JobLink] = {}
         self._lock = threading.Lock()
+        self.stopping = threading.Event()      # set when the user logs out of the stand-alone page: the command that serves it then ends
         # Set by the command: what the home page shows (see hub_state.py) and how it reads a job's log.
         self.state_provider: Optional[Callable[[], dict]] = None
         self.log_provider: Optional[Callable[[str, int], dict]] = None
@@ -367,6 +368,25 @@ def _handler(hub: Hub):
                 return False
             return False
 
+        def _logout(self) -> None:
+            """/api/logout (POST). Behind a portal it clears the page's own cookie (the portal signs the user out itself); on a stand-alone page
+            there is no sign-in, so it asks the command that serves the page to stop. Running jobs are not touched."""
+            origin = self.headers.get("Origin")
+            if self.command != "POST" or self.headers.get("X-Requested-With") != "bhaskera" or (origin and not hub.proxy_token and not hub_guard.origin_allowed(origin)):
+                return self._json({"error": "this request does not come from the Bhaskera page"}, 403)
+            if hub.proxy_token:
+                body = b'{"ok": true, "mode": "portal"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Set-Cookie", "bhaskera_session=; Max-Age=0; HttpOnly; SameSite=Lax")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            hub.stopping.set()
+            return self._json({"ok": True, "mode": "local"})
+
         def _mlflow_in_portal(self, path: str, query: str) -> None:
             """MLflow's own pages inside the portal tab: /mlflow/... goes to the MLflow of this session, which was started to serve under
             <portal prefix>/mlflow, so the prefix the portal strips is put back."""
@@ -409,6 +429,8 @@ def _handler(hub: Hub):
                     return self._json(hub.state_provider())
                 if path == "/api/launch":
                     return self._launch()
+                if path == "/api/logout":
+                    return self._logout()
                 if path == "/api/resume":
                     return self._resume(query)
                 if path in ("/api/chat", "/api/serve"):
