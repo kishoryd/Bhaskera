@@ -197,11 +197,12 @@ class Launcher:
         """The models already in the registry (name, number of versions, aliases), to offer when registering another version."""
         try:
             from . import register
+            ours = [{**m, "versions": [v for v in m["versions"] if v["tags"].get("framework") == "bhaskera"]} for m in register.listing(register.make_client(self._store or register._store_default()))]
             return [{"name": m["name"], "versions": len(m["versions"]), "aliases": sorted({a for v in m["versions"] for a in v["aliases"]}),
                      "refs": [{"ref": f"{m['name']}:{v['version']}", "version": v["version"], "run_id": v["run_id"], "aliases": v["aliases"],
                                "run_name": v["tags"].get("run_name", ""), "base_model": v["tags"].get("base_model", ""),
                                "eval_loss": v["tags"].get("eval_loss", ""), "eval_accuracy": v["tags"].get("eval_accuracy", ""), "note": (v.get("description") or "")[:900]} for v in m["versions"]]}
-                    for m in register.listing(register.make_client(self._store or register._store_default()))]
+                    for m in ours if m["versions"]]
         except Exception:
             return []
 

@@ -12,6 +12,9 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
   (`.cache/huggingface/`) now default to it. A copy already kept in the home folder is used until a copy or link exists in the run folder, so no run disappears. `src/bhaskera/paths.py` decides.
 
 ### Home page
+- **Five pages** (Home, Train, Serve, Evaluate, Monitor) with a hover menu under each name in the header and under Docs, a new logo that returns to Home, a **New run** button, and one set of action cards per page.
+  Home shows four numbers (running now, training runs, saved models, benchmarked) that lead to the pages. When a chat server finishes loading, the page opens Serve.
+- Only runs and saved models that Bhaskera made are listed: a run carries the tag `framework: bhaskera`, or is filed in a `bhaskera*` experiment (older runs); other tools' runs in the same MLflow store are not shown.
 - **Create recipe** (Start menu): a recipe from a few choices for text and multimodal models, with QLoRA + DDP, DDP, FSDP2, HSDP and Pipeline,
   *All settings* (every option, searchable, with its meaning), a *Custom* mode (paste or start from a starter) and *Prepare data* for raw JSONL.
   Recipes are checked with the training job's own loader before they are written. DDP and QLoRA recipes turn on activation checkpointing.

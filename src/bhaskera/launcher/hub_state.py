@@ -154,6 +154,20 @@ def _tag(run: Path, name: str) -> str:
 STALE_AFTER_S = 20 * 60
 
 
+def _experiment_names(store: Path) -> dict:
+    """{experiment folder: its name} of an MLflow file store."""
+    names = {}
+    for meta in store.glob("*/meta.yaml"):
+        names[meta.parent.name] = _meta(meta).get("name", "")
+    return names
+
+
+def is_bhaskera_run(run: Path, experiments: dict) -> bool:
+    """Whether Bhaskera made the run: it carries the tag ``framework: bhaskera`` (written by every run since the tag exists), or it is filed
+    in an experiment whose name starts with ``bhaskera`` (the default experiment of Bhaskera's older runs). Runs of other tools are not ours."""
+    return _tag(run, "framework") == "bhaskera" or experiments.get(run.parent.name, "").lower().startswith("bhaskera")
+
+
 def _lm_eval_deltas(metrics: Path) -> dict:
     """{task_metric: change} of the benchmark comparison stored by bhaskera.launcher.evaluate (files lmeval_*_delta)."""
     out = {}
@@ -212,6 +226,7 @@ def recent_runs(store: str | Path, limit: int = 40, now: Optional[float] = None)
             continue
     metas.sort(reverse=True)
     runs = []
+    experiments = _experiment_names(store)
     for _mtime, meta in metas:
         if len(runs) >= limit:
             break
@@ -219,6 +234,8 @@ def recent_runs(store: str | Path, limit: int = 40, now: Optional[float] = None)
         if info.get("lifecycle_stage") == "deleted" or not info.get("run_name"):
             continue
         run = meta.parent
+        if not is_bhaskera_run(run, experiments):
+            continue
         try:
             started = int(info.get("start_time", "0")) / 1000.0
             ended = int(info["end_time"]) / 1000.0 if info.get("end_time", "null") not in ("null", "") else None

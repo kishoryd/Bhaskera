@@ -79,6 +79,10 @@ def test_registered_versions_are_offered_with_their_run_and_note(world, monkeypa
     from bhaskera.launcher import register
     monkeypatch.setattr(register, "make_client", lambda store: object())
     monkeypatch.setattr(register, "listing", lambda c: [{"name": "m", "versions": [{"version": "2", "run_id": RUN, "aliases": ["live"],
-                                                                                    "tags": {"run_name": "r", "eval_loss": "1.0"}, "description": "note text"}]}])
-    ref = L.options()["models"][0]["refs"][0]
+                                                                                    "tags": {"framework": "bhaskera", "run_name": "r", "eval_loss": "1.0"}, "description": "note text"},
+                                                                                    {"version": "3", "run_id": "d" * 32, "aliases": [], "tags": {"run_name": "foreign"}, "description": ""}]},
+                                                       {"name": "not-ours", "versions": [{"version": "1", "run_id": "e" * 32, "aliases": [], "tags": {}, "description": ""}]}])
+    models = L.options()["models"]
+    assert [m["name"] for m in models] == ["m"] and [r["ref"] for r in models[0]["refs"]] == ["m:2"]          # versions and models Bhaskera did not register are not listed
+    ref = models[0]["refs"][0]
     assert ref["ref"] == "m:2" and ref["run_id"] == RUN and ref["aliases"] == ["live"] and ref["note"] == "note text" and ref["eval_loss"] == "1.0"

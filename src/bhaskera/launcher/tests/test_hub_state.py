@@ -49,12 +49,14 @@ def test_squeue_rows():
         ("130450", "RUNNING", 2, 3600, True, ""), ("130460", "PENDING", 16, 43200, False, "Priority")]
 
 
-def _make_run(store, exp, run_id, name, status, start, job="", group="", eval_losses=(), loss=None):
+def _make_run(store, exp, run_id, name, status, start, job="", group="", eval_losses=(), loss=None, ours=True):
     d = store / exp / run_id
     (d / "metrics").mkdir(parents=True)
     (d / "tags").mkdir()
     (d / "meta.yaml").write_text(f"run_name: {name}\nstatus: {status}\nstart_time: {int(start * 1000)}\nend_time: {int((start + 60) * 1000)}\n"
                                  f"lifecycle_stage: active\nexperiment_id: '{exp}'\n")
+    if ours:
+        (d / "tags" / "framework").write_text("bhaskera")
     if job:
         (d / "tags" / "slurm_job").write_text(job)
     if group:
@@ -183,3 +185,16 @@ def test_the_page_and_its_endpoints(tmp_path, use_profile):
 def test_the_page_does_not_name_a_cluster():
     from bhaskera.launcher.hub_ui import INDEX_HTML
     assert "PARAM Rudra" not in INDEX_HTML and "paramrudra" not in INDEX_HTML.lower()
+
+
+def test_only_runs_made_by_bhaskera_are_listed(tmp_path):
+    now = time.time()
+    _make_run(tmp_path, "1", "mine", "mine", 3, now - 10)                                         # tagged framework: bhaskera
+    _make_run(tmp_path, "2", "legacy", "legacy-run", 3, now - 20, ours=False)                     # an older run in a bhaskera* experiment, from before the tag
+    (tmp_path / "2" / "meta.yaml").write_text("name: bhaskera-multimodal\nartifact_location: x\n")
+    _make_run(tmp_path, "3", "foreign", "someone-elses", 3, now - 5, ours=False)                  # another tool, in an experiment of its own
+    (tmp_path / "3" / "meta.yaml").write_text("name: MLflow Demo\nartifact_location: x\n")
+    _make_run(tmp_path, "4", "loose", "no-experiment-file", 3, now - 1, ours=False)               # no tag, an experiment without a name
+    runs = hs.recent_runs(tmp_path, limit=10, now=now)
+    assert sorted(r["name"] for r in runs) == ["legacy-run", "mine"]
+    assert hs.is_bhaskera_run(tmp_path / "3" / "foreign", hs._experiment_names(tmp_path)) is False

@@ -168,6 +168,7 @@ def test_the_page_data_knows_serve_jobs_adapters_and_benchmarks(tmp_path):
     run = tmp_path / "1" / "r1"
     (run / "metrics").mkdir(parents=True)
     (run / "tags").mkdir()
+    (run / "tags" / "framework").write_text("bhaskera")
     (run / "artifacts" / "adapter").mkdir(parents=True)
     (run / "artifacts" / "adapter" / "adapter_config.json").write_text("{}")
     (run / "meta.yaml").write_text("run_name: trained\nstatus: 3\nstart_time: 1000000\nlifecycle_stage: active\n")

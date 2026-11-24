@@ -7,7 +7,7 @@ INDEX_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bhaskera</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='7' fill='%23a8381f'/%3E%3Cg stroke='%23a8381f' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M16 2v4M16 26v4M2 16h4M26 16h4M6 6l3 3M23 23l3 3M26 6l-3 3M9 23l-3 3'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='10' fill='%23a8381f'/%3E%3Cpath d='M9.5 19.5a8.5 8.5 0 0 1 17 0z' fill='white'/%3E%3Crect x='8' y='22' width='20' height='2.4' rx='1.2' fill='white'/%3E%3Crect x='11.5' y='26' width='13' height='2.4' rx='1.2' fill='white' opacity='.85'/%3E%3Crect x='15' y='30' width='6' height='2.4' rx='1.2' fill='white' opacity='.7'/%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#f4f1e9; --surface:#fffdf8; --surface-2:#efe9db; --border:#e2dac7; --border-strong:#c9bfa6; --text:#1f1c17; --muted:#6b6454;
@@ -17,7 +17,7 @@ INDEX_HTML = r"""<!doctype html>
   --accent:#a8381f; --accent-ink:#8a2c17; --accent-soft:#e9dccf;
   --ok:#2b6648; --ok-soft:#e1efe6; --warn:#8a5d08; --warn-soft:#f5e9c6; --bad:#a8381f; --bad-soft:#f7e2dc;
   --info:#2c4a7a; --info-soft:#e2e9f4;
-  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --serif:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;     /* headings use the same family as the text */
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
@@ -37,11 +37,11 @@ body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 var(--sans)}
 a{color:inherit;text-decoration:none}
 button{font:inherit;color:inherit;cursor:pointer}
 .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
-.top{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:var(--shadow-1)}
-.top .wrap{display:flex;align-items:center;gap:14px;height:60px}
-.brand{display:flex;align-items:center;gap:11px}
-.brand svg{width:26px;height:26px;color:var(--accent)}
-.brand b{font:600 21px/1 var(--serif);letter-spacing:.005em} .brand small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+.top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--surface) 90%,transparent);-webkit-backdrop-filter:saturate(1.3) blur(12px);backdrop-filter:saturate(1.3) blur(12px);border-bottom:1px solid var(--border)}
+.top .wrap{display:flex;align-items:center;gap:8px;height:64px}
+.brand{display:flex;align-items:center;gap:11px;margin-right:22px;border-radius:10px;flex:none}
+.brand .logo{width:34px;height:34px;flex:none;display:block;filter:drop-shadow(0 1px 2px rgba(120,40,20,.28))}
+.brand b{display:block;font:650 19px/1.05 var(--sans);letter-spacing:-.015em;color:var(--text)} .brand small{display:block;color:var(--muted);font-size:11.5px;font-weight:500;letter-spacing:.02em;margin-top:3px;white-space:nowrap}
 .spacer{flex:1}
 #updated{display:inline-block;width:16ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .pill{font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:7px}
@@ -115,11 +115,6 @@ tbody tr:hover td{background:var(--surface-2)}
 td.num,th.num{text-align:right;font-family:var(--mono);font-size:12.5px}
 td a.run{font-weight:600;display:inline-block;max-width:240px;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;white-space:nowrap}
 td a.run:hover{text-decoration:underline;text-underline-offset:3px}
-.nav{display:flex;gap:2px;margin-left:18px}
-.nav a{font-size:13px;color:var(--muted);padding:6px 10px;border-radius:var(--radius-sm);transition:background .12s,color .12s}
-.nav a:hover{color:var(--text);background:var(--surface-2)}
-.nav a.off{opacity:.45;pointer-events:none}
-@media (max-width:820px){.nav{display:none}}
 .note-card{padding:12px 0;color:var(--muted)}
 .more{margin-top:24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:0 16px}
 .more summary{cursor:pointer;color:var(--muted);font-size:13px;padding:10px 0}
@@ -142,12 +137,6 @@ footer a{text-decoration:underline;text-underline-offset:3px}
 dialog{width:min(980px,96vw);height:min(860px,92vh);display:none;flex-direction:column;overflow:hidden;padding:0;border:1px solid var(--border-strong);border-radius:14px;background:var(--surface);color:var(--text);box-shadow:var(--shadow-2)}
 dialog[open]{display:flex}
 dialog::backdrop{background:rgba(31,28,23,.5);backdrop-filter:blur(2px)}
-.menuwrap{position:relative}
-.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:290px;background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius);box-shadow:var(--shadow-2);padding:6px}
-.menu[hidden]{display:none}
-.menu button{display:flex;flex-direction:column;gap:1px;width:100%;text-align:left;border:0;background:transparent;padding:8px 11px;border-radius:4px}
-.menu button:hover,.menu button:focus-visible{background:var(--surface-2);outline:0}
-.menu b{font-size:14px;font-weight:500}.menu span{font-size:12px;color:var(--muted)}
 .dlg-head{display:flex;align-items:center;gap:10px;padding:12px 22px;border-bottom:1px solid var(--border)}
 .dlg-head b{font:500 18px var(--serif)}
 #logtext{margin:0;padding:14px 18px;background:#14120d;color:#d9d2c0;font:12px/1.55 var(--mono);height:62vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
@@ -259,6 +248,52 @@ dialog::backdrop{background:rgba(31,28,23,.5);backdrop-filter:blur(2px)}
 .intro{padding:11px 14px;background:var(--info-soft);border-radius:var(--radius-sm);font-size:13px;line-height:1.55}
 dialog.small{width:min(640px,94vw);height:auto;max-height:86vh}
 .gloss{margin:0}.gloss dt{font-weight:600;margin-top:14px}.gloss dd{margin:2px 0 0;color:var(--muted);line-height:1.55}
+/* header: hover menus */
+.gnav{display:flex;align-items:center;gap:2px;flex:none}
+.gi{position:relative}
+.gb{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;border-radius:9px;padding:9px 13px;font-size:14px;font-weight:550;color:var(--muted);transition:background .14s,color .14s}
+.gb svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .18s;opacity:.7}
+.gi:hover>.gb,.gi.open>.gb,.gb:focus-visible{color:var(--text);background:var(--surface-2)}
+.gi.open>.gb svg{transform:rotate(180deg)}
+.gp{position:absolute;left:-8px;top:100%;margin-top:10px;z-index:40;min-width:300px;padding:8px;display:flex;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-2);
+  opacity:0;visibility:hidden;transform:translateY(-4px);transition:opacity .15s,transform .15s,visibility 0s .15s}
+.gp::before{content:"";position:absolute;left:0;right:0;top:-12px;height:12px}
+.gi.open>.gp{opacity:1;visibility:visible;transform:none;transition:opacity .15s,transform .15s,visibility 0s}
+.gi.right>.gp{left:auto;right:-8px}
+.mcol{display:flex;flex-direction:column;min-width:270px;flex:1}
+.mh{padding:8px 10px 4px;font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.mi{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;background:transparent;border-radius:11px;padding:9px 10px;color:var(--text);transition:background .12s}
+.mi:hover,.mi:focus-visible{background:var(--surface-2);outline:0}
+.mi.off{opacity:.45;pointer-events:none}
+.mic{flex:none;width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.mic svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.mt{display:flex;flex-direction:column;min-width:0}.mt b{font-size:14px;font-weight:600;line-height:1.25}.mt span{font-size:12.5px;color:var(--muted);line-height:1.35;overflow:hidden;text-overflow:ellipsis}
+.mnone{padding:8px 12px 10px;font-size:12.5px;color:var(--muted)}
+.gcta{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 16px;border-radius:10px;font-weight:600;font-size:13.5px;background:var(--ink);color:var(--paper);border:0;margin:0 6px 0 10px;flex:none;white-space:nowrap;transition:background .14s,transform .14s}
+.gcta:hover{background:var(--accent);color:#fff}.gcta svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round}
+.pill.user{gap:8px;color:var(--text);font-weight:550}
+.av{width:26px;height:26px;border-radius:50%;display:inline-grid;place-items:center;background:var(--accent-soft);color:var(--accent-ink);font-size:12px;font-weight:700}
+.pill.status{flex:none;padding:5px 11px;border:1px solid var(--border);border-radius:999px;background:var(--surface)}
+section,details.more,#chat-live,#cmpsec,#modsec{scroll-margin-top:84px}
+@media (max-width:900px){
+  .top .wrap{flex-wrap:wrap;height:auto;padding-top:8px;padding-bottom:8px;row-gap:4px}
+  .gnav{order:5;width:100%;overflow-x:auto}.gp{position:fixed;left:12px;right:12px;top:118px;flex-direction:column;max-height:70vh;overflow:auto}.gi.right>.gp{left:12px}
+  .pill.user,#updated{display:none}
+}
+/* pages */
+.phead{padding:30px 0 4px}.phead h1{margin:0;font:650 28px/1.15 var(--sans);letter-spacing:-.02em}.phead p{margin:7px 0 0;color:var(--muted);font-size:14.5px;max-width:72ch}
+.agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:14px;margin:20px 0 10px}
+.mi.acard{align-items:flex-start;gap:14px;padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-1);transition:border-color .14s,box-shadow .14s,transform .14s}
+.mi.acard:hover,.mi.acard:focus-visible{border-color:var(--border-strong);box-shadow:var(--shadow-2);transform:translateY(-1px);background:var(--surface)}
+.mi.acard .mt span{white-space:normal}.mi.acard .mt b{font-size:15px}
+.sumrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:20px 0 4px}
+.sumtile{display:flex;flex-direction:column;gap:2px;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:14px 16px;box-shadow:var(--shadow-1);transition:border-color .14s,transform .14s}
+.sumtile:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+.sumtile .k{font-size:11.5px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.sumtile .v{font:650 26px/1.2 var(--sans);letter-spacing:-.02em}.sumtile .v small{font-size:12.5px;font-weight:500;color:var(--muted);letter-spacing:0}
+.gb{position:relative}
+.gi.here>.gb{color:var(--text)}.gi.here>.gb::after{content:"";position:absolute;left:13px;right:13px;bottom:3px;height:2px;border-radius:2px;background:var(--accent)}
+.only-touch{display:none}@media (hover:none) and (pointer:coarse){.only-touch{display:flex}}
+#cmpempty{margin-top:14px}
 /* polish: focus, motion, small screens */
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-shadow:var(--ring)}
@@ -276,27 +311,29 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
 </head>
 <body>
 <header class="top"><div class="wrap">
-  <div class="brand">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="7" fill="currentColor"/><g stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M16 2v4M16 26v4M2 16h4M26 16h4M6 6l3 3M23 23l3 3M26 6l-3 3M9 23l-3 3"/></g></svg>
-    <div><b>Bhaskera</b><small id="tag"></small></div>
-  </div>
+  <a class="brand" href="#" id="brand" aria-label="Bhaskera, back to the top">
+    <svg class="logo" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="10" fill="var(--accent)"/><path d="M9.5 19.5a8.5 8.5 0 0 1 17 0z" fill="#fff"/><rect x="8" y="22" width="20" height="2.4" rx="1.2" fill="#fff"/><rect x="11.5" y="26" width="13" height="2.4" rx="1.2" fill="#fff" opacity=".85"/><rect x="15" y="30" width="6" height="2.4" rx="1.2" fill="#fff" opacity=".7"/></svg>
+    <span><b>Bhaskera</b><small id="tag"></small></span>
+  </a>
+  <nav class="gnav" id="gnav" aria-label="Main">
+    <div class="gi" data-menu="train" data-page="train"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Train<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-train" role="menu"></div></div>
+    <div class="gi" data-menu="serve" data-page="serve"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Serve<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-serve" role="menu"></div></div>
+    <div class="gi" data-menu="eval" data-page="evaluate"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Evaluate<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-eval" role="menu"></div></div>
+    <div class="gi" data-menu="monitor" data-page="monitor"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Monitor<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-monitor" role="menu"></div></div>
+    <div class="gi right" data-menu="docs"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Docs<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-docs" role="menu"></div></div>
+  </nav>
   <div class="spacer"></div>
-  <nav class="nav" id="nav" aria-label="Tools"></nav>
-  <div class="menuwrap"><button class="btn primary" id="startbtn" type="button" aria-haspopup="true" aria-expanded="false">Start <span aria-hidden="true">&#9662;</span></button>
-    <div class="menu" id="startmenu" role="menu" hidden>
-      <button role="menuitem" data-k="recipe"><b>Create a recipe</b><span>Describe a training run, or write it yourself</span></button>
-      <button role="menuitem" data-k="train"><b>Train</b><span>Fine-tune with one of your recipes</span></button>
-      <button role="menuitem" data-k="resume"><b>Resume</b><span>Continue a stopped run from a checkpoint</span></button>
-      <button role="menuitem" data-k="serve"><b>Chat</b><span>Talk to a trained model</span></button>
-      <button role="menuitem" data-k="eval"><b>Benchmark</b><span>Test one or more models</span></button>
-      <button role="menuitem" data-k="register"><b>Register</b><span>Keep a model under a name</span></button>
-    </div></div>
-  <span class="pill" id="who" hidden></span>
-  <span class="pill" title="The page refreshes by itself"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
+  <button class="gcta" id="startbtn" type="button"><svg viewBox="0 0 14 14"><path d="M7 2v10M2 7h10"/></svg>New run</button>
+  <span class="pill user" id="who" hidden></span>
+  <span class="pill status" title="The page refreshes by itself"><span class="dot" id="dot"></span><span id="updated">connecting…</span></span>
   <button class="icon-btn" id="theme" aria-label="Switch between light and dark" title="Light / dark"></button>
 </div></header>
 
 <main class="wrap">
+  <div class="view" data-view="home">
+    <div class="phead"><h1 id="home-title">Welcome</h1><p id="home-sub"></p></div>
+    <div class="sumrow" id="sumrow"></div>
+    <div class="agrid" id="ag-home"></div>
   <section id="path" hidden>
     <div class="path-head"><b>Your path</b><span class="muted">from your data to a model you can use</span><span class="spacer"></span><button class="linkbtn" id="pathhide" type="button">Hide</button></div>
     <ol class="steps" id="steps"></ol>
@@ -304,6 +341,30 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
   <div class="h2row"><h2>Jobs <span class="count" id="jobcount">0</span></h2><span class="muted" id="stats"></span></div>
   <div id="jobs"><div class="skeleton"></div></div>
 
+  </div>
+  <div class="view" data-view="train" hidden>
+    <div class="phead"><h1>Train a model</h1><p>Create a recipe, run it on the cluster, and continue a run that stopped.</p></div>
+    <div class="agrid" id="ag-train"></div>
+  <section id="runsec">
+    <h2>Runs <span class="count" id="runcount">0</span></h2>
+    <div class="card tablebox">
+      <div class="tools" id="runtools" hidden>
+        <input id="q" type="search" placeholder="Search runs by name or job number" aria-label="Search runs">
+        <div class="seg" id="filter" role="group" aria-label="Filter by status">
+          <button data-f="" aria-pressed="true">All</button><button data-f="FINISHED" aria-pressed="false">Finished</button>
+          <button data-f="FAILED" aria-pressed="false">Failed</button><button data-f="KILLED" aria-pressed="false">Killed</button>
+        </div>
+      </div>
+      <div class="scroll"><table>
+        <thead id="runhead"></thead>
+        <tbody id="runs"></tbody>
+      </table></div>
+    </div>
+  </section>
+  </div>
+  <div class="view" data-view="serve" hidden>
+    <div class="phead"><h1>Serve and chat</h1><p>Talk to a trained model, with pictures or sound if it reads them, and keep the ones you like under a name.</p></div>
+    <div class="agrid" id="ag-serve"></div>
   <div id="chat">
     <div id="chat-info" class="card note-card" hidden></div>
     <div id="chat-live" class="card chat" hidden>
@@ -332,22 +393,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
     </div>
   </div>
 
-  <section>
-    <h2>Runs <span class="count" id="runcount">0</span></h2>
-    <div class="card tablebox">
-      <div class="tools" id="runtools" hidden>
-        <input id="q" type="search" placeholder="Search runs by name or job number" aria-label="Search runs">
-        <div class="seg" id="filter" role="group" aria-label="Filter by status">
-          <button data-f="" aria-pressed="true">All</button><button data-f="FINISHED" aria-pressed="false">Finished</button>
-          <button data-f="FAILED" aria-pressed="false">Failed</button><button data-f="KILLED" aria-pressed="false">Killed</button>
-        </div>
-      </div>
-      <div class="scroll"><table>
-        <thead id="runhead"></thead>
-        <tbody id="runs"></tbody>
-      </table></div>
-    </div>
-  </section>
   <section id="modsec">
     <h2>Models <span class="count" id="modcount">0</span></h2>
     <div class="card tablebox"><div class="scroll"><table>
@@ -355,11 +400,21 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
       <tbody id="models"></tbody>
     </table></div></div>
   </section>
+  </div>
+  <div class="view" data-view="evaluate" hidden>
+    <div class="phead"><h1>Evaluate</h1><p>Test models on standard benchmarks or on your own questions, and put the results side by side.</p></div>
+    <div class="agrid" id="ag-evaluate"></div>
   <section id="cmpsec" hidden>
     <h2>Compare models</h2>
     <div class="card" id="cmp" style="padding:14px 16px"></div>
   </section>
-  <details class="more" id="morebox"><summary>Cluster limits and node health <span id="morewarn"></span></summary><div id="cluster"></div></details>
+    <div id="cmpempty" class="card note-card">Nothing to compare yet. Benchmark two models and they appear here, side by side.</div>
+  </div>
+  <div class="view" data-view="monitor" hidden>
+    <div class="phead"><h1>Monitor</h1><p>Open MLflow and the Ray Dashboard, look at jobs and runs, and check the cluster.</p></div>
+    <div class="agrid" id="ag-monitor"></div>
+  <details class="more" id="morebox" open><summary>Cluster limits and node health <span id="morewarn"></span></summary><div id="cluster"></div></details>
+  </div>
   <footer id="foot"></footer>
 </main>
 
@@ -560,7 +615,7 @@ function jobCard(j){
   return h;
 }
 function emptyJobs(){
-  return '<div class="quiet"><div><b style="color:var(--text)">Nothing is running</b><div>Start a training run, or chat with or benchmark a model you trained. Everything is also in the Start menu at the top.</div></div><div class="actions"><button class="btn primary" data-start="recipe">Create a recipe</button><button class="btn" data-start="train">Train a model</button></div></div>';
+  return '<div class="quiet"><div><b style="color:var(--text)">Nothing is running</b><div>Start a training run, or chat with or benchmark a model you trained: use the cards above or the menus at the top.</div></div><div class="actions"><button class="btn primary" data-start="recipe">Create a recipe</button><button class="btn" data-start="train">Train a model</button></div></div>';
 }
 
 /* ---- runs ---- */
@@ -585,7 +640,7 @@ function renderRuns(){
 /* ---- registered models ---- */
 var regModels=null, pathOpts=null;
 function loadModels(){
-  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); }).catch(function(){});
+  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); renderMenus(); }).catch(function(){});
 }
 /* ---- the path from data to a usable model ---- */
 function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
@@ -616,7 +671,6 @@ $("#steps").addEventListener("click", function(e){
   if(b.hasAttribute("data-raw")) L.rc.dataMode="raw";
   L.hours=""; openStart(b.getAttribute("data-path"));
 });
-$("#nav").addEventListener("click", function(e){ var a=e.target.closest("a"); if(a&&a.getAttribute("href")==="#guide"){ e.preventDefault(); $("#guide").showModal(); } });
 $("#pathhide").addEventListener("click", function(){ try{ if(pathHidden()) localStorage.removeItem("bhaskera-path"); else localStorage.setItem("bhaskera-path","hidden"); }catch(e){} renderPath(); });
 $("#guideclose").addEventListener("click", function(){ $("#guide").close(); });
 function renderModels(){
@@ -629,11 +683,156 @@ function renderModels(){
   }).join(""):'<tr><td colspan="6" class="muted" style="text-align:center;padding:22px">'+(regModels===null?"Loading …":'No model is registered yet. Once a run has finished, register it to keep it under a name. <button class="btn small" data-start="register" style="margin-left:8px">Register a model</button>')+'</td></tr>';
 }
 
+/* ---- pages: Home, Train, Serve, Evaluate, Monitor (the address after # chooses one) ---- */
+var PAGES={home:"Home",train:"Train",serve:"Serve",evaluate:"Evaluate",monitor:"Monitor"}, pendingScroll=null;
+function routeName(){ var m=/^#\/(\w+)/.exec(location.hash||""); return m&&PAGES[m[1]]?m[1]:"home"; }
+function setTitle(){ var r=routeName(); document.title=(state&&state.cluster?"Bhaskera · "+state.cluster:"Bhaskera")+(r==="home"?"":" · "+PAGES[r]); }
+function route(){
+  var r=routeName();
+  Array.prototype.forEach.call(document.querySelectorAll(".view"),function(v){ v.hidden=v.getAttribute("data-view")!==r; });
+  Array.prototype.forEach.call(document.querySelectorAll("#gnav .gi"),function(g){ g.classList.toggle("here",g.getAttribute("data-page")===r); });
+  setTitle();
+  var sc=pendingScroll; pendingScroll=null, t=sc&&document.querySelector(sc);
+  if(t&&!t.hidden){ if(t.tagName==="DETAILS") t.open=true; t.scrollIntoView({block:"start"}); } else window.scrollTo(0,0);
+}
+function go(page,scroll){ pendingScroll=scroll||null; var h=page==="home"?"#/":"#/"+page; if((location.hash||"#/")===h) route(); else location.hash=h; }
+window.addEventListener("hashchange",route);
+
+/* ---- what the menus and the page cards offer: one definition for both ---- */
+var MI={
+ text:'<svg viewBox="0 0 24 24"><path d="M5 6h14M5 11h14M5 16h9"/></svg>',
+ image:'<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l5-4 4 3 3-2 3 3"/></svg>',
+ data:'<svg viewBox="0 0 24 24"><ellipse cx="12" cy="6.5" rx="6.5" ry="2.5"/><path d="M5.5 6.5v11c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-11M5.5 12c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5"/></svg>',
+ code:'<svg viewBox="0 0 24 24"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/></svg>',
+ play:'<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>',
+ resume:'<svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4"/></svg>',
+ chat:'<svg viewBox="0 0 24 24"><path d="M5 6h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/></svg>',
+ box:'<svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>',
+ bench:'<svg viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>',
+ compare:'<svg viewBox="0 0 24 24"><rect x="4" y="5" width="7" height="14" rx="1.5"/><rect x="13" y="9" width="7" height="10" rx="1.5"/></svg>',
+ save:'<svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-4-6 4z"/></svg>',
+ chart:'<svg viewBox="0 0 24 24"><path d="M4 19h16M6 15l4-5 3 3 5-7"/></svg>',
+ nodes:'<svg viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="18" r="2"/><path d="M12 7.5v4M12 11.5l-5 5M12 11.5l5 5"/></svg>',
+ chip:'<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>',
+ list:'<svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg>',
+ book:'<svg viewBox="0 0 24 24"><path d="M5 5a2 2 0 0 1 2-2h12v16H7a2 2 0 0 0-2 2z"/><path d="M5 19V5"/></svg>',
+ help:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.7 9.5a2.4 2.4 0 1 1 3.4 2.2c-.7.4-1.1.9-1.1 1.8M12 16.6h.01"/></svg>',
+ folder:'<svg viewBox="0 0 24 24"><path d="M4 7a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/></svg>',
+ wrench:'<svg viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 0 0 5 5L11 20a2.1 2.1 0 0 1-3-3z"/></svg>'
+};
+function mi(o){
+  var inner='<span class="mic">'+MI[o.ic]+'</span><span class="mt"><b>'+esc(o.t)+'</b>'+(o.d?'<span>'+esc(o.d)+'</span>':"")+'</span>', cls="mi"+(o.cls?" "+o.cls:"")+(o.off?" off":"");
+  if(o.href) return '<a class="'+cls+'" role="menuitem" href="'+esc(o.href)+'"'+(o.href.charAt(0)==="#"?"":' target="_blank" rel="noopener"')+'>'+inner+'</a>';
+  return '<button type="button" class="'+cls+'" role="menuitem" '+(o.attrs||"")+(o.off?" disabled":"")+'>'+inner+'</button>';
+}
+function mcol(title,items){ return '<div class="mcol">'+(title?'<div class="mh">'+esc(title)+'</div>':"")+(Array.isArray(items)?items.map(mi).join(""):items)+'</div>'; }
+function cards(list){ return list.map(function(o){ return mi(Object.assign({cls:"acard"},o)); }).join(""); }
+var DOCS_SOURCE="https://github.com/kishoryd/Bhaskera";
+function offer(){
+  var s=state||{}, o=pathOpts||{}, pl=s.portal||{}, jobs=s.jobs||[], I={};
+  var ready=(o.recipes||[]).filter(function(r){return r.ready}).length;
+  var run=jobs.filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
+  var refs=[]; (regModels||[]).forEach(function(m){ (m.refs||[]).forEach(function(v){ refs.push({m:m.name,v:v}); }); });
+  I.text={ic:"text",t:"Text model",d:"Fine-tune a language model",attrs:'data-open="recipe" data-ckind="text"'};
+  I.image={ic:"image",t:"Image, video and audio",d:"Teach a model to read pictures, clips or speech",attrs:'data-open="recipe" data-ckind="multimodal"'};
+  I.prep={ic:"data",t:"Prepare my data",d:"Turn your own files into training data",attrs:'data-open="recipe" data-mode="raw"'};
+  I.custom={ic:"code",t:"Custom recipe",d:"Write or paste the whole recipe",attrs:'data-open="recipe" data-method="custom"'};
+  I.train={ic:"play",t:"Train from a recipe",d:ready?ready+(ready===1?" recipe is ready":" recipes are ready"):"Pick a recipe and the nodes",attrs:'data-open="train"'};
+  I.resume={ic:"resume",t:"Resume a stopped run",d:"Continue from the last checkpoint",attrs:'data-open="resume"'};
+  I.chat={ic:"chat",t:"Chat with a model",d:"Ask a trained model; attach pictures or audio",attrs:'data-open="serve"'};
+  I.serving=jobs.filter(function(j){return j.kind==="serve"&&j.state==="RUNNING"}).map(function(j){ return {ic:"chat",t:"Chat server #"+j.id,d:"Running now: open the chat",attrs:'data-go="serve" data-scroll="#chat-live"'}; });
+  I.saved=refs.slice(0,5).map(function(x){
+    var base=(x.v.base_model||"").split("/").filter(Boolean).pop()||"", al=(x.v.aliases||[]).join(", ");
+    return {ic:"box",t:x.m+":"+x.v.version,d:[base,al].filter(Boolean).join(" · ")||"saved model",attrs:'data-open="serve" data-run="'+esc(x.v.run_id)+'"'};
+  });
+  I.models={ic:"list",t:"All saved models",d:"Versions, aliases and notes",attrs:'data-go="serve" data-scroll="#modsec"'};
+  I.bench={ic:"bench",t:"Benchmark models",d:"Standard tests or your own, on one or several models",attrs:'data-open="eval"'};
+  I.compare={ic:"compare",t:"Compare models",d:"Benchmarked models side by side",attrs:'data-go="evaluate" data-scroll="#cmpsec"'};
+  I.register={ic:"save",t:"Save a model",d:"Keep a trained model under a name, with a note",attrs:'data-open="register"'};
+  I.mlflow={ic:"chart",t:"MLflow",d:"Experiments, runs and the model registry",href:MLFLOW,off:PROXY&&!pl.mlflow};
+  I.ray=PROXY?null:{ic:"nodes",t:"Ray Dashboard",d:run?"Workers, nodes and logs of job #"+run.id:"Opens when a training job is running",href:run?"http://job-"+run.id+".localhost:"+PORT+"/":"#",off:!run};
+  I.gpu=PROXY?null:{ic:"chip",t:"GPU charts",d:run?"GPU and node charts of job #"+run.id:"Opens when a training job is running",href:run?"http://grafana-"+run.id+".localhost:"+PORT+"/d/rayDefaultDashboard?orgId=1&from=now-1h&to=now&refresh=10s":"#",off:!run};
+  I.jobs={ic:"list",t:"Jobs",d:"Running and queued, with live numbers",attrs:'data-go="home" data-scroll="#jobs"'};
+  I.runs={ic:"chart",t:"Runs",d:"Every training run and its results",attrs:'data-go="train" data-scroll="#runsec"'};
+  I.cluster={ic:"wrench",t:"Cluster limits and node health",d:"Your job slots and faulty nodes",attrs:'data-go="monitor" data-scroll="#morebox"'};
+  I.files=PROXY&&pl.files?{ic:"folder",t:"Files",d:"Your run folder in the portal",href:pl.files}:null;
+  I.active=PROXY&&pl.jobs?{ic:"list",t:"Active jobs",d:"The portal's own job list",href:pl.jobs}:null;
+  I.refs=refs.length;
+  return I;
+}
+function renderMenus(){
+  var I=offer(), s=state||{}, ok=function(a){ return a.filter(Boolean); };
+  var go=function(page,label){ return {ic:"play",t:"Open the "+label+" page",d:"",cls:"only-touch",attrs:'data-go="'+page+'"'}; };
+  $("#mn-train").innerHTML=mcol("Create a recipe",[go("train","Train"),I.text,I.image,I.prep,I.custom])+mcol("Run",[I.train,I.resume]);
+  $("#mn-serve").innerHTML=mcol("Chat",[go("serve","Serve"),I.chat].concat(I.serving,[I.models]))+
+    mcol("Saved models",I.saved.length?I.saved:'<div class="mnone">No model saved yet. Register a trained run to keep it here.</div>');
+  $("#mn-eval").innerHTML=mcol("",[go("evaluate","Evaluate"),I.bench,I.compare,I.register]);
+  $("#mn-monitor").innerHTML=mcol("Tools",[go("monitor","Monitor")].concat(ok([I.mlflow,I.ray,I.gpu])))+mcol("Look at",ok([I.jobs,I.runs,I.cluster,I.files,I.active]));
+  var base=/^https?:\/\//.test(s.docs_url||"")?s.docs_url:"";
+  $("#mn-docs").innerHTML=mcol("Learn",[
+      {ic:"book",t:"User manual",d:"Everything, with commands",href:base||"#",off:!base},
+      {ic:"play",t:"Getting started",d:"From data to a model you can use",href:base?base+"workflow/":"#",off:!base},
+      {ic:"help",t:"Words used on this page",d:"What a recipe, an adapter or a step is",attrs:'data-dialog="guide"'}])+
+    mcol("Reference",[
+      {ic:"text",t:"Recipes and methods",d:"QLoRA, DDP, FSDP2, HSDP, Pipeline",href:base?base+"recipes/":"#",off:!base},
+      {ic:"box",t:"Models and the registry",d:"Save, name and find your models",href:base?base+"registry/":"#",off:!base},
+      {ic:"wrench",t:"Troubleshooting",d:"Where it breaks and what to do",href:base?base+"troubleshooting/":"#",off:!base},
+      {ic:"code",t:"Source code",d:"The project on GitHub",href:DOCS_SOURCE}]);
+  $("#ag-home").innerHTML=cards([I.text,I.chat,I.bench,I.register]);
+  $("#ag-train").innerHTML=cards([I.text,I.image,I.prep,I.custom,I.train,I.resume]);
+  $("#ag-serve").innerHTML=cards([I.chat].concat(I.serving,[I.register]));
+  $("#ag-evaluate").innerHTML=cards([I.bench,I.register]);
+  $("#ag-monitor").innerHTML=cards(ok([I.mlflow,I.ray,I.gpu,I.files,I.active,I.jobs,I.runs]));
+  // Home: who, and four numbers that lead to the pages
+  $("#home-title").textContent=s.user?"Welcome, "+s.user:"Welcome";
+  $("#home-sub").textContent=(s.cluster?s.cluster+". ":"")+"Train, chat with and test models, all in one place.";
+  var jobs=s.jobs||[], running=jobs.filter(function(j){return j.state==="RUNNING"}).length, queued=jobs.filter(function(j){return j.state==="PENDING"}).length;
+  var runs=s.runs||[], benched=runs.filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length}).length;
+  var tile=function(k,v,attrs){ return '<button type="button" class="sumtile" '+attrs+'><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></button>'; };
+  $("#sumrow").innerHTML=tile("Running now",running+(queued?' <small>· '+queued+' queued</small>':""),'data-go="home" data-scroll="#jobs"')+tile("Training runs",runs.length,'data-go="train" data-scroll="#runsec"')+
+    tile("Saved models",(regModels||[]).length,'data-go="serve" data-scroll="#modsec"')+tile("Benchmarked",benched,'data-go="evaluate"');
+}
+var menuOpen=null, menuOpenT=null, menuCloseT=null, TOUCH=window.matchMedia&&window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+function setMenu(el,on){ el.classList.toggle("open",on); var b=el.querySelector(".gb"); if(b) b.setAttribute("aria-expanded",on?"true":"false"); }
+function closeMenus(){ clearTimeout(menuOpenT); clearTimeout(menuCloseT); document.querySelectorAll("#gnav .gi.open").forEach(function(e){ setMenu(e,false); }); menuOpen=null; }
+Array.prototype.forEach.call(document.querySelectorAll("#gnav .gi"),function(el){
+  el.addEventListener("mouseenter",function(){ if(TOUCH) return; clearTimeout(menuCloseT); clearTimeout(menuOpenT); menuOpenT=setTimeout(function(){ if(menuOpen&&menuOpen!==el) setMenu(menuOpen,false); setMenu(el,true); menuOpen=el; },60); });
+  el.addEventListener("mouseleave",function(){ clearTimeout(menuOpenT); menuCloseT=setTimeout(function(){ setMenu(el,false); if(menuOpen===el) menuOpen=null; },170); });
+  el.querySelector(".gb").addEventListener("click",function(e){
+    e.stopPropagation(); var page=el.getAttribute("data-page");
+    if(page&&!TOUCH){ closeMenus(); go(page); return; }                                  // with a mouse the name is a link to its page; the menu opens on hover
+    var on=!el.classList.contains("open"); closeMenus(); if(on){ setMenu(el,true); menuOpen=el; }
+  });
+});
+document.addEventListener("click",function(e){ if(!e.target.closest("#gnav")) closeMenus(); });
+document.addEventListener("keydown",function(e){ if(e.key==="Escape") closeMenus(); });
+$("#brand").addEventListener("click",function(e){ e.preventDefault(); closeMenus(); go("home"); });
+$("#startbtn").addEventListener("click",function(){ L.hours=""; openStart("recipe"); });
+document.addEventListener("click",function(e){
+  var it=e.target.closest(".mi,.sumtile"); if(!it||it.classList.contains("off")) return;
+  closeMenus();
+  var kind=it.getAttribute("data-open"), gp=it.getAttribute("data-go"), sc=it.getAttribute("data-scroll"), dg=it.getAttribute("data-dialog");
+  if(kind){
+    L.hours="";
+    if(kind==="recipe"){
+      var ck=it.getAttribute("data-ckind"), mode=it.getAttribute("data-mode"), meth=it.getAttribute("data-method");
+      if(ck){ var cm=((L.opts&&L.opts.model_catalog)||[]).filter(function(m){return m.path===L.rc.model})[0]; L.rc.kind=ck; if(cm&&cm.kind!==ck){ L.rc.model=""; L.rc.modelOther=false; } }
+      if(meth) L.rc.method=meth;
+      else if(ck&&(L.rc.method==="custom"||(ck==="multimodal"&&L.rc.method==="qlora"))) L.rc.method=ck==="multimodal"?"fsdp":"qlora";
+      if(mode) L.rc.dataMode=mode; else if(ck) L.rc.dataMode="";
+    }
+    openStart(kind, it.getAttribute("data-run")); return;
+  }
+  if(dg){ $("#"+dg).showModal(); return; }
+  if(gp){ go(gp, sc); return; }
+  if(sc){ var t=document.querySelector(sc); if(t&&!t.hidden){ if(t.tagName==="DETAILS") t.open=true; t.scrollIntoView({behavior:"smooth",block:"start"}); } }
+});
+
 /* ---- compare benchmarked models ---- */
 var cmpSel={};
 function renderCompare(){
   var runs=(state.runs||[]).filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length});
-  $("#cmpsec").hidden=!runs.length; if(!runs.length) return;
+  $("#cmpsec").hidden=!runs.length; $("#cmpempty").hidden=runs.length>0; if(!runs.length) return;
   var chosen=runs.filter(function(r){return cmpSel[r.run_id]});
   var keys=[]; chosen.forEach(function(r){ Object.keys(r.lm_scores).forEach(function(k){ if(keys.indexOf(k)<0) keys.push(k); }); }); keys.sort();
   var h='<div class="chips">'+runs.map(function(r){ return '<button type="button" class="chipb" data-cmp="'+esc(r.run_id)+'" aria-pressed="'+(cmpSel[r.run_id]?"true":"false")+'">'+esc(r.name)+'</button>'; }).join("")+'</div>';
@@ -655,16 +854,6 @@ $("#cmp").addEventListener("click", function(e){ var b=e.target.closest("[data-c
 /* ---- side panel ---- */
 function renderSide(){
   var s=state, first=(s.jobs||[]).filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
-  var items=[["MLflow",MLFLOW],["Models","#modsec"],["Guide","#guide"],["Ray",first?"http://job-"+first.id+".localhost:"+PORT+"/":null],["Docs",safe(s.docs_url)||null]];
-  if(PROXY){
-    var pl=s.portal||{};
-    items=items.filter(function(l){ return l[0]!=="Ray"&&(l[0]!=="MLflow"||pl.mlflow); });
-    if(pl.files) items.push(["Files",pl.files]);
-    if(pl.jobs) items.push(["Jobs",pl.jobs]);
-  }
-  $("#nav").innerHTML=items.map(function(l){
-    return '<a'+(l[1]?' href="'+esc(l[1])+'"'+(l[1].charAt(0)==="#"?"":' target="_blank" rel="noopener"'):' class="off" title="Opens when a job runs"')+'>'+esc(l[0])+'</a>';
-  }).join("");
   var parts=(s.partitions||[]).filter(function(p){return p.max_submitted!=null});
   var h='<h3>Your job slots</h3>'+(parts.length ? parts.map(function(p){
     var pct=Math.min(100,Math.round(100*p.submitted/Math.max(1,p.max_submitted)));
@@ -682,9 +871,9 @@ function renderSide(){
 function render(){
   var s=state; if(!s) return;
   GPN = s.gpus_per_node || null;
-  $("#who").hidden=false; $("#who").textContent=s.user;
+  $("#who").hidden=false; $("#who").innerHTML='<span class="av">'+esc((s.user||"?").charAt(0).toUpperCase())+'</span>'+esc(s.user);
   $("#tag").textContent = s.cluster || ""; $("#tag").hidden = !s.cluster;
-  document.title = s.cluster ? "Bhaskera · "+s.cluster : "Bhaskera";
+  setTitle();
   var T=s.totals||{}, bad=(s.bad_nodes||[]).length;
   var part=(s.partitions||[]).filter(function(p){return p.max_submitted!=null}).sort(function(a,b){return b.submitted-a.submitted})[0];
   var bits=[];
@@ -697,7 +886,7 @@ function render(){
   var jobs=(s.jobs||[]).slice().sort(function(a,b){ return ((order[a.state]||0)-(order[b.state]||0)) || (Number(b.id)-Number(a.id)); });
   $("#jobcount").textContent=jobs.length;
   $("#jobs").innerHTML=jobs.length ? jobs.map(jobCard).join("") : emptyJobs();
-  renderRuns(); renderCompare(); renderModels(); renderPath(); renderSide(); renderChat();
+  renderRuns(); renderCompare(); renderModels(); renderPath(); renderSide(); renderMenus(); renderChat();
   $("#foot").innerHTML='Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a>';
 }
 function clock(){
@@ -775,13 +964,14 @@ function renderChat(){
   var sj=serveJobs(), ready=sj.filter(function(j){return j.serve&&j.serve.ready});
   var info=$("#chat-info"), live=$("#chat-live");
   if(!ready.length){
-    live.hidden=true; info.hidden=!sj.length;
+    live.hidden=true; info.hidden=!sj.length; chat.loading=chat.loading||{}; sj.forEach(function(j){ chat.loading[j.id]=true; });
     if(sj.length) info.innerHTML='Loading the model for chat (job #'+esc(sj[0].id)+'). This takes a few minutes; the chat opens here by itself.';
     return;
   }
   info.hidden=true; live.hidden=false;
   var cur=ready.filter(function(j){return j.id===chat.job})[0]||ready[0];
   chat.job=cur.id;
+  if(chat.loading&&chat.loading[cur.id]&&!(chat.announced||{})[cur.id]){ (chat.announced=chat.announced||{})[cur.id]=true; if(routeName()!=="serve"){ toast("The chat for job #"+cur.id+" is ready."); go("serve","#chat-live"); } }
   $("#chat-model").textContent=cur.serve.model||cur.name;
   $("#chat-adapter").textContent=cur.serve.adapter?"+ adapter "+cur.serve.adapter:"(no adapter: the base model only)";
   $("#chat-job").textContent="#"+cur.id;
@@ -1255,11 +1445,6 @@ function openStart(kind,run){
     L.kind=kind||L.kind; if(run) L.run=run; renderStart(); if(!$("#startbox").open) $("#startbox").showModal();
   });
 }
-function menu(open){ $("#startmenu").hidden=!open; $("#startbtn").setAttribute("aria-expanded",open?"true":"false"); }
-$("#startbtn").addEventListener("click", function(e){ e.stopPropagation(); menu($("#startmenu").hidden); });
-$("#startmenu").addEventListener("click", function(e){ var b=e.target.closest("[data-k]"); if(!b) return; menu(false); L.hours=""; openStart(b.getAttribute("data-k")); });
-document.addEventListener("click", function(){ menu(false); });
-document.addEventListener("keydown", function(e){ if(e.key==="Escape") menu(false); });
 $("#startclose").addEventListener("click", function(){ $("#startbox").close(); });
 $("#startkind").addEventListener("click", function(e){ var b=e.target.closest(".choice"); if(b){ L.kind=b.getAttribute("data-k"); L.hours=""; renderStart(); } });
 $("#startfields").addEventListener("click", function(e){
