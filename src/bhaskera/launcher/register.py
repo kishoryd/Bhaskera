@@ -14,6 +14,8 @@ The registry is part of the MLflow store (``~/mlflow-runs`` by default), so the 
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import os
 import re
@@ -31,7 +33,7 @@ class RegisterError(Exception):
 
 
 def _store_default() -> str:
-    return os.environ.get("MLFLOW_TRACKING_URI", "").replace("file://", "") or str(Path.home() / "mlflow-runs")
+    return paths.mlflow_store()
 
 
 def make_client(store: str):

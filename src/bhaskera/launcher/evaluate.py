@@ -23,6 +23,8 @@ Hugging Face cache. Compute nodes usually have no internet: run ``prepare`` once
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import difflib
 import json
@@ -414,7 +416,7 @@ def log_to_mlflow(result: dict, store: str, run_id: Optional[str], experiment: s
 
 
 def _store_default() -> str:
-    return os.environ.get("MLFLOW_TRACKING_URI", "").replace("file://", "") or str(Path.home() / "mlflow-runs")
+    return paths.mlflow_store()
 
 
 def cmd_run(args) -> int:
@@ -471,6 +473,7 @@ def cmd_show(args) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    paths.apply_cache_env()                      # benchmark data lives in the run folder, unless the user keeps it at home already
     p = argparse.ArgumentParser(prog="bhaskera-evaluate", description="Benchmark a tuned model against its base model.")
     sub = p.add_subparsers(dest="action", required=True)
     r = sub.add_parser("run")

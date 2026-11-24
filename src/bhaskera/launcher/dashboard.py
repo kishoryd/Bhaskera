@@ -31,6 +31,8 @@ Typical workflow
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import json
 import logging
@@ -51,11 +53,11 @@ logger = logging.getLogger("bhaskera.dashboard")
 
 
 _DEFAULT_PORT       = 5000
-_CONFIG_DIR         = Path.home() / ".bhaskera"
+_CONFIG_DIR         = paths.state_dir()
 _CONFIG_PATH        = _CONFIG_DIR / "mlflow-ui.json"
 _PID_FILE           = _CONFIG_DIR / "mlflow-ui.pid"
 _LOG_FILE           = _CONFIG_DIR / "mlflow-ui.log"
-_DEFAULT_STORE      = str(Path.home() / "mlflow-runs")
+_DEFAULT_STORE      = paths.mlflow_store()
 
 
 @dataclass

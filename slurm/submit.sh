@@ -11,6 +11,15 @@
 # Optional: export BHASKERA_EXCLUDE=cbgpuXXXX,...  keep jobs off faulty nodes (passed as sbatch --exclude)
 set -euo pipefail
 cd "$(dirname "$0")"
+# This folder is the user's run folder: everything the user creates stays in it (see src/bhaskera/paths.py). A copy a user already keeps in the
+# home folder (~/mlflow-runs, ~/.cache/huggingface) is used until a copy or a link exists here, so that no run disappears.
+export BHASKERA_WORKDIR="$PWD"
+if [[ -z "${MLFLOW_TRACKING_URI:-}" ]]; then
+    if [[ -e "$PWD/mlflow-runs" || ! -e "$HOME/mlflow-runs" ]]; then export MLFLOW_TRACKING_URI="file://$PWD/mlflow-runs"; else export MLFLOW_TRACKING_URI="file://$HOME/mlflow-runs"; fi
+fi
+if [[ -z "${HF_HOME:-}" && -z "${HF_DATASETS_CACHE:-}" ]]; then
+    if [[ -e "$PWD/.cache/huggingface" || ! -e "$HOME/.cache/huggingface" ]]; then export HF_HOME="$PWD/.cache/huggingface"; fi
+fi
 : "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera}"
 : "${SLURM_ACCOUNT:?export SLURM_ACCOUNT=<your_account>  (your project account on this cluster)}"
 [[ -f "$BHASKERA_DIR/bhaskera-activate.sh" ]] || { echo "$BHASKERA_DIR/bhaskera-activate.sh is missing: run setup.sh there first (it writes this file for the installation)"; exit 1; }

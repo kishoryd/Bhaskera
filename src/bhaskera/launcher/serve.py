@@ -24,6 +24,8 @@ reaches it through an SSH link. One answer is generated at a time; others wait t
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import http.server
 import json
@@ -403,7 +405,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--run", help="MLflow run id of the training run (finds the base model and the adapter)")
     p.add_argument("--model", help="base model folder")
     p.add_argument("--adapter", help="adapter folder")
-    p.add_argument("--store", default=os.environ.get("MLFLOW_TRACKING_URI", "").replace("file://", "") or str(Path.home() / "mlflow-runs"))
+    p.add_argument("--store", default=paths.mlflow_store())
     p.add_argument("--port", type=int, help="default: 8000 + (Slurm job id mod 1000)")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--4bit", action="store_true", dest="four_bit")

@@ -12,6 +12,8 @@ The returned ``MonitoringContext`` is consumed by ``train.py`` and
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import json
 import logging
 import os
@@ -27,7 +29,7 @@ _DEFAULT_DASHBOARD_PORT      = 8265
 _DEFAULT_METRICS_EXPORT_PORT = 8080
 
 # Written by ``bhaskera-dashboard`` after its first run.
-_MLFLOW_UI_CONFIG_PATH = Path.home() / ".bhaskera" / "mlflow-ui.json"
+_MLFLOW_UI_CONFIG_PATH = paths.state_dir() / "mlflow-ui.json"
 
 
 @dataclass

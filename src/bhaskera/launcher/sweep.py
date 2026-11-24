@@ -24,6 +24,8 @@ anything is submitted.
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import copy
 import itertools
@@ -245,7 +247,7 @@ def cmd_report(name: str, store: str | None, top: int) -> int:
     import os
     os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
     from mlflow.tracking import MlflowClient
-    uri = store or os.environ.get("MLFLOW_TRACKING_URI") or f"file://{Path.home() / 'mlflow-runs'}"
+    uri = store or paths.mlflow_uri()
     client = MlflowClient(tracking_uri=uri, registry_uri=uri)
     rows = []
     for run_id in runs_in_group(uri, name):

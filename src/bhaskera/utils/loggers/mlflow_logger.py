@@ -50,6 +50,8 @@ the train step.
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import logging
 import os
 import queue
@@ -135,8 +137,7 @@ class MLflowLogger(BaseLogger):
         # Resolve the tracking URI: cfg overrides env, env overrides default.
         uri = (
             getattr(log_cfg, "mlflow_tracking_uri", None)
-            or os.environ.get("MLFLOW_TRACKING_URI")
-            or f"file://{Path.home() / 'mlflow-runs'}"
+            or paths.mlflow_uri()
         )
         experiment = (
             getattr(log_cfg, "mlflow_experiment", None)
@@ -179,7 +180,7 @@ class MLflowLogger(BaseLogger):
 
         # training.log artifact path — local, predictable, tail -f-able.
         self._artifact_dir = (
-            Path(os.environ.get("BHASKERA_HOME") or (Path.home() / ".bhaskera"))
+            paths.state_dir()
             / "runs" / self._run_id
         )
         try:

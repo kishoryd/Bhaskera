@@ -21,6 +21,8 @@ holds the profile of PARAM Rudra and an example for other sites.
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import os
 import sys
 from dataclasses import dataclass, field
@@ -71,7 +73,7 @@ def _from_dict(raw: dict, source: str) -> ClusterProfile:
 def load(path: Optional[str | Path] = None) -> ClusterProfile:
     """The profile at ``path``, or the one found as described above, or an empty profile."""
     import yaml
-    candidates = [path] if path else [os.environ.get("BHASKERA_CLUSTER_PROFILE"), Path.home() / ".bhaskera" / "cluster.yaml"]
+    candidates = [path] if path else [os.environ.get("BHASKERA_CLUSTER_PROFILE"), paths.state_dir() / "cluster.yaml"]
     for c in candidates:
         if c and Path(c).is_file():
             try:

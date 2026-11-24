@@ -7,13 +7,15 @@ by the cluster staff after that; ``bhaskera-nodes forget <host>`` removes it ear
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import os
 import time
 from pathlib import Path
 from typing import Optional
 
-DEFAULT_PATH = Path.home() / ".bhaskera" / "bad-nodes"
+DEFAULT_PATH = paths.state_dir() / "bad-nodes"
 MAX_AGE_DAYS = 3.0
 
 

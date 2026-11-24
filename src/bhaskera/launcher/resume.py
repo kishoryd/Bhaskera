@@ -13,6 +13,8 @@ learning rate, say) applies to the resumed job.
 """
 from __future__ import annotations
 
+from bhaskera import paths
+
 import argparse
 import math
 import re
@@ -183,7 +185,7 @@ def _summary(info: dict) -> str:
 
 def _store_default() -> str:
     import os
-    return os.environ.get("MLFLOW_TRACKING_URI", "").replace("file://", "") or str(Path.home() / "mlflow-runs")
+    return paths.mlflow_store()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
