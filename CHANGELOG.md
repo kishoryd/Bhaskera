@@ -7,11 +7,16 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Downloads, sign-in and dataset versions
+- **Downloads** (header): a model or a dataset from Hugging Face into a folder you choose. A size and licence preview comes first, then a download with progress, cancel and resume (starting it again continues where it stopped). Only Hugging Face is contacted, the folder must be one you can write to, and a download above 50 GB asks for confirmation. A finished model joins the model lists; a finished dataset is registered as a dataset version with its repository and revision as the source.
+- **Hugging Face sign-in:** paste a key on the Downloads dialog. It is checked with Hugging Face, kept in a private file (`<hf home>/token`, readable by you only) and never shown, logged or put in a command line. Sign out deletes it.
+- **Dataset versions** (`bhaskera.dataversions`, a *Data* section on Train): a name, a number and a content fingerprint for a data folder or file. The same content keeps its version, changed content becomes the next number. A run records the version it trained on (`dataset.name`, `dataset.version`), the runs table shows it, and training on data that changed after it was registered is refused until it is registered again. Command line: `python -m bhaskera.dataversions add|list|show|verify|remove`.
+- **Run folder and Slurm account:** with no run folder given, `~/bhaskera-runs` is made from the shared kit (set `BHASKERA_RUNS` to change where); the shared kit is never used as a run folder. Jobs are charged to your login name; `SLURM_ACCOUNT` is only needed to use another account.
+
 ### Energy, log out, and a plainer Home
 - **Energy used:** the energy a run drew on its GPUs, worked out from the summed GPU power it records (kWh). It shows as a column in the runs table, as *Energy so far* on a running job, and as a total on Home. It counts GPUs only, and runs made before this release show nothing. The power reading is now part of the default metrics (`cluster_gpu_power_w_sum`); before, only the detailed level kept it.
-- **Log out** in the account menu: it asks first, then stops the page (or, behind Open OnDemand, ends the portal session). Jobs already submitted keep running.
+- **Log out** in the account menu: it asks first, then stops the page (or, behind a portal, ends the portal session). Jobs already submitted keep running.
 - Home shows a *Multimodal model* card in place of the text one, and the empty Jobs box no longer has buttons or a pointer sentence. The cluster name is no longer in the Home subtitle.
-- **Open OnDemand app** (`ood/`): Launch, then Open, and the page opens in a tab with no setup for the user (`bhaskera-dashboard portal`, session token, MLflow under the portal prefix). `ood/install.sh` and `ood/check.sh` are for the administrators.
 
 ### Where your files go
 - Everything a user creates stays in the run folder (the one with `submit.sh`): the MLflow store (`mlflow-runs/`, with the registry), small settings (`.bhaskera/`) and the benchmark data cache
