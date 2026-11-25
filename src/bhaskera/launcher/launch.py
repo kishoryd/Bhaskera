@@ -323,7 +323,7 @@ class Launcher:
             shared_keys = {(c["name"], c["rows"], c["seq_len"]) for c in found if c["shared"]}
             kept = [c for c in found if c["shared"] or (c["name"], c["rows"], c["seq_len"]) not in shared_keys]      # a cache's name is a hash of its content
             for c in kept:
-                v = dataversions.for_path(c["path"])
+                v = dataversions.for_path(c["path"], fresh=False)
                 if v:
                     c["data_version"] = {"name": v["name"], "version": v["version"], "status": v["status"]}
             return kept

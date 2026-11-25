@@ -116,3 +116,28 @@ def test_the_command_line_registers_lists_and_verifies(world, capsys):
     os.utime(data / "train.jsonl", (1, 1))
     assert dv.main(["add", "--name", "support", "--path", str(data)]) == 0
     assert dv.main(["show", "nope"]) == 2
+
+
+def test_a_huge_version_is_checked_at_most_every_half_minute_but_the_check_before_training_is_always_fresh(world, monkeypatch):
+    run, data = world
+    monkeypatch.setattr(dv, "BIG_FILES", 0)                    # treat every version as huge
+    dv._seen.clear()
+    dv.add("support", str(data))
+    calls = []
+    real = dv.quick_signature
+    monkeypatch.setattr(dv, "quick_signature", lambda p: (calls.append(1), real(p))[1])
+    assert dv.listing()[0]["versions"][0]["status"] == "ok" and len(calls) == 1        # the first look reads the file list
+    assert dv.listing()[0]["versions"][0]["status"] == "ok" and len(calls) == 1        # the next one is remembered: no files touched
+    (data / "train.jsonl").write_text((data / "train.jsonl").read_text() + '{"q":"x","a":"y"}\n')
+    assert dv.listing()[0]["versions"][0]["status"] == "ok" and len(calls) == 1      # still the remembered answer within the half minute
+    assert dv.for_path(str(data))["status"] == "changed"               # the check before a run reads the files again
+    assert dv.listing()[0]["versions"][0]["status"] == "changed"       # and what it found is remembered
+    monkeypatch.setattr(dv, "BIG_MAX_AGE", 0.0)
+    assert dv.listing()[0]["versions"][0]["status"] == "changed" and len(calls) == 3
+
+
+def test_small_versions_are_always_checked_fresh(world):
+    run, data = world
+    dv.add("support", str(data))
+    (data / "train.jsonl").write_text((data / "train.jsonl").read_text() + '{"q":"x","a":"y"}\n')
+    assert dv.listing()[0]["versions"][0]["status"] == "changed"

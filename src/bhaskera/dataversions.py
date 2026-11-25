@@ -174,15 +174,31 @@ def add(name, path, note: str = "", source: Optional[dict] = None, progress: Opt
     return {**v, "name": name, "new": True}
 
 
-def status(v: dict) -> str:
-    """'ok' when the files are as they were registered, 'changed' when not, 'missing' when the folder is gone (no file is read)."""
+BIG_FILES = 2000                  # a version with more files than this is checked at most this often, so listing a huge raw dataset stays quick
+BIG_MAX_AGE = 30.0
+_seen: dict[tuple, tuple[float, str]] = {}
+
+
+def status(v: dict, fresh: bool = False) -> str:
+    """'ok' when the files are as they were registered, 'changed' when not, 'missing' when the folder is gone (no file is read).
+
+    Small versions are checked every time. A version of more than ``BIG_FILES`` files is remembered for ``BIG_MAX_AGE`` seconds
+    unless ``fresh`` is set (the check before a training run always is)."""
+    key = (v["path"], v.get("quick"))
+    if not fresh and v.get("files", 0) > BIG_FILES:
+        hit = _seen.get(key)
+        if hit and time.monotonic() - hit[0] < BIG_MAX_AGE:
+            return hit[1]
     root = Path(v["path"])
     if not root.exists():
-        return "missing"
-    try:
-        return "ok" if quick_signature(root) == v.get("quick") else "changed"
-    except OSError:
-        return "missing"
+        out = "missing"
+    else:
+        try:
+            out = "ok" if quick_signature(root) == v.get("quick") else "changed"
+        except OSError:
+            out = "missing"
+    _seen[key] = (time.monotonic(), out)
+    return out
 
 
 def listing() -> list[dict]:
@@ -236,7 +252,7 @@ def remove(name, version) -> dict:
     return {"name": name, "version": v["version"], "removed": True}
 
 
-def for_path(path) -> Optional[dict]:
+def for_path(path, fresh: bool = True) -> Optional[dict]:
     """The registered version of the data at ``path``: the one that matches the files now, else the newest that was registered at that place (status 'changed')."""
     try:
         target = str(Path(path).resolve())
@@ -247,7 +263,7 @@ def for_path(path) -> Optional[dict]:
         for v in entry.get("versions", []):
             if v.get("path") != target:
                 continue
-            st = status(v)
+            st = status(v, fresh)
             cand = {**v, "name": name, "status": st}
             if st == "ok":
                 if best is None or best["status"] != "ok" or v["version"] > best["version"]:

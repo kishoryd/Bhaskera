@@ -331,8 +331,9 @@ class Manager:
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         while proc.poll() is None:
+            t0 = time.monotonic()
             self._set(done=_tree_bytes(dest), message="downloading")
-            time.sleep(2)
+            time.sleep(max(2.0, 4 * (time.monotonic() - t0)))          # a folder of very many files is counted less often
         reader.join(timeout=2)
         if stop.is_set():
             self._set(state="cancelled", message="cancelled; start the same download again to continue from where it stopped", finished=time.time(), done=_tree_bytes(dest))
