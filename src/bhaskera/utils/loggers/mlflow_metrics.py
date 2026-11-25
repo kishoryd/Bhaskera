@@ -17,7 +17,7 @@ ESSENTIAL = frozenset({
     "eval_loss", "eval_accuracy", "eval_perplexity",
     "throughput_tokens_per_sec", "throughput_mfu_pct", "time_step_s", "time_data_wait_pct",
     "cluster_nodes", "cluster_gpus", "cluster_gpu_util_pct_min", "cluster_gpu_util_pct_mean",
-    "cluster_gpu_mem_used_gib_max", "cluster_gpu_temp_c_max",
+    "cluster_gpu_mem_used_gib_max", "cluster_gpu_temp_c_max", "cluster_gpu_power_w_sum",
     "model_total_params", "model_trainable_params",
 })
 

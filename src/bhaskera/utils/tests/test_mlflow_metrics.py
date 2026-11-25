@@ -16,9 +16,10 @@ def _kept(level):
 def test_essential_keeps_what_a_user_reads():
     kept = _kept("essential")
     assert {"loss", "lr", "grad_norm", "eval_loss", "eval_accuracy", "eval_perplexity",
-            "throughput_tokens_per_sec", "throughput_mfu_pct", "cluster_gpu_util_pct_mean"} <= kept
+            "throughput_tokens_per_sec", "throughput_mfu_pct", "cluster_gpu_util_pct_mean",
+            "cluster_gpu_power_w_sum"} <= kept   # the energy a run used is worked out from this one
     assert not kept & {"gpu_0_util_pct", "sys_cpu_pct", "proc_rss_mib", "node_cbgpu0001_gpu0_util_pct",
-                       "throughput_hfu_pct", "time_compute_s", "cluster_gpu_power_w_sum"}
+                       "throughput_hfu_pct", "time_compute_s"}
     assert len(mm.ESSENTIAL) < 25
 
 
