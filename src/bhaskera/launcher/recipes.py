@@ -78,6 +78,16 @@ def model_folder(value) -> str:
     return path
 
 
+def cache_side(name: str) -> str:
+    """'train' or 'val' from the words in a name (split at _ - and .): local_train_ab12, nemotron-chat_qwen3_seq4096_val; '' when neither."""
+    words = set(re.split(r"[_\-.\s]+", name.lower()))
+    if words & {"val", "validation", "eval", "dev"}:
+        return "val"
+    if words & {"train", "training"}:
+        return "train"
+    return ""
+
+
 def cache_info(path: Path) -> Optional[dict]:
     """What a tokenised cache folder holds (from its metadata.json), or None when it is not one."""
     meta = path / "metadata.json"
@@ -88,7 +98,7 @@ def cache_info(path: Path) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     name = path.name
-    side = "val" if "_val_" in name or name.startswith("val") else "train" if "_train_" in name or name.startswith("train") else ""
+    side = cache_side(name) or cache_side(str(m.get("dataset_name", "")))
     return {"path": str(path), "name": name, "side": side, "model": os.path.basename(str(m.get("model_name", "")).rstrip("/")),
             "seq_len": m.get("seq_len"), "rows": m.get("num_rows"), "dataset": m.get("dataset_name", "")}
 

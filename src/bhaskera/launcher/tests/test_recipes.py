@@ -305,3 +305,19 @@ def test_a_model_that_ships_its_own_code_gets_trust_remote_code(world):
     assert recipes.build(form(model, cache, method="fsdp"), work)["model"]["trust_remote_code"] is False
     assert next(m for m in recipes.model_catalog([own.parent], []) if m["name"] == "Param-like")["custom_code"] is True
     assert yaml.safe_load(recipes.tokenize_recipe({"name": "t", "model": str(own), "train_path": str(work / "submit.sh")}, work)[1].split("\n", 1)[1])["model"]["trust_remote_code"] is True
+
+
+def test_a_cache_is_train_or_validation_by_the_words_in_its_name_or_its_metadata():
+    side = recipes.cache_side
+    for name, want in (("local_train_ab12", "train"), ("local_val_cd34", "val"), ("nemotron-chat_qwen3-14b_seq4096_train", "train"),
+                       ("nemotron-chat_qwen3-14b_seq4096_val", "val"), ("train", "train"), ("my.validation.set", "val"), ("EVAL_x", "val"),
+                       ("pokemon_train_x32", "train"), ("trainer-notes", ""), ("interval", ""), ("data", "")):
+        assert side(name) == want, name
+
+
+def test_the_side_falls_back_to_the_dataset_name_in_the_metadata(tmp_path):
+    d = tmp_path / "chat-qwen-4096"
+    d.mkdir()
+    (d / "p.parquet").write_text("x")
+    (d / "metadata.json").write_text(json.dumps({"model_name": "m", "seq_len": 8, "num_rows": 1, "dataset_name": "local_val"}))
+    assert recipes.cache_info(d)["side"] == "val"
