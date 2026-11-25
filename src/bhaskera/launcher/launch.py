@@ -138,6 +138,7 @@ class Launcher:
         self._runs, self._env, self._run, self._clock = runs, dict(os.environ if env is None else env), run, clock
         self._env.setdefault("SLURM_ACCOUNT", getpass.getuser())     # the Slurm account is the login name unless the user sets another
         self.downloads = downloads.Manager(self._env)
+        self.after_change: Optional[Callable[[], None]] = None        # called after something the page lists was changed
         self._lock = threading.Lock()
         self._starts: list[float] = []
         self._last = 0.0
@@ -290,6 +291,32 @@ class Launcher:
         except downloads.DownloadError as e:
             raise LaunchError(str(e))
         raise LaunchError("unknown action for Hugging Face access")
+
+    def _remove_runs(self, form: dict) -> dict:
+        """Take runs off the page: MLflow marks them deleted (they can be restored with `mlflow` tools). Only Bhaskera's own runs that are not
+        running; never another tool's run, and never one whose job is still alive."""
+        ids = form.get("runs")
+        if not isinstance(ids, list) or not ids or len(ids) > 500 or not all(isinstance(i, str) and RUN_ID.match(i) for i in ids):
+            raise LaunchError("choose the runs to remove")
+        known = {r["run_id"]: r for r in self._runs()}
+        from . import register
+        client = register.make_client(self._store or register._store_default())
+        removed, skipped = [], []
+        for i in dict.fromkeys(ids):
+            r = known.get(i)
+            if r is None:
+                skipped.append({"run_id": i, "reason": "not one of your Bhaskera runs"})
+            elif r.get("status") == "RUNNING" and not r.get("stale"):
+                skipped.append({"run_id": i, "reason": "still running"})
+            else:
+                try:
+                    client.delete_run(i)
+                    removed.append(i)
+                except Exception as e:
+                    skipped.append({"run_id": i, "reason": str(e)[:120]})
+        if removed and self.after_change:
+            self.after_change()
+        return {"ok": True, "removed": len(removed), "skipped": skipped}
 
     def _check_data(self, recipe: Path) -> None:
         """Refuse to train on data that changed after it was registered: say which version it was and what to do."""
@@ -573,7 +600,7 @@ class Launcher:
 
     def launch(self, form: dict) -> dict:
         """{'ok', 'job', 'output'} for action 'start' (a job is submitted) or 'check' (limits and preflight only)."""
-        for kind, handler in (("dataset", self._data), ("download", self._download), ("hf", self._hf)):
+        for kind, handler in (("dataset", self._data), ("download", self._download), ("hf", self._hf), ("runs", self._remove_runs)):
             if form.get("kind") == kind:                                  # these need no Slurm account: they work on files and on Hugging Face
                 return handler(form)
         reason = self.disabled_reason()

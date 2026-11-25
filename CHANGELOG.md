@@ -7,6 +7,9 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Runs: ten at first, and clear what you do not need
+- The runs table shows the latest 10, with *Show 10 more*, *Show all* and *Show fewer*. Each finished, failed or stalled run has a *Remove* button, and *Clear failed and stalled* takes all of those off at once; both ask first. Removing marks a run deleted in MLflow (it is not erased and can be restored with `mlflow runs restore --run-id <id>`). Only your Bhaskera runs can be removed, and never one that is still running.
+
 ### Setting up on another cluster, and a clean-up
 - The cluster profile has `gpu_mem_gb` (memory of one GPU), and the check before a job uses it instead of assuming 80 GB. A new guide, *Setting Up on Another Cluster*, walks through a first install: requirements, the profile, the modulefile, shared models and data, a check as an ordinary user, and where it breaks.
 - Removed: committed `.pyc` files, `requirements.txt` (a loose snapshot that said not to use it; the tested versions are in `slurm/requirements-paramrudra.lock`), and the design document for a central service, which lives on the `central-service` branch. The Open OnDemand app is on the `ood` branch.

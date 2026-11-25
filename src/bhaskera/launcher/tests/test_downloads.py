@@ -282,3 +282,29 @@ def test_a_registered_cache_carries_its_version_without_touching_its_own_dataset
     dv.add("sup", str(cache))
     after = [c for c in L._caches() if c["path"] == str(cache.resolve())][0]
     assert after["data_version"] == {"name": "sup", "version": 1, "status": "ok"} and after["dataset"] == "tickets"
+
+
+# ---- taking runs off the page
+def test_runs_can_be_removed_but_never_a_running_one_or_one_that_is_not_ours(world, tmp_path, monkeypatch):
+    from bhaskera.launcher import register
+    kit = tmp_path / "kit"
+    (kit / "recipes").mkdir(parents=True)
+    (kit / "submit.sh").write_text("")
+    monkeypatch.setattr(cluster_profile, "current", lambda: NS(gpus_per_node=4, partitions=[]))
+    ids = {n: (n * 32) for n in "abcde"}
+    runs = [{"run_id": ids["a"], "status": "FINISHED"}, {"run_id": ids["b"], "status": "FAILED"},
+            {"run_id": ids["c"], "status": "RUNNING", "stale": False}, {"run_id": ids["d"], "status": "RUNNING", "stale": True}]
+    deleted, changed = [], []
+    monkeypatch.setattr(register, "make_client", lambda store: NS(delete_run=lambda i: deleted.append(i)))
+    L = launch.Launcher(kit, runs=lambda: runs, env={})
+    L.after_change = lambda: changed.append(1)
+    r = L.launch({"kind": "runs", "action": "remove", "runs": [ids["a"], ids["b"], ids["c"], ids["d"], ids["e"], ids["a"]]})
+    assert r["ok"] and r["removed"] == 3 and deleted == [ids["a"], ids["b"], ids["d"]] and changed == [1]
+    reasons = {s["run_id"]: s["reason"] for s in r["skipped"]}
+    assert reasons == {ids["c"]: "still running", ids["e"]: "not one of your Bhaskera runs"}
+    for bad in (None, [], "abc", ["not-a-run-id"], [1], ["a" * 32] * 501):
+        with pytest.raises(launch.LaunchError, match="choose the runs"):
+            L.launch({"kind": "runs", "action": "remove", "runs": bad})
+    changed.clear()
+    L.launch({"kind": "runs", "action": "remove", "runs": [ids["c"]]})
+    assert changed == []                                                     # nothing removed, nothing to refresh

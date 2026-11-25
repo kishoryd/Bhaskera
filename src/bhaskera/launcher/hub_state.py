@@ -353,6 +353,12 @@ class StateBuilder:
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
 
+    def forget(self, *keys: str) -> None:
+        """Drop remembered answers (all of them when none is named), so the next refresh reads the store again."""
+        with self._lock:
+            for k in keys or list(self._cache):
+                self._cache.pop(k, None)
+
     def _cached(self, key: str, ttl: float, make: Callable[[], Any]) -> Any:
         now = self._clock()
         with self._lock:

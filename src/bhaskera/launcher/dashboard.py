@@ -521,6 +521,7 @@ def _make_hub(cfg: DashboardConfig, job: Optional[str], local_port: int, mlflow:
         docs_url=os.environ.get("BHASKERA_DOCS_URL", "https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/"))
     hub.state_provider, hub.log_provider = builder.build, builder.log
     hub.launcher = launch.Launcher(launch.find_kit(), runs=lambda: hub_state.recent_runs(cfg.store), store=cfg.store, jobs=my_jobs)
+    hub.launcher.after_change = lambda: builder.forget("runs")
     return hub
 
 

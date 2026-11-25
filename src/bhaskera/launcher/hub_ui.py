@@ -67,6 +67,7 @@ h2 .count{font:12px var(--mono);color:var(--muted)}
 .meta{display:flex;flex-wrap:wrap;gap:0;margin-left:auto}
 .bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden}
 .bar>i{display:block;height:100%;background:var(--ink);transition:width .6s ease}
+.runfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--border);font-size:13px}.runfoot .spacer{flex:1}
 .dstat{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px}.dstat.ok{color:var(--ok);background:var(--ok-soft)}.dstat.changed{color:var(--warn);background:var(--warn-soft)}.dstat.missing{color:var(--bad);background:var(--bad-soft)}
 .dlcard{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:12px 14px;margin-bottom:14px}.dlcard b{font-weight:650}
 .dlrow{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}.dlrow>label{font-size:12px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}.dlrow input[type=text],.dlrow input[type=password],.dlrow textarea{width:100%}
@@ -345,6 +346,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
         <thead id="runhead"></thead>
         <tbody id="runs"></tbody>
       </table></div>
+      <div class="runfoot" id="runfoot" hidden></div>
     </div>
   </section>
   <section id="datasec">
@@ -642,13 +644,53 @@ function renderRuns(){
   $("#runtools").hidden=(state.runs||[]).length<=6;
   var all=state.runs||[], hasEval=all.some(function(r){return r.eval_loss!=null}), hasBench=all.some(function(r){return r.lm_eval&&Object.keys(r.lm_eval).length}), hasEnergy=all.some(function(r){return r.energy_kwh!=null});
   $("#runhead").innerHTML='<tr><th>Run</th><th>Status</th><th>Started</th>'+(hasEval?'<th class="num">Eval loss</th>':'')+(hasEnergy?'<th class="num" title="Energy the GPUs of the run used, worked out from the power they drew. CPUs, fans and the network are not counted.">GPU energy</th>':'')+(hasBench?'<th>Benchmarks</th>':'')+'<th></th></tr>';
-  $("#runs").innerHTML = rows.length ? rows.map(function(r){
+  var shown=rows.slice(0,runShow);
+  $("#runs").innerHTML = rows.length ? shown.map(function(r){
     var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
           ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
+    var rm=(r.status!=="RUNNING"||r.stale)?'<button class="btn small" data-rm="'+esc(r.run_id)+'" title="Take this run off the list (MLflow keeps it hidden, so it can be restored)">Remove</button>':"";
+    act=act?act.replace(/<\/div>$/,rm+"</div>"):(rm?'<div class="runact">'+rm+'</div>':"");
     return '<tr><td>'+(PROXY&&!(state.portal&&state.portal.mlflow)?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+(r.dataset?' <span class="chip" title="The data this run trained on'+(r.dataset.status==="changed"?" (the files differed from the registered version when it started)":"")+'">'+esc(r.dataset.name)+' v'+esc(r.dataset.version)+(r.dataset.status==="changed"?" ⚠":"")+'</span>':"")+'</td>'+
       '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasEnergy?'<td class="num">'+kwh(r.energy_kwh)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
+  runFoot(rows,all);
 }
+var runShow=10;
+function runFoot(rows,all){
+  var f=$("#runfoot"), bad=all.filter(function(r){return r.status==="FAILED"||r.status==="KILLED"||r.stale}), h="";
+  if(rows.length>10){
+    h+='<span class="muted">Showing '+Math.min(runShow,rows.length)+' of '+rows.length+'</span>';
+    if(runShow<rows.length) h+='<button class="btn small" data-rows="more">Show 10 more</button><button class="btn small" data-rows="all">Show all '+rows.length+'</button>';
+    if(runShow>10) h+='<button class="btn small" data-rows="less">Show fewer</button>';
+  }
+  h+='<span class="spacer"></span>';
+  if(bad.length) h+='<button class="btn small" data-clear="bad" data-ids="'+bad.map(function(r){return r.run_id}).join(",")+'" title="Take the failed, killed and stalled runs off the list (MLflow keeps them hidden)">Clear failed and stalled ('+bad.length+')</button>';
+  f.innerHTML=h; f.hidden=!h.replace(/<span class="spacer"><\/span>/,"");
+}
+function removeRuns(ids,btn){
+  if(btn) btn.disabled=true;
+  lpost({kind:"runs",action:"remove",runs:ids}).then(function(r){
+    if(!r.j||r.j.error){ toast((r.j&&r.j.error)||"Could not remove those runs."); if(btn) btn.disabled=false; return; }
+    var gone={}; ids.forEach(function(i){ gone[i]=1; }); (r.j.skipped||[]).forEach(function(x){ delete gone[x.run_id]; });
+    state.runs=(state.runs||[]).filter(function(x){ return !gone[x.run_id]; }); renderRuns();
+    toast("Removed "+r.j.removed+(r.j.removed===1?" run":" runs")+" from the list."+((r.j.skipped||[]).length?" "+r.j.skipped.length+" could not be removed ("+r.j.skipped[0].reason+").":"")+" They are only hidden in MLflow.");
+    refresh();
+  }).catch(function(){ toast("The page could not reach the hub."); if(btn) btn.disabled=false; });
+}
+$("#runs").addEventListener("click",function(e){
+  var b=e.target.closest("button[data-rm]"); if(!b) return;
+  if(b.getAttribute("data-sure")!=="1"){ b.setAttribute("data-sure","1"); b.textContent="Sure? Remove"; setTimeout(function(){ if(b.isConnected){ b.removeAttribute("data-sure"); b.textContent="Remove"; } },4000); return; }
+  removeRuns([b.getAttribute("data-rm")],b);
+});
+$("#runfoot").addEventListener("click",function(e){
+  var b=e.target.closest("button"); if(!b) return;
+  var m=b.getAttribute("data-rows");
+  if(m){ runShow=m==="more"?runShow+10:m==="all"?100000:10; renderRuns(); return; }
+  if(b.hasAttribute("data-clear")){
+    if(b.getAttribute("data-sure")!=="1"){ b.setAttribute("data-sure","1"); var t=b.textContent; b.textContent="Sure? "+t; setTimeout(function(){ if(b.isConnected) renderRuns(); },4000); return; }
+    removeRuns(b.getAttribute("data-ids").split(","),b);
+  }
+});
 
 
 /* ---- data versions, downloads and Hugging Face access ---- */
