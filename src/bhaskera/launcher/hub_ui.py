@@ -67,6 +67,10 @@ h2 .count{font:12px var(--mono);color:var(--muted)}
 .meta{display:flex;flex-wrap:wrap;gap:0;margin-left:auto}
 .bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden}
 .bar>i{display:block;height:100%;background:var(--ink);transition:width .6s ease}
+.dstat{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px}.dstat.ok{color:var(--ok);background:var(--ok-soft)}.dstat.changed{color:var(--warn);background:var(--warn-soft)}.dstat.missing{color:var(--bad);background:var(--bad-soft)}
+.dlcard{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:12px 14px;margin-bottom:14px}.dlcard b{font-weight:650}
+.dlrow{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}.dlrow>label{font-size:12px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}.dlrow input[type=text],.dlrow input[type=password],.dlrow textarea{width:100%}
+.dlprog{margin:10px 0 2px}.dlprog .row{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:6px}
 .bar.thin{height:4px} .bar.thin>i{background:var(--muted)} .bar.hot>i{background:var(--warn)}
 .progress{margin:14px 0 4px}
 .progress .row{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:6px}
@@ -321,6 +325,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
     <div class="gi" data-menu="serve" data-page="serve"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Serve<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-serve" role="menu"></div></div>
     <div class="gi" data-menu="eval" data-page="evaluate"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Evaluate<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-eval" role="menu"></div></div>
     <div class="gi" data-menu="monitor" data-page="monitor"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Monitor<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-monitor" role="menu"></div></div>
+    <div class="gi right" data-menu="downloads"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Downloads<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-dl" role="menu"></div></div>
     <div class="gi right" data-menu="docs"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Docs<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-docs" role="menu"></div></div>
   </nav>
   <div class="spacer"></div>
@@ -360,6 +365,16 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
         <thead id="runhead"></thead>
         <tbody id="runs"></tbody>
       </table></div>
+    </div>
+  </section>
+  <section id="datasec">
+    <h2>Data <span class="count" id="datacount">0</span></h2>
+    <div class="card tablebox">
+      <div class="scroll"><table>
+        <thead><tr><th>Dataset</th><th>Version</th><th>Content</th><th>Source</th><th>Status</th><th></th></tr></thead>
+        <tbody id="datarows"></tbody>
+      </table></div>
+      <div class="tools" style="display:flex;align-items:center;gap:12px;padding:10px 14px"><button class="btn small" id="data-add" type="button">Register data</button><span id="data-prog" class="muted"></span></div>
     </div>
   </section>
   </div>
@@ -437,6 +452,15 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
   </div>
   <div class="dlg-foot"><div class="ssum" id="startsum"></div><button class="btn" id="startcheck" type="button" title="Runs the partition limits and the recipe check; submits nothing">Check first</button>
     <button class="btn primary" id="startgo" type="button">Start</button></div>
+</dialog>
+<dialog id="dlbox">
+  <div class="dlg-head"><b>Download from Hugging Face</b><span class="spacer" style="flex:1"></span><button class="btn" id="dlclose" type="button">Close</button></div>
+  <div class="dlgbody" id="dlbody" style="padding:16px 22px 18px"></div>
+</dialog>
+<dialog id="databox" class="small">
+  <div class="dlg-head"><b>Register data</b><span class="spacer" style="flex:1"></span><button class="btn" id="dataclose" type="button">Close</button></div>
+  <div class="dlgbody" id="databody" style="padding:16px 22px 18px"></div>
+  <div class="dlg-foot"><button class="btn primary" id="datago" type="button">Register</button></div>
 </dialog>
 <dialog id="bye" class="small">
   <div class="dlg-head"><b>Log out</b></div>
@@ -641,15 +665,157 @@ function renderRuns(){
   $("#runs").innerHTML = rows.length ? rows.map(function(r){
     var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
           ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
-    return '<tr><td>'+(PROXY&&!(state.portal&&state.portal.mlflow)?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
+    return '<tr><td>'+(PROXY&&!(state.portal&&state.portal.mlflow)?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+(r.dataset?' <span class="chip" title="The data this run trained on'+(r.dataset.status==="changed"?" (the files differed from the registered version when it started)":"")+'">'+esc(r.dataset.name)+' v'+esc(r.dataset.version)+(r.dataset.status==="changed"?" ⚠":"")+'</span>':"")+'</td>'+
       '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasEnergy?'<td class="num">'+kwh(r.energy_kwh)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
 }
 
+
+/* ---- data versions, downloads and Hugging Face access ---- */
+function lpost(body){ return api("api/launch",{method:"POST",headers:{"Content-Type":"application/json","X-Requested-With":"bhaskera"},body:JSON.stringify(body)}); }
+function hb(n){ if(n==null) return "–"; return n>=2**30?(n/2**30).toFixed(n>=10*2**30?0:1)+" GB":n>=2**20?(n/2**20).toFixed(0)+" MB":n>=1024?(n/1024).toFixed(0)+" KB":n+" B"; }
+var TASK={state:"idle"}, taskTimer=null;
+function taskLine(t){
+  if(!t||t.state==="idle") return "";
+  var pr=t.total?Math.min(100,Math.round(100*(t.done||0)/t.total)):null, running=t.state==="running"||t.state==="hashing";
+  return '<div class="dlprog"><div class="row"><span>'+esc(t.message||t.state)+'</span><span>'+(running&&pr!=null?pr+"% · "+hb(t.done)+" of "+hb(t.total):"")+'</span></div>'+
+    (running?'<div class="bar"><i style="width:'+(pr==null?8:pr)+'%"></i></div>':"")+'</div>';
+}
+function showTask(){
+  var t=TASK, box=$("#dl-prog"); if(box) box.innerHTML=taskLine(t)+((t.state==="running"||t.state==="hashing")&&t.kind==="download"?'<button class="btn small" id="dl-cancel" type="button">Cancel</button>':"");
+  $("#data-prog").textContent=(t.kind==="hash"&&t.state!=="idle")?(t.state==="hashing"?(t.message+(t.total?" · "+Math.min(100,Math.round(100*(t.done||0)/t.total))+"%":"")):t.message):"";
+}
+function pollTask(){
+  lpost({kind:"download",action:"status"}).then(function(r){
+    var prev=TASK.state, t=(r.j&&r.j.task)||{state:"idle"}; TASK=t; showTask();
+    var running=t.state==="running"||t.state==="hashing";
+    if(running){ clearTimeout(taskTimer); taskTimer=setTimeout(pollTask,2000); return; }
+    if(prev==="running"||prev==="hashing"){
+      toast(t.state==="done"?t.message:(t.state==="cancelled"?"Cancelled.":"Did not finish: "+t.message));
+      loadModels();
+    }
+  }).catch(function(){ clearTimeout(taskTimer); taskTimer=setTimeout(pollTask,5000); });
+}
+function watchTask(){ clearTimeout(taskTimer); taskTimer=setTimeout(pollTask,400); }
+
+var DL={what:"model",repo:"",rev:"",target:"",preview:null,msg:"",confirm:false,hf:null,hfmsg:"",busy:false};
+function dlHf(){
+  var h=DL.hf;
+  if(h===null) return '<div class="dlcard"><b>Hugging Face access</b><div class="muted">Checking …</div></div>';
+  if(h.signed_in) return '<div class="dlcard"><b>Hugging Face access</b><div>Signed in'+(h.user?' as <b>'+esc(h.user)+'</b>':"")+(h.source==="environment"?' <span class="muted">(from the environment)</span>':"")+'. <button class="btn small" id="hf-out" type="button" style="margin-left:8px">Sign out</button></div></div>';
+  return '<div class="dlcard"><b>Hugging Face access</b>'+(h.problem?'<div class="muted" style="color:var(--warn)">'+esc(h.problem)+'</div>':"")+
+    '<div class="muted" style="margin:4px 0 8px">Not signed in. A key is only needed for private repositories and for models that ask you to accept a licence first (Llama, for example).</div>'+
+    '<div style="display:flex;gap:8px"><input id="hf-key" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" style="flex:1"><button class="btn" id="hf-in" type="button">Sign in</button></div>'+
+    '<div class="sub" style="margin-top:6px">Create a key with read access at huggingface.co/settings/tokens. It is checked with Hugging Face, kept in a private file in your own folders and never shown again.</div>'+
+    (DL.hfmsg?'<div style="color:var(--bad);margin-top:6px">'+esc(DL.hfmsg)+'</div>':"")+'</div>';
+}
+function renderDl(){
+  var pv=DL.preview, running=TASK.state==="running"||TASK.state==="hashing";
+  var h=dlHf()+
+   '<div class="dlrow"><label>What</label><div class="chips">'+chip("Model",DL.what==="model",'data-dk="model"')+chip("Dataset",DL.what==="dataset",'data-dk="dataset"')+'</div></div>'+
+   '<div class="dlrow"><label for="dl-repo">Repository</label><input id="dl-repo" type="text" value="'+esc(DL.repo)+'" placeholder="'+(DL.what==="model"?"Qwen/Qwen3-14B":"owner/dataset-name")+'" spellcheck="false" autocomplete="off"><div class="sub">The name as it appears on huggingface.co (owner/name). Only Hugging Face is contacted.</div></div>'+
+   '<div class="dlrow"><label for="dl-rev">Revision (optional)</label><input id="dl-rev" type="text" value="'+esc(DL.rev)+'" placeholder="main" spellcheck="false" autocomplete="off"></div>'+
+   '<div class="dlrow"><label for="dl-target">Save in this folder</label><input id="dl-target" type="text" value="'+esc(DL.target)+'" placeholder="/scratch/<project>/<you>/models/Qwen3-14B" spellcheck="false" autocomplete="off"><div class="sub">A full path you can write to. It is made if it does not exist. Starting the same download again continues where it stopped.</div></div>'+
+   '<div style="display:flex;gap:10px;align-items:center"><button class="btn" id="dl-prev" type="button"'+(DL.busy||running?" disabled":"")+'>Check size</button>'+
+   '<button class="btn primary" id="dl-go" type="button"'+(!pv||DL.busy||running||(pv.large&&!DL.confirm)?" disabled":"")+'>Download</button></div>';
+  if(DL.msg) h+='<div style="margin-top:12px;color:var(--bad)">'+esc(DL.msg)+'</div>';
+  if(pv){
+    h+='<div class="dlcard" style="margin-top:14px"><b>'+esc(pv.repo)+'</b> <span class="muted">('+esc(pv.revision)+(pv.sha?" · "+esc(pv.sha):"")+')</span><div>'+hb(pv.bytes)+' in '+pv.files+' file'+(pv.files===1?"":"s")+(pv.license?' · licence '+esc(pv.license):"")+'</div>'+
+      (pv.gated?'<div style="color:var(--warn)">This repository asks you to accept its licence on huggingface.co first, and to sign in above.</div>':"")+
+      (pv.private?'<div class="muted">A private repository.</div>':"")+
+      '<div class="muted" style="margin-top:4px">Largest: '+pv.largest.slice(0,3).map(function(f){return esc(f.name)+" ("+hb(f.bytes)+")"}).join(", ")+'</div>'+
+      (pv.large?'<label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="dl-confirm"'+(DL.confirm?" checked":"")+'> This is a large download on this machine. Go ahead.</label>':"")+'</div>';
+  }
+  h+='<div id="dl-prog"></div>';
+  $("#dlbody").innerHTML=h; showTask();
+}
+function dlHfLoad(){ lpost({kind:"hf",action:"status"}).then(function(r){ DL.hf=r.j&&!r.j.error?r.j:{signed_in:false}; if($("#dlbox").open) renderDl(); }).catch(function(){ DL.hf={signed_in:false}; if($("#dlbox").open) renderDl(); }); }
+function openDl(what){
+  if(what==="model"||what==="dataset"){ if(DL.what!==what){ DL.what=what; DL.preview=null; DL.msg=""; } }
+  DL.hf=null; DL.hfmsg=""; renderDl(); $("#dlbox").showModal(); dlHfLoad();
+  if(what==="access"){ setTimeout(function(){ var k=$("#hf-key"); if(k) k.focus(); },300); }
+  pollTask();
+}
+$("#dlclose").addEventListener("click",function(){ $("#dlbox").close(); });
+$("#dlbody").addEventListener("input",function(e){
+  var id=e.target.id; if(id==="dl-repo"){ DL.repo=e.target.value; DL.preview=null; DL.msg=""; $("#dl-go")&&($("#dl-go").disabled=true); }
+  else if(id==="dl-rev"){ DL.rev=e.target.value; DL.preview=null; $("#dl-go")&&($("#dl-go").disabled=true); }
+  else if(id==="dl-target"){ DL.target=e.target.value; }
+  else if(id==="dl-confirm"){ DL.confirm=e.target.checked; $("#dl-go").disabled=!(DL.preview&&(!DL.preview.large||DL.confirm)); }
+});
+$("#dlbody").addEventListener("click",function(e){
+  var t=e.target.closest("button"); if(!t) return;
+  if(t.hasAttribute("data-dk")){ DL.what=t.getAttribute("data-dk"); DL.preview=null; DL.msg=""; renderDl(); return; }
+  if(t.id==="hf-in"){
+    var key=($("#hf-key").value||"").trim(); DL.hfmsg=""; t.disabled=true;
+    lpost({kind:"hf",action:"login",key:key}).then(function(r){ $("#hf-key")&&($("#hf-key").value=""); if(r.j&&r.j.signed_in){ DL.hf=r.j; DL.hfmsg=""; toast("Signed in to Hugging Face"+(r.j.user?" as "+r.j.user:"")+"."); } else DL.hfmsg=(r.j&&r.j.error)||"Could not sign in."; renderDl(); }).catch(function(){ DL.hfmsg="The page could not reach the hub."; renderDl(); });
+    return;
+  }
+  if(t.id==="hf-out"){ lpost({kind:"hf",action:"logout"}).then(function(r){ DL.hf={signed_in:false}; DL.hfmsg=""; renderDl(); toast("Signed out of Hugging Face."+((r.j&&r.j.note)?" "+r.j.note:"")); }); return; }
+  if(t.id==="dl-prev"){
+    DL.msg=""; DL.preview=null; DL.busy=true; t.disabled=true; t.textContent="Checking …";
+    lpost({kind:"download",action:"preview",what:DL.what,repo:DL.repo.trim(),revision:DL.rev.trim()}).then(function(r){ DL.busy=false; if(r.j&&r.j.preview){ DL.preview=r.j.preview; DL.confirm=false; } else DL.msg=(r.j&&r.j.error)||"Could not check that repository."; renderDl(); }).catch(function(){ DL.busy=false; DL.msg="The page could not reach the hub."; renderDl(); });
+    return;
+  }
+  if(t.id==="dl-go"){
+    DL.msg=""; t.disabled=true;
+    lpost({kind:"download",action:"start",what:DL.what,repo:DL.repo.trim(),revision:DL.rev.trim(),target:DL.target.trim(),confirm_large:DL.confirm}).then(function(r){
+      if(r.j&&r.j.task){ TASK=r.j.task; renderDl(); watchTask(); } else { DL.msg=(r.j&&r.j.error)||"Could not start the download."; renderDl(); }
+    }).catch(function(){ DL.msg="The page could not reach the hub."; renderDl(); });
+    return;
+  }
+  if(t.id==="dl-cancel"){ lpost({kind:"download",action:"cancel"}).then(function(){ watchTask(); }); return; }
+});
+
+var DV={name:"",path:"",note:"",msg:""};
+function dataRows(){
+  var ds=(pathOpts&&pathOpts.datasets)||[], rows=[], n=0;
+  ds.forEach(function(d){ d.versions.forEach(function(v,i){
+    n++;
+    var src=v.source&&v.source.type==="huggingface"?"Hugging Face "+esc(v.source.repo)+(v.source.revision&&v.source.revision!=="main"?" @ "+esc(v.source.revision):""):'<span class="mono" title="'+esc(v.path)+'">'+esc((v.path||"").split("/").slice(-2).join("/"))+'</span>';
+    var content=[v.kind==="tokenized"?"tokenised":"raw",v.rows!=null?Number(v.rows).toLocaleString()+" rows":"",v.seq_len?"seq "+v.seq_len:"",v.tokenizer||"",hb(v.bytes)].filter(Boolean).join(" · ");
+    var st=v.status==="ok"?'<span class="dstat ok">unchanged</span>':v.status==="changed"?'<span class="dstat changed" title="The files differ from what was registered">changed</span>':'<span class="dstat missing">folder missing</span>';
+    rows.push('<tr><td>'+(i===0?'<b>'+esc(d.name)+'</b>':'')+'</td><td>v'+v.version+(i===0?' <span class="chip">latest</span>':'')+'<div class="muted" style="font-size:12px">'+ago(v.created)+'</div></td><td class="muted">'+esc(content)+(v.note?'<div title="'+esc(v.note)+'" style="font-size:12px">'+esc(v.note.length>70?v.note.slice(0,70)+"…":v.note)+'</div>':"")+'</td><td class="muted">'+src+'</td><td>'+st+'</td>'+
+      '<td><div class="runact"><button class="btn small" data-dv="verify" data-n="'+esc(d.name)+'" data-v="'+v.version+'">Verify</button>'+(i===0?'<button class="btn small" data-dv="new" data-n="'+esc(d.name)+'" data-p="'+esc(v.path)+'">New version</button>':"")+'<button class="btn small" data-dv="forget" data-n="'+esc(d.name)+'" data-v="'+v.version+'">Forget</button></div></td></tr>');
+  }); });
+  $("#datacount").textContent=n;
+  return rows.length?rows.join(""):'<tr><td colspan="6" class="muted" style="text-align:center;padding:22px">No data is registered yet. Register a tokenised cache or a raw file to give it a name and a version, so every run records exactly what it trained on.</td></tr>';
+}
+function renderData(){ $("#datarows").innerHTML=dataRows(); showTask(); }
+function renderDataDlg(){
+  var names=((pathOpts&&pathOpts.datasets)||[]).map(function(d){return d.name}), paths={};
+  ((pathOpts&&pathOpts.caches)||[]).forEach(function(c){ paths[c.path]=1; }); ((pathOpts&&pathOpts.datasets)||[]).forEach(function(d){ d.versions.forEach(function(v){ paths[v.path]=1; }); });
+  $("#databody").innerHTML='<div class="dlrow"><label for="dv-name">Name</label><input id="dv-name" type="text" list="dv-names" value="'+esc(DV.name)+'" placeholder="support-tickets" spellcheck="false" autocomplete="off"><datalist id="dv-names">'+names.map(function(n){return '<option value="'+esc(n)+'">'}).join("")+'</datalist><div class="sub">Letters, digits, . _ - . A name that exists gets its next version when the content differs.</div></div>'+
+    '<div class="dlrow"><label for="dv-path">Folder or file</label><input id="dv-path" type="text" list="dv-paths" value="'+esc(DV.path)+'" placeholder="/scratch/<project>/<you>/data/train.jsonl" spellcheck="false" autocomplete="off"><datalist id="dv-paths">'+Object.keys(paths).map(function(x){return '<option value="'+esc(x)+'">'}).join("")+'</datalist><div class="sub">A tokenised cache folder, or your raw data. Every file is read once to fingerprint it, in the background.</div></div>'+
+    '<div class="dlrow"><label for="dv-note">Note (optional)</label><textarea id="dv-note" rows="2" maxlength="2000" placeholder="What changed in this version">'+esc(DV.note)+'</textarea></div>'+
+    (DV.msg?'<div style="color:var(--bad)">'+esc(DV.msg)+'</div>':"");
+  $("#datago").disabled=false;
+}
+function openData(name,path){ DV={name:name||"",path:path||"",note:"",msg:""}; renderDataDlg(); $("#databox").showModal(); }
+$("#data-add").addEventListener("click",function(){ openData(); });
+$("#dataclose").addEventListener("click",function(){ $("#databox").close(); });
+$("#databody").addEventListener("input",function(e){ var id=e.target.id; if(id==="dv-name") DV.name=e.target.value; else if(id==="dv-path") DV.path=e.target.value; else if(id==="dv-note") DV.note=e.target.value; });
+$("#datago").addEventListener("click",function(){
+  $("#datago").disabled=true; DV.msg="";
+  lpost({kind:"dataset",action:"add",name:DV.name.trim(),path:DV.path.trim(),note:DV.note}).then(function(r){
+    if(r.j&&r.j.task){ TASK=r.j.task; $("#databox").close(); showTask(); watchTask(); } else { DV.msg=(r.j&&r.j.error)||"Could not register that."; renderDataDlg(); }
+  }).catch(function(){ DV.msg="The page could not reach the hub."; renderDataDlg(); });
+});
+$("#datarows").addEventListener("click",function(e){
+  var t=e.target.closest("button[data-dv]"); if(!t) return;
+  var a=t.getAttribute("data-dv"), n=t.getAttribute("data-n");
+  if(a==="new"){ openData(n,t.getAttribute("data-p")); return; }
+  if(a==="verify"){ lpost({kind:"dataset",action:"verify",name:n,version:t.getAttribute("data-v")}).then(function(r){ if(r.j&&r.j.task){ TASK=r.j.task; showTask(); watchTask(); } else toast((r.j&&r.j.error)||"Could not check that."); }); return; }
+  if(a==="forget"){
+    if(t.getAttribute("data-sure")!=="1"){ t.setAttribute("data-sure","1"); t.textContent="Sure? Forget"; setTimeout(function(){ t.removeAttribute("data-sure"); t.textContent="Forget"; },4000); return; }
+    lpost({kind:"dataset",action:"remove",name:n,version:t.getAttribute("data-v")}).then(function(r){ toast(r.j&&r.j.removed?"Forgot "+n+" v"+r.j.version+". The files were not touched.":((r.j&&r.j.error)||"Could not forget that.")); loadModels(); });
+  }
+});
+
 /* ---- registered models ---- */
 var regModels=null, pathOpts=null;
 function loadModels(){
-  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); renderMenus(); }).catch(function(){});
+  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); renderMenus(); renderData(); }).catch(function(){});
 }
 /* ---- the path from data to a usable model ---- */
 function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
@@ -779,6 +945,13 @@ function renderMenus(){
   $("#mn-eval").innerHTML=mcol("",[go("evaluate","Evaluate"),I.bench,I.compare,I.register]);
   $("#mn-monitor").innerHTML=mcol("Tools",[go("monitor","Monitor")].concat(ok([I.mlflow,I.ray,I.gpu])))+mcol("Look at",ok([I.jobs,I.runs,I.cluster,I.files,I.active]));
   var base=/^https?:\/\//.test(s.docs_url||"")?s.docs_url:"";
+  $("#mn-dl").innerHTML=mcol("From Hugging Face",[
+      {ic:"box",t:"Download a model",d:"Into a folder you choose",attrs:'data-act="dl-model"'},
+      {ic:"data",t:"Download a dataset",d:"Registered as a dataset version",attrs:'data-act="dl-dataset"'},
+      {ic:"save",t:"Hugging Face access",d:"Sign in with your key for private and gated models",attrs:'data-act="dl-access"'}])+
+    mcol("Your data",[
+      {ic:"list",t:"Datasets and versions",d:"What each run trained on",attrs:'data-go="train" data-scroll="#datasec"'},
+      {ic:"data",t:"Register data",d:"Give a folder a name and a version",attrs:'data-act="data-register"'}]);
   $("#mn-docs").innerHTML=mcol("Learn",[
       {ic:"book",t:"User manual",d:"Everything, with commands",href:base||"#",off:!base},
       {ic:"play",t:"Getting started",d:"From data to a model you can use",href:base?base+"workflow/":"#",off:!base},
@@ -828,6 +1001,8 @@ document.addEventListener("click",function(e){
   closeMenus();
   var kind=it.getAttribute("data-open"), gp=it.getAttribute("data-go"), sc=it.getAttribute("data-scroll"), dg=it.getAttribute("data-dialog"), act=it.getAttribute("data-act");
   if(act==="logout"){ askLogout(); return; }
+  if(act&&act.indexOf("dl-")===0){ openDl(act.slice(3)); return; }
+  if(act==="data-register"){ openData(); return; }
   if(kind){
     L.hours="";
     if(kind==="recipe"){
@@ -1210,7 +1385,7 @@ function renderStart(){
   $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||none;
   if(k==="resume") loadResume();
 }
-function cacheLabel(c){ return c.name+" · "+(c.model||"?")+" · sequence "+(c.seq_len||"?")+" · "+(c.rows!=null?Number(c.rows).toLocaleString()+" rows":""); }
+function cacheLabel(c){ return (c.data_version?c.data_version.name+" v"+c.data_version.version+(c.data_version.status==="changed"?" (changed) · ":" · "):"")+c.name+" · "+(c.model||"?")+" · sequence "+(c.seq_len||"?")+" · "+(c.rows!=null?Number(c.rows).toLocaleString()+" rows":""); }
 function cacheOptions(list,sel,none,other){
   var group=function(items,label){ return items.length?'<optgroup label="'+label+'">'+items.map(function(c){ return '<option value="'+esc(c.path)+'"'+(!other&&c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join("")+'</optgroup>':""; };
   var sh=list.filter(function(c){return c.shared}), mine=list.filter(function(c){return !c.shared});
@@ -1220,7 +1395,7 @@ function cacheOptions(list,sel,none,other){
 function modelOptions(cat,sel,other){
   var item=function(m){ return '<option value="'+esc(m.path)+'"'+(!other&&m.path===sel?" selected":"")+'>'+esc(m.name+" · "+(m.kind==="multimodal"?"multimodal":"text")+(m.size_gb?" · "+m.size_gb+" GB":"")+(m.custom_code?" · own code":""))+'</option>'; };
   var sh=cat.filter(function(m){return m.group==="shared"}), mine=cat.filter(function(m){return m.group!=="shared"});
-  return (sh.length?'<optgroup label="Shared on this cluster">'+sh.map(item).join("")+'</optgroup>':"")+(mine.length?'<optgroup label="Used by your recipes">'+mine.map(item).join("")+'</optgroup>':"")+
+  return (sh.length?'<optgroup label="Shared on this cluster">'+sh.map(item).join("")+'</optgroup>':"")+(mine.length?'<optgroup label="Yours">'+mine.map(item).join("")+'</optgroup>':"")+
     '<option value="__other"'+(other?" selected":"")+'>Another folder (type its path) …</option>';
 }
 function aliasNames(){ var out=[]; (L.opts.models||[]).forEach(function(m){ (m.aliases||[]).forEach(function(a){ if(out.indexOf(a)<0) out.push(a); }); }); return out; }

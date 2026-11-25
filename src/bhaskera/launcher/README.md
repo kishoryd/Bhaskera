@@ -22,13 +22,13 @@ Environment variables:
 
 | Variable | Meaning |
 |---|---|
-| `BHASKERA_DIR`, `SLURM_ACCOUNT` | Where Bhaskera is installed, and the account jobs are charged to. `submit.sh` needs both |
+| `BHASKERA_DIR` | Where Bhaskera is installed. `submit.sh` needs it. Jobs are charged to your login name; set `SLURM_ACCOUNT` only to use another account |
 | `BHASKERA_CLUSTER_PROFILE` | A cluster profile file (default `.bhaskera/cluster.yaml` in your run folder) |
 | `BHASKERA_PARTITION`, `BHASKERA_MAX_HOURS`, `BHASKERA_GPUS_PER_NODE`, `BHASKERA_CPUS_PER_NODE`, `BHASKERA_MEM_PER_NODE`, `BHASKERA_NET_INTERFACE` | The same facts as the profile, for a cluster without one |
 | `BHASKERA_EXCLUDE` | Nodes to keep jobs off (comma separated) |
 | `EVAL_HOURS`, `SERVE_HOURS` | Time limit of a benchmark or chat job (default 2 hours) |
 | `BHASKERA_HUB_LAUNCH=0` | Turns the home page's Start buttons off |
-| `BHASKERA_WORKDIR`, `BHASKERA_KIT`, `BHASKERA_RECIPES` | Where the home page finds `submit.sh` and recipes |
+| `BHASKERA_WORKDIR`, `BHASKERA_RUNS`, `BHASKERA_KIT`, `BHASKERA_RECIPES` | Where the home page finds `submit.sh` and recipes: your run folder, else `~/bhaskera-runs` (made from the shared kit the first time; `BHASKERA_RUNS` changes where) |
 | `BHASKERA_STRICT_CONFIG=1` | A config key that does nothing becomes an error, not a warning |
 | `SKIP_PREFLIGHT=1`, `SKIP_QOS_CHECK=1` | Submit from the terminal even when a check fails. The home page never does this |
 

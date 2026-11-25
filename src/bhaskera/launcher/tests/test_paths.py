@@ -72,3 +72,41 @@ def test_the_commands_take_their_defaults_from_it(world, monkeypatch):
     for module in (register, resume, evaluate):
         fn = getattr(module, "_store_default", None) or getattr(module, "_store", None)
         assert fn is not None and fn() == str(run.resolve() / "mlflow-runs"), module.__name__
+
+
+def test_without_a_run_folder_the_default_one_in_home_is_made_from_the_shared_kit(world, tmp_path):
+    home, run = world
+    (run / "submit.sh").unlink()
+    kit = tmp_path / "sharedkit"
+    (kit / "recipes").mkdir(parents=True)
+    (kit / "submit.sh").write_text("#!/bin/bash\n")
+    (kit / "recipes" / "a.yaml").write_text("x: 1\n")
+    kit.chmod(0o555); (kit / "submit.sh").chmod(0o555)                       # a shared kit is read-only
+    env = {"BHASKERA_KIT": str(kit)}
+    assert paths.run_folder(env, tmp_path) is None                              # nothing yet
+    made = paths.ensure_default(env)
+    assert made == (home / "bhaskera-runs").resolve() and (made / "recipes" / "a.yaml").read_text() == "x: 1\n"
+    assert os_access_write(made / "submit.sh") and os_access_write(made / "recipes")   # the copy belongs to the user
+    assert paths.run_folder(env, tmp_path) == made                               # now it is the run folder
+    assert paths.mlflow_store(env, tmp_path) == str(made / "mlflow-runs")
+    (made / "recipes" / "a.yaml").write_text("mine: 2\n")
+    assert paths.ensure_default(env) == made and (made / "recipes" / "a.yaml").read_text() == "mine: 2\n"      # never overwritten
+    kit.chmod(0o755)
+
+
+def os_access_write(p):
+    import os
+    return os.access(p, os.W_OK)
+
+
+def test_a_folder_the_user_already_has_at_the_default_place_is_left_alone(world, tmp_path):
+    home, run = world
+    (run / "submit.sh").unlink()
+    (home / "bhaskera-runs").mkdir()
+    (home / "bhaskera-runs" / "notes.txt").write_text("keep")
+    kit = tmp_path / "sharedkit"
+    kit.mkdir()
+    (kit / "submit.sh").write_text("")
+    assert paths.ensure_default({"BHASKERA_KIT": str(kit)}) is None
+    assert (home / "bhaskera-runs" / "notes.txt").read_text() == "keep" and not (home / "bhaskera-runs" / "submit.sh").exists()
+    assert paths.default_folder({"BHASKERA_RUNS": "/x/y"}) == Path("/x/y")

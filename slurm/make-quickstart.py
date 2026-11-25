@@ -2,7 +2,6 @@
 """Prepare a shared Bhaskera quick-start folder (administrator step, run once per model / dataset update).
 
     export BHASKERA_DIR=/home/apps/bhaskera/1.0.0/src      # or: module load bhaskera/1.0.0
-    export SLURM_ACCOUNT=<account>
     python make-quickstart.py /home/apps/bhaskera/quickstart  train.jsonl  val.jsonl
 
 Expected layout before the run:
@@ -20,6 +19,7 @@ Users then only do:  cp -r <QS>/recipes <their run folder>  and  ./submit.sh rec
 import copy
 import glob
 import json
+import getpass
 import os
 import subprocess
 import sys
@@ -54,7 +54,7 @@ def tokenise(qs, model_path, seq_len, train, val, trust):
     yaml.safe_dump(cfg, open(cfg_path, "w"), sort_keys=False)
     os.makedirs("logs", exist_ok=True)
     print(f"  tokenising for {name} (seq_len {seq_len}) ...", flush=True)
-    cmd = ["sbatch", "--wait", "-A", os.environ["SLURM_ACCOUNT"]]
+    cmd = ["sbatch", "--wait", "-A", os.environ.get("SLURM_ACCOUNT") or getpass.getuser()]
     if os.environ.get("BHASKERA_EXCLUDE"):
         cmd.append(f"--exclude={os.environ['BHASKERA_EXCLUDE']}")
     cmd += [os.path.join(HERE, "tokenize.sbatch"), cfg_path]
@@ -65,7 +65,7 @@ def main():
     if len(sys.argv) != 4:
         sys.exit(__doc__)
     qs, train, val = (os.path.abspath(a) for a in sys.argv[1:4])
-    for need in ("BHASKERA_DIR", "SLURM_ACCOUNT"):
+    for need in ("BHASKERA_DIR",):
         if need not in os.environ:
             sys.exit(f"export {need} first (see the top of this script)")
     models = os.path.join(qs, "models")

@@ -81,7 +81,6 @@ new on the cluster it says "Nothing is running", and that is normal.
 | The card stays "Starting" for minutes | The partition is busy or the limit is smaller than the hours | `squeue -u <user>`; lower `--hours`; pick another partition (rerun `install.sh`) |
 | The card goes to "Completed" at once | Bhaskera is not at `--root` on that node (the log says `Bhaskera is not installed at …`) | Open the session's `output.log` from the card; fix `--root` and run `install.sh` again |
 | The page says "Open Bhaskera from the Sessions page" | The address was opened without the Open button (a bookmark, a copied link) | Use the Open button; the token changes with each session |
-| The page says "SLURM_ACCOUNT is not set" under Start | The user has no default account in Slurm | `sacctmgr modify user <user> set defaultaccount=<account>` |
 | The page opens but nothing loads | The proxy dropped a header or cookie | Look at the web server's error log; the page needs `Set-Cookie` back and `Cookie` forward |
 | Chat says the server cannot be reached | SSH between compute nodes is not allowed for this user | Allow SSH between compute nodes for a user who has a job there (the last row of the first table) |
 

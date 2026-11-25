@@ -10,11 +10,8 @@ export BHASKERA_QUICKSTART="${BHASKERA_QUICKSTART:-$(dirname "$ROOT")/quickstart
 # The cluster profile (partitions, GPUs per node): the one in the kit, unless the site sets another.
 [[ -n "${BHASKERA_CLUSTER_PROFILE:-}" ]] || export BHASKERA_CLUSTER_PROFILE="$(ls "$BHASKERA_KIT"/clusters/*.yaml 2>/dev/null | head -1)"
 
-# The account jobs are charged to: the user's default account in Slurm (the page can only start jobs with one).
-if [[ -z "${SLURM_ACCOUNT:-}" ]]; then
-    SLURM_ACCOUNT="$(sacctmgr -nP show user "$USER" format=defaultaccount 2>/dev/null | head -1 | tr -d '[:space:]')"
-    [[ -n "$SLURM_ACCOUNT" ]] && export SLURM_ACCOUNT
-fi
+# The account jobs are charged to: the user's login name, which is their Slurm account (a user may set another with SLURM_ACCOUNT).
+export SLURM_ACCOUNT="${SLURM_ACCOUNT:-$USER}"
 
 # Where submit.sh, the recipes and the checkpoints live: the user's own copy of the shared kit, made on first use.
 export BHASKERA_WORKDIR="${BHASKERA_WORKDIR:-${SCRATCH:-$HOME}/bhaskera-runs}"
@@ -28,5 +25,5 @@ export BHASKERA_HUB_TOKEN="${password:?the portal did not give a password}"
 # The path the portal puts in front of the page: MLflow's pages are served under it, inside the same tab.
 export BHASKERA_EXTERNAL_PREFIX="__PROXY__/${host}/${port}"
 
-echo "Bhaskera on ${host}:${port} (account ${SLURM_ACCOUNT:-none found}, folder ${BHASKERA_WORKDIR})"
+echo "Bhaskera on ${host}:${port} (account ${SLURM_ACCOUNT}, folder ${BHASKERA_WORKDIR})"
 exec bhaskera-dashboard portal --bind 0.0.0.0 --hub-port "${port:?the portal did not give a port}"

@@ -226,6 +226,11 @@ class MLflowLogger(BaseLogger):
             "slurm_job": os.environ.get("SLURM_JOB_ID", ""),
             "slurm_nodelist": os.environ.get("SLURM_JOB_NODELIST", ""),
         }
+        try:                                                     # the version of the data this run trains on, when it was registered
+            from bhaskera import dataversions
+            tags.update(dataversions.run_tags(cfg))
+        except Exception:
+            pass
         resumed = os.environ.get("BHASKERA_RESUME_OF")          # set by `submit.sh resume`: the run this one continues
         if resumed:
             tags["resumed_from"] = resumed

@@ -18,8 +18,18 @@ from pathlib import Path
 from typing import Optional
 
 
+DEFAULT_NAME = "bhaskera-runs"
+
+
+def default_folder(env: Optional[dict] = None) -> Path:
+    """Where the run folder is made when the user names none: $BHASKERA_RUNS, else ~/bhaskera-runs."""
+    env = os.environ if env is None else env
+    return Path(env.get("BHASKERA_RUNS") or (Path.home() / DEFAULT_NAME))
+
+
 def run_folder(env: Optional[dict] = None, cwd: Optional[Path] = None) -> Optional[Path]:
-    """The folder that holds ``submit.sh``: $BHASKERA_WORKDIR, else the current folder; None when there is none."""
+    """The folder that holds ``submit.sh``: $BHASKERA_WORKDIR, else the current folder, else the default folder in the home folder
+    (when it exists, see ``ensure_default``); None when there is none."""
     env = os.environ if env is None else env
     given = env.get("BHASKERA_WORKDIR")
     if given and (Path(given) / "submit.sh").is_file():
@@ -27,6 +37,32 @@ def run_folder(env: Optional[dict] = None, cwd: Optional[Path] = None) -> Option
     here = Path(cwd) if cwd else Path.cwd()
     if (here / "submit.sh").is_file():
         return here.resolve()
+    mine = default_folder(env)
+    if (mine / "submit.sh").is_file():
+        return mine.resolve()
+    return None
+
+
+def ensure_default(env: Optional[dict] = None) -> Optional[Path]:
+    """The default run folder, made from the shared kit (``$BHASKERA_KIT``, else ``$BHASKERA_DIR/slurm``) when it does not exist yet.
+
+    A folder that already exists without ``submit.sh`` is left alone (None): nothing of the user's is overwritten."""
+    env = os.environ if env is None else env
+    mine = default_folder(env)
+    if (mine / "submit.sh").is_file():
+        return mine.resolve()
+    if mine.exists() and any(mine.iterdir()):
+        return None
+    for c in (env.get("BHASKERA_KIT"), Path(env["BHASKERA_DIR"]) / "slurm" if env.get("BHASKERA_DIR") else None):
+        if c and (Path(c) / "submit.sh").is_file():
+            try:
+                import shutil
+                shutil.copytree(c, mine, dirs_exist_ok=True, copy_function=shutil.copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "logs"))
+                for f in list(mine.rglob("*")) + [mine]:
+                    f.chmod(f.stat().st_mode | 0o200)                 # the kit may be read-only; the copy is the user's
+            except OSError:
+                return None
+            return mine.resolve()
     return None
 
 

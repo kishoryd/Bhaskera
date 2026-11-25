@@ -33,10 +33,9 @@ on PARAM Rudra GPU nodes (2 x A100 80 GB per node), 1 to 128+ nodes.
 Quick start (models, tokenised data and ready recipes are on shared storage; nothing to download):
 
   module load bhaskera/1.0.0
-  cp -r $BHASKERA_KIT /scratch/<project>/<username>/bhaskera-runs
-  cd /scratch/<project>/<username>/bhaskera-runs
+  cp -r $BHASKERA_KIT ~/bhaskera-runs        # any folder you choose; the home page makes ~/bhaskera-runs for you if you skip this
+  cd ~/bhaskera-runs
   cp $BHASKERA_QUICKSTART/recipes/*.yaml recipes/
-  export SLURM_ACCOUNT=<your_account>
   ./submit.sh recipes/qwen3-14b-qlora.yaml 8 1        # recipe, nodes, hours
 
 User manual: https://cdacindia.github.io/ParamRudra-20PF-UserManual/bhaskera/

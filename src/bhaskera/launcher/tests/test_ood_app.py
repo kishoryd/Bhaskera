@@ -47,7 +47,7 @@ def test_the_session_script_loads_no_module_and_needs_nothing_from_the_user(site
     script = (site / "sys" / "bhaskera" / "template" / "script.sh.erb").read_text()
     assert "module load" not in script and "module purge" not in script
     assert 'BHASKERA_EXTERNAL_PREFIX="/node/${host}/${port}"' in script          # the trailing slash of the option is dropped
-    for needed in ("BHASKERA_DIR=", "BHASKERA_KIT=", "BHASKERA_CLUSTER_PROFILE", "MLFLOW_ALLOW_FILE_STORE=true", "sacctmgr", "bhaskera-runs", "BHASKERA_HUB_TOKEN"):
+    for needed in ("BHASKERA_DIR=", "BHASKERA_KIT=", "BHASKERA_CLUSTER_PROFILE", "MLFLOW_ALLOW_FILE_STORE=true", "SLURM_ACCOUNT:-$USER", "bhaskera-runs", "BHASKERA_HUB_TOKEN"):
         assert needed in script, needed
     r = sh("-n", site / "sys" / "bhaskera" / "template" / "script.sh.erb")
     assert r.returncode == 0, r.stderr

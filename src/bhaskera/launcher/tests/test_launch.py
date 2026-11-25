@@ -99,7 +99,7 @@ def test_bad_forms_never_reach_the_script(kit, form):
 
 
 def test_disabled_without_account_or_kit_or_switch(kit):
-    for env, word in (({"SLURM_ACCOUNT": ""}, "SLURM_ACCOUNT"), ({"BHASKERA_HUB_LAUNCH": "0"}, "turned off")):
+    for env, word in (({"BHASKERA_DIR": ""}, "BHASKERA_DIR"), ({"BHASKERA_HUB_LAUNCH": "0"}, "turned off")):
         m = make(kit, env=env)
         assert word in m.options()["reason"] and not m.options()["enabled"]
         with pytest.raises(launch.LaunchError):
@@ -129,10 +129,21 @@ def test_failure_output_is_returned(kit):
     assert not out["ok"] and "FAIL" in out["output"]
 
 
-def test_find_kit(kit, tmp_path_factory):
+def test_find_kit(kit, tmp_path_factory, monkeypatch):
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     assert launch.find_kit({"BHASKERA_WORKDIR": str(kit)}, tmp_path_factory.mktemp("c")) == kit.resolve()
     assert launch.find_kit({}, tmp_path_factory.mktemp("d")) is None
-    assert launch.find_kit({"BHASKERA_KIT": str(kit)}, tmp_path_factory.mktemp("e")) == kit.resolve()
+    mine = launch.find_kit({"BHASKERA_KIT": str(kit)}, tmp_path_factory.mktemp("e"))
+    assert mine == (home / "bhaskera-runs").resolve() and (mine / "submit.sh").is_file()      # the user's own copy, not the shared kit
+
+
+def test_the_slurm_account_is_the_login_name_unless_one_is_set(kit, monkeypatch):
+    import getpass
+    monkeypatch.setattr(getpass, "getuser", lambda: "kishoryd")
+    assert launch.Launcher(kit, runs=lambda: [], env={"BHASKERA_DIR": "/x"})._env["SLURM_ACCOUNT"] == "kishoryd"
+    assert launch.Launcher(kit, runs=lambda: [], env={"BHASKERA_DIR": "/x", "SLURM_ACCOUNT": "proj"})._env["SLURM_ACCOUNT"] == "proj"
+    assert launch.Launcher(kit, runs=lambda: [], env={"BHASKERA_DIR": "/x"}).options()["reason"] == ""
 
 
 STOPPED = "e" * 32

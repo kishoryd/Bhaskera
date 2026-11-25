@@ -19,8 +19,7 @@ On PARAM Rudra the module has everything:
 
 ```bash
 module load bhaskera/1.0.0
-cp -r $BHASKERA_KIT /scratch/<project>/<username>/bhaskera-runs && cd /scratch/<project>/<username>/bhaskera-runs
-export SLURM_ACCOUNT=<your_account>
+cp -r $BHASKERA_KIT ~/bhaskera-runs && cd ~/bhaskera-runs        # or any folder you choose; the home page makes ~/bhaskera-runs for you if you skip this
 
 ./submit.sh recipes/qwen3-14b-qlora.yaml 8 1     # recipe, nodes, hours
 ```

@@ -274,6 +274,8 @@ def recent_runs(store: str | Path, limit: int = 40, now: Optional[float] = None)
             "run_id": run.name, "experiment_id": run.parent.name, "name": info["run_name"], "status": status,
             "started": started, "duration_s": int((ended or now) - started) if started else None, "stale": stale,
             "job": _tag(run, "slurm_job"), "group": _tag(run, "group"),
+            "dataset": ({"name": _tag(run, "dataset.name"), "version": _tag(run, "dataset.version"), "status": _tag(run, "dataset.status")}
+                        if _tag(run, "dataset.name") else None),
             "loss": _last_value(metrics / "loss"), "eval_loss": _min_value(metrics / "eval_loss"),
             "eval_acc": _last_value(metrics / "eval_accuracy"), "mfu": _last_value(metrics / "throughput_mfu_pct"),
         })

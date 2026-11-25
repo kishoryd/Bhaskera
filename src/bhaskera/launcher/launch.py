@@ -14,6 +14,7 @@ job). A runaway guard allows a few starts per hour. Set ``BHASKERA_HUB_LAUNCH=0`
 """
 from __future__ import annotations
 
+import getpass
 import os
 import re
 import subprocess
@@ -22,6 +23,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
+
+from .. import dataversions, downloads, paths
 
 RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
@@ -47,13 +50,14 @@ class LaunchError(ValueError):
 
 
 def find_kit(env: Optional[dict] = None, cwd: Optional[Path] = None) -> Optional[Path]:
-    """The folder with submit.sh: $BHASKERA_WORKDIR, the current folder, $BHASKERA_KIT, then $BHASKERA_DIR/slurm."""
+    """The run folder (the one with submit.sh): $BHASKERA_WORKDIR, the current folder, then the user's own default folder in the home folder
+    (``~/bhaskera-runs``), which is made from the shared kit when it does not exist yet. The shared kit itself is never used as a run folder."""
     env = os.environ if env is None else env
     cwd = Path.cwd() if cwd is None else cwd
-    for c in (env.get("BHASKERA_WORKDIR"), cwd, env.get("BHASKERA_KIT"), Path(env["BHASKERA_DIR"]) / "slurm" if env.get("BHASKERA_DIR") else None):
+    for c in (env.get("BHASKERA_WORKDIR"), cwd):
         if c and (Path(c) / "submit.sh").is_file():
             return Path(c).resolve()
-    return None
+    return paths.ensure_default(env)
 
 
 def recipe_dirs(kit: Path, env: Optional[dict] = None) -> list[Path]:
@@ -132,6 +136,8 @@ class Launcher:
                  jobs: Optional[Callable[[], list[dict]]] = None):
         self.kit, self._store, self._describe, self._jobs = kit, store, describe, jobs
         self._runs, self._env, self._run, self._clock = runs, dict(os.environ if env is None else env), run, clock
+        self._env.setdefault("SLURM_ACCOUNT", getpass.getuser())     # the Slurm account is the login name unless the user sets another
+        self.downloads = downloads.Manager(self._env)
         self._lock = threading.Lock()
         self._starts: list[float] = []
         self._last = 0.0
@@ -159,6 +165,7 @@ class Launcher:
         return {"enabled": not reason, "reason": reason, "recipes": recipes, "runs": runs, "stopped": self._stopped(), "models": self._models(),
                 "caches": self._caches(), "model_folders": self._model_folders(), "model_catalog": self._model_catalog(), "methods": {k: {"label": v["label"], "about": v["about"], "kinds": list(v["kinds"])} for k, v in _methods().items()},
                 "starters": self._starters(), "schema": self._schema(), "own_tests": self._own_tests(),
+                "datasets": self._datasets(), "downloaded": downloads.records(),
                 "partitions": rules,
                 "gpus_per_node": prof.gpus_per_node, "default_hours": 2, "max_nodes": MAX_NODES, "max_hours": MAX_HOURS}
 
@@ -230,6 +237,74 @@ class Launcher:
             return {"ok": False, "job": None, "dry": False, "output": "registering took too long; try again"}
         return {"ok": done.returncode == 0, "job": None, "dry": False, "output": ((done.stdout or "") + (done.stderr or "")).strip()[-2000:]}
 
+    def _datasets(self) -> list[dict]:
+        try:
+            return dataversions.listing()
+        except Exception:
+            return []
+
+    def _data(self, form: dict) -> dict:
+        """Dataset versions: list, register (fingerprints in the background), verify, forget one version."""
+        action = form.get("action")
+        try:
+            if action == "list":
+                return {"ok": True, "datasets": dataversions.listing()}
+            if action == "add":
+                return {"ok": True, "task": self.downloads.hash_dataset(form.get("name"), form.get("path"), form.get("note") or "")}
+            if action == "verify":
+                dataversions._check_name(form.get("name"))
+                return {"ok": True, "task": self.downloads.hash_dataset(form.get("name"), None, verify_only=True, version=form.get("version"))}
+            if action == "remove":
+                return {"ok": True, **dataversions.remove(form.get("name"), form.get("version"))}
+        except (dataversions.DataError, downloads.DownloadError) as e:
+            raise LaunchError(str(e))
+        raise LaunchError("unknown action for datasets")
+
+    def _download(self, form: dict) -> dict:
+        """Download a model or dataset from Hugging Face into a folder: preview, start, cancel, status."""
+        action = form.get("action")
+        try:
+            if action == "preview":
+                return {"ok": True, "preview": downloads.preview(form.get("what"), form.get("repo"), form.get("revision"), self._env)}
+            if action == "start":
+                return {"ok": True, "task": self.downloads.start_download(form.get("what"), form.get("repo"), form.get("revision"), form.get("target"),
+                                                                         confirm_large=form.get("confirm_large") is True, name=form.get("name") or "")}
+            if action == "cancel":
+                return {"ok": True, "task": self.downloads.cancel()}
+            if action == "status":
+                return {"ok": True, "task": self.downloads.status()}
+        except (downloads.DownloadError, dataversions.DataError) as e:
+            raise LaunchError(str(e))
+        raise LaunchError("unknown action for downloads")
+
+    def _hf(self, form: dict) -> dict:
+        """Sign in to Hugging Face with a key (kept for this user only), sign out, or say who is signed in. The key is never returned."""
+        action = form.get("action")
+        try:
+            if action == "login":
+                return {"ok": True, **downloads.sign_in(form.get("key"), self._env)}
+            if action == "logout":
+                return {"ok": True, **downloads.sign_out(self._env)}
+            if action == "status":
+                return {"ok": True, **downloads.auth_status(self._env)}
+        except downloads.DownloadError as e:
+            raise LaunchError(str(e))
+        raise LaunchError("unknown action for Hugging Face access")
+
+    def _check_data(self, recipe: Path) -> None:
+        """Refuse to train on data that changed after it was registered: say which version it was and what to do."""
+        try:
+            import yaml
+            data = (yaml.safe_load(recipe.read_text()) or {}).get("data") or {}
+        except Exception:
+            return
+        for field in ("tokenized_path", "val_tokenized_path"):
+            p = data.get(field)
+            v = dataversions.for_path(p) if isinstance(p, str) and "<" not in p else None
+            if v and v["status"] == "changed":
+                raise LaunchError(f"the data in {p} has changed since it was registered as {v['name']} v{v['version']}. Register it again to get a new version "
+                                  "(Train, Data), or restore the files, so that the run records exactly what it trained on.")
+
     def _recipe_files(self) -> list[Path]:
         if not self.kit:
             return []
@@ -246,7 +321,12 @@ class Launcher:
             for c in found:
                 c["shared"] = any(str(Path(c["path"]).resolve()).startswith(r + os.sep) for r in roots)
             shared_keys = {(c["name"], c["rows"], c["seq_len"]) for c in found if c["shared"]}
-            return [c for c in found if c["shared"] or (c["name"], c["rows"], c["seq_len"]) not in shared_keys]      # a cache's name is a hash of its content
+            kept = [c for c in found if c["shared"] or (c["name"], c["rows"], c["seq_len"]) not in shared_keys]      # a cache's name is a hash of its content
+            for c in kept:
+                v = dataversions.for_path(c["path"])
+                if v:
+                    c["data_version"] = {"name": v["name"], "version": v["version"], "status": v["status"]}
+            return kept
         except Exception:
             return []
 
@@ -254,7 +334,7 @@ class Launcher:
         """The base models to choose from: those shared on this cluster and those your own recipes use, with their kind and size."""
         try:
             from . import recipes
-            return recipes.model_catalog(recipes.shared_folders(self._env, "models"), recipes.suggested_models(self._recipe_files()))
+            return recipes.model_catalog(recipes.shared_folders(self._env, "models"), recipes.suggested_models(self._recipe_files()) + [m for m in downloads.downloaded_models() if m not in recipes.suggested_models(self._recipe_files())])
         except Exception:
             return []
 
@@ -446,6 +526,7 @@ class Launcher:
             nodes = _int(form.get("nodes"), "nodes", 1, MAX_NODES)
             hours = _int(form.get("hours"), "hours", 1, MAX_HOURS, required=False)
             self._check_gpus(_describe(recipe), nodes)
+            self._check_data(recipe)
             return [str(recipe), str(nodes)] + ([str(hours)] if hours else []), {}
         if kind == "resume":
             run = form.get("run")
@@ -492,6 +573,9 @@ class Launcher:
 
     def launch(self, form: dict) -> dict:
         """{'ok', 'job', 'output'} for action 'start' (a job is submitted) or 'check' (limits and preflight only)."""
+        for kind, handler in (("dataset", self._data), ("download", self._download), ("hf", self._hf)):
+            if form.get("kind") == kind:                                  # these need no Slurm account: they work on files and on Hugging Face
+                return handler(form)
         reason = self.disabled_reason()
         if reason:
             raise LaunchError(reason)
