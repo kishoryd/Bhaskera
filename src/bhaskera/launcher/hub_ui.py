@@ -623,7 +623,7 @@ function jobCard(j){
   return h;
 }
 function emptyJobs(){
-  return '<div class="quiet"><div><b style="color:var(--text)">Nothing is running</b><div>Start a training run, or chat with or benchmark a model you trained: use the cards above or the menus at the top.</div></div><div class="actions"><button class="btn primary" data-start="recipe">Create a recipe</button><button class="btn" data-start="train">Train a model</button></div></div>';
+  return '<div class="quiet"><div><b style="color:var(--text)">Nothing is running</b><div>Start a training run, or chat with or benchmark a model you trained.</div></div></div>';
 }
 
 /* ---- runs ---- */
@@ -744,7 +744,7 @@ function offer(){
   var run=jobs.filter(function(j){return j.linked&&(j.kind||"train")==="train"})[0];
   var refs=[]; (regModels||[]).forEach(function(m){ (m.refs||[]).forEach(function(v){ refs.push({m:m.name,v:v}); }); });
   I.text={ic:"text",t:"Text model",d:"Fine-tune a language model",attrs:'data-open="recipe" data-ckind="text"'};
-  I.image={ic:"image",t:"Image, video and audio",d:"Teach a model to read pictures, clips or speech",attrs:'data-open="recipe" data-ckind="multimodal"'};
+  I.image={ic:"image",t:"Multimodal model",d:"Teach a model to read pictures, clips or speech",attrs:'data-open="recipe" data-ckind="multimodal"'};
   I.prep={ic:"data",t:"Prepare my data",d:"Turn your own files into training data",attrs:'data-open="recipe" data-mode="raw"'};
   I.custom={ic:"code",t:"Custom recipe",d:"Write or paste the whole recipe",attrs:'data-open="recipe" data-method="custom"'};
   I.train={ic:"play",t:"Train from a recipe",d:ready?ready+(ready===1?" recipe is ready":" recipes are ready"):"Pick a recipe and the nodes",attrs:'data-open="train"'};
@@ -791,14 +791,14 @@ function renderMenus(){
   $("#mn-user").className="gp acct";
   $("#mn-user").innerHTML='<div class="mu"><b>'+esc(s.user||"")+'</b><span>'+esc(s.cluster||"")+'</span></div>'+mcol("",[{ic:"help",t:"Words used on this page",d:"What a recipe, an adapter or a step is",attrs:'data-dialog="guide"'},
     {ic:"logout",t:"Log out",d:PROXY?"Sign out of the portal":"Stop this page; your jobs keep running",attrs:'data-act="logout"'}]);
-  $("#ag-home").innerHTML=cards([I.text,I.image,I.chat,I.bench]);
+  $("#ag-home").innerHTML=cards([I.image,I.chat,I.bench,I.register]);
   $("#ag-train").innerHTML=cards([I.text,I.image,I.prep,I.custom,I.train,I.resume]);
   $("#ag-serve").innerHTML=cards([I.chat].concat(I.serving,[I.register]));
   $("#ag-evaluate").innerHTML=cards([I.bench,I.register]);
   $("#ag-monitor").innerHTML=cards(ok([I.mlflow,I.ray,I.gpu,I.files,I.active,I.jobs,I.runs]));
   // Home: who, and four numbers that lead to the pages
   $("#home-title").textContent=s.user?"Welcome, "+s.user:"Welcome";
-  $("#home-sub").textContent=(s.cluster?s.cluster+". ":"")+"Train, chat with and test models, all in one place.";
+  $("#home-sub").textContent="Train, chat with and test models, all in one place.";
   var jobs=s.jobs||[], running=jobs.filter(function(j){return j.state==="RUNNING"}).length, queued=jobs.filter(function(j){return j.state==="PENDING"}).length;
   var runs=s.runs||[], benched=runs.filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length}).length;
   var energyTotal=null; runs.forEach(function(r){ if(r.energy_kwh!=null) energyTotal=(energyTotal||0)+r.energy_kwh; });

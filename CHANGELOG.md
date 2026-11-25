@@ -7,6 +7,12 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Energy, log out, and a plainer Home
+- **Energy used:** the energy a run drew on its GPUs, worked out from the summed GPU power it records (kWh). It shows as a column in the runs table, as *Energy so far* on a running job, and as a total on Home. It counts GPUs only, and runs made before this release show nothing. The power reading is now part of the default metrics (`cluster_gpu_power_w_sum`); before, only the detailed level kept it.
+- **Log out** in the account menu: it asks first, then stops the page (or, behind Open OnDemand, ends the portal session). Jobs already submitted keep running.
+- Home shows a *Multimodal model* card in place of the text one, and the empty Jobs box no longer has buttons or a pointer sentence. The cluster name is no longer in the Home subtitle.
+- **Open OnDemand app** (`ood/`): Launch, then Open, and the page opens in a tab with no setup for the user (`bhaskera-dashboard portal`, session token, MLflow under the portal prefix). `ood/install.sh` and `ood/check.sh` are for the administrators.
+
 ### Where your files go
 - Everything a user creates stays in the run folder (the one with `submit.sh`): the MLflow store (`mlflow-runs/`, with the registry), small settings (`.bhaskera/`) and the benchmark data cache
   (`.cache/huggingface/`) now default to it. A copy already kept in the home folder is used until a copy or link exists in the run folder, so no run disappears. `src/bhaskera/paths.py` decides.
