@@ -606,6 +606,8 @@ function jobCard(j){
     if(t.mfu!=null) tl.push(tile("MFU",fx(t.mfu,1)+"<small> %</small>"));
     if(t.tok_s!=null) tl.push(tile("Tokens / s",big(t.tok_s)));
     if(t.step_s!=null) tl.push(tile("Step time",fx(t.step_s,1)+"<small> s</small>"));
+    var er=(state.runs||[]).filter(function(r){return String(r.job)===String(j.id)&&r.energy_kwh!=null})[0];
+    if(er) tl.push(tile("Energy so far",kwh(er.energy_kwh)));
     if(tl.length) h+='<div class="tiles">'+tl.join("")+'</div>';
     h+=nodesHtml(j.nodes,j.id);
   }
@@ -625,6 +627,7 @@ function emptyJobs(){
 }
 
 /* ---- runs ---- */
+function kwh(v){ if(v==null) return "–"; return v<0.1 ? fx(v*1000,0)+'<small> Wh</small>' : fx(v,v<10?2:1)+'<small> kWh</small>'; }
 function renderRuns(){
   var rows=(state.runs||[]).filter(function(r){
     if(filter && r.status!==filter) return false;
@@ -633,13 +636,13 @@ function renderRuns(){
   });
   $("#runcount").textContent=rows.length;
   $("#runtools").hidden=(state.runs||[]).length<=6;
-  var all=state.runs||[], hasEval=all.some(function(r){return r.eval_loss!=null}), hasBench=all.some(function(r){return r.lm_eval&&Object.keys(r.lm_eval).length});
-  $("#runhead").innerHTML='<tr><th>Run</th><th>Status</th><th>Started</th>'+(hasEval?'<th class="num">Eval loss</th>':'')+(hasBench?'<th>Benchmarks</th>':'')+'<th></th></tr>';
+  var all=state.runs||[], hasEval=all.some(function(r){return r.eval_loss!=null}), hasBench=all.some(function(r){return r.lm_eval&&Object.keys(r.lm_eval).length}), hasEnergy=all.some(function(r){return r.energy_kwh!=null});
+  $("#runhead").innerHTML='<tr><th>Run</th><th>Status</th><th>Started</th>'+(hasEval?'<th class="num">Eval loss</th>':'')+(hasEnergy?'<th class="num" title="GPU energy the run used, from the power its GPUs drew">Energy</th>':'')+(hasBench?'<th>Benchmarks</th>':'')+'<th></th></tr>';
   $("#runs").innerHTML = rows.length ? rows.map(function(r){
     var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
           ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
     return '<tr><td>'+(PROXY&&!(state.portal&&state.portal.mlflow)?'<span class="run">'+esc(r.name)+'</span>':'<a class="run" href="'+esc(runUrl(r))+'" target="_blank" rel="noopener">'+esc(r.name)+'</a>')+(r.group?' <span class="chip">'+esc(r.group)+'</span>':"")+'</td>'+
-      '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
+      '<td>'+runBadge(r)+'</td><td class="muted">'+ago(r.started)+'</td>'+(hasEval?'<td class="num">'+fx(r.eval_loss,3)+'</td>':'')+(hasEnergy?'<td class="num">'+kwh(r.energy_kwh)+'</td>':'')+(hasBench?'<td>'+bench(r)+'</td>':'')+'<td>'+act+'</td></tr>';
   }).join("") : '<tr><td colspan="6" class="muted" style="text-align:center;padding:26px">'+(all.length?"No runs match.":"No runs yet.")+'</td></tr>';
 }
 
@@ -798,9 +801,11 @@ function renderMenus(){
   $("#home-sub").textContent=(s.cluster?s.cluster+". ":"")+"Train, chat with and test models, all in one place.";
   var jobs=s.jobs||[], running=jobs.filter(function(j){return j.state==="RUNNING"}).length, queued=jobs.filter(function(j){return j.state==="PENDING"}).length;
   var runs=s.runs||[], benched=runs.filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length}).length;
+  var energyTotal=null; runs.forEach(function(r){ if(r.energy_kwh!=null) energyTotal=(energyTotal||0)+r.energy_kwh; });
   var tile=function(k,v,attrs){ return '<button type="button" class="sumtile" '+attrs+'><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></button>'; };
   $("#sumrow").innerHTML=tile("Running now",running+(queued?' <small>· '+queued+' queued</small>':""),'data-go="home" data-scroll="#jobs"')+tile("Training runs",runs.length,'data-go="train" data-scroll="#runsec"')+
-    tile("Saved models",(regModels||[]).length,'data-go="serve" data-scroll="#modsec"')+tile("Benchmarked",benched,'data-go="evaluate"');
+    tile("Saved models",(regModels||[]).length,'data-go="serve" data-scroll="#modsec"')+tile("Benchmarked",benched,'data-go="evaluate"')+
+    (energyTotal!=null?tile("Energy used",kwh(energyTotal),'data-go="train" data-scroll="#runsec"'):"");
 }
 var menuOpen=null, menuOpenT=null, menuCloseT=null, TOUCH=window.matchMedia&&window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 function setMenu(el,on){ el.classList.toggle("open",on); var b=el.querySelector(".gb"); if(b) b.setAttribute("aria-expanded",on?"true":"false"); }

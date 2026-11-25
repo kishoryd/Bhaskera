@@ -198,3 +198,24 @@ def test_only_runs_made_by_bhaskera_are_listed(tmp_path):
     runs = hs.recent_runs(tmp_path, limit=10, now=now)
     assert sorted(r["name"] for r in runs) == ["legacy-run", "mine"]
     assert hs.is_bhaskera_run(tmp_path / "3" / "foreign", hs._experiment_names(tmp_path)) is False
+
+
+def test_energy_is_the_area_under_the_gpu_power_curve(tmp_path, use_profile):
+    use_profile(None)
+    store = tmp_path / "store"
+    _make_run(store, "1", "a", "with-power", 3, time.time() - 600, job="1", loss=1.0)
+    _make_run(store, "1", "b", "no-power", 3, time.time() - 600, job="2", loss=1.0)
+    # 2000 W for 1800 s, then 1000 W for 1800 s: 1.0 kWh + 0.5 kWh over one hour, so 1.5 kWh at 1.5 kW on average
+    t0 = 1_700_000_000_000
+    (store / "1" / "a" / "metrics" / "cluster_gpu_power_w_sum").write_text(
+        f"{t0} 2000 0\n{t0 + 1_800_000} 2000 100\n{t0 + 1_800_000} 1000 100\n{t0 + 3_600_000} 1000 200\n")
+    runs = {r["name"]: r for r in hs.recent_runs(store)}
+    assert runs["with-power"]["energy_kwh"] == 1.5 and runs["with-power"]["avg_kw"] == 1.5
+    assert runs["no-power"]["energy_kwh"] is None and runs["no-power"]["avg_kw"] is None
+
+
+def test_one_power_reading_is_not_enough_for_an_energy_figure(tmp_path):
+    f = tmp_path / "p"
+    f.write_text("1700000000000 2000 0\n")
+    assert hs._energy_kwh(f) is None
+    assert hs._energy_kwh(tmp_path / "missing") is None

@@ -124,6 +124,28 @@ def _last_value(path: Path) -> Optional[float]:
         return None
 
 
+def _energy_kwh(path: Path) -> Optional[tuple[float, float]]:
+    """(kWh, average kW) a run used on its GPUs, from the summed GPU power it logged (a line per reading: ms, watts, step).
+
+    The area under the power curve between the first and the last reading. GPUs only: no CPUs, fans or network."""
+    try:
+        pts = []
+        for line in path.read_text().splitlines():
+            a = line.split()
+            if len(a) >= 2:
+                pts.append((int(a[0]) / 1000.0, float(a[1])))
+    except (OSError, ValueError):
+        return None
+    if len(pts) < 2:
+        return None
+    pts.sort()
+    joules = sum((t2 - t1) * (w1 + w2) / 2.0 for (t1, w1), (t2, w2) in zip(pts, pts[1:]))
+    span = pts[-1][0] - pts[0][0]
+    if span <= 0 or joules <= 0:
+        return None
+    return joules / 3.6e6, joules / span / 1000.0
+
+
 def _min_value(path: Path) -> Optional[float]:
     try:
         values = [float(l.split()[1]) for l in path.read_text().splitlines() if l.strip()]
@@ -245,7 +267,9 @@ def recent_runs(store: str | Path, limit: int = 40, now: Optional[float] = None)
         metrics = run / "metrics"
         stale = status == "RUNNING" and now - _newest_mtime(metrics, meta) > STALE_AFTER_S
         adapter = (run / "artifacts" / "adapter" / "adapter_config.json").exists()
+        energy = _energy_kwh(metrics / "cluster_gpu_power_w_sum")
         runs.append({
+            "energy_kwh": round(energy[0], 3) if energy else None, "avg_kw": round(energy[1], 2) if energy else None,
             "has_adapter": adapter, "lm_eval": _lm_eval_deltas(metrics), "lm_scores": _lm_eval_scores(metrics),
             "run_id": run.name, "experiment_id": run.parent.name, "name": info["run_name"], "status": status,
             "started": started, "duration_s": int((ended or now) - started) if started else None, "stale": stale,
