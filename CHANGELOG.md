@@ -15,7 +15,7 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 - **Run folder and Slurm account:** with no run folder given, `~/bhaskera-runs` is made from the shared kit (set `BHASKERA_RUNS` to change where); the shared kit is never used as a run folder. Jobs are charged to your login name; `SLURM_ACCOUNT` is only needed to use another account.
 
 ### Energy, log out, and a plainer Home
-- **Energy used:** the energy a run drew on its GPUs, worked out from the summed GPU power it records (kWh). It shows as a column in the runs table, as *Energy so far* on a running job, and as a total on Home. It counts GPUs only, and runs made before this release show nothing. The power reading is now part of the default metrics (`cluster_gpu_power_w_sum`); before, only the detailed level kept it.
+- **GPU energy used:** the energy a run drew on its GPUs, worked out from the summed GPU power it records (kWh). It shows as a *GPU energy* column in the runs table, as *GPU energy so far* on a running job, and as a total on Home. It counts GPUs only, and runs made before this release show nothing. The power reading is now part of the default metrics (`cluster_gpu_power_w_sum`); before, only the detailed level kept it.
 - **Log out** in the account menu: it asks first, then stops the page (or, behind a portal, ends the portal session). Jobs already submitted keep running.
 - Home shows a *Multimodal model* card in place of the text one, and the empty Jobs box no longer has buttons or a pointer sentence. The cluster name is no longer in the Home subtitle.
 

@@ -611,7 +611,7 @@ function jobCard(j){
     if(t.tok_s!=null) tl.push(tile("Tokens / s",big(t.tok_s)));
     if(t.step_s!=null) tl.push(tile("Step time",fx(t.step_s,1)+"<small> s</small>"));
     var er=(state.runs||[]).filter(function(r){return String(r.job)===String(j.id)&&r.energy_kwh!=null})[0];
-    if(er) tl.push(tile("Energy so far",kwh(er.energy_kwh)));
+    if(er) tl.push(tile("GPU energy so far",kwh(er.energy_kwh)));
     if(tl.length) h+='<div class="tiles">'+tl.join("")+'</div>';
     h+=nodesHtml(j.nodes,j.id);
   }
@@ -641,7 +641,7 @@ function renderRuns(){
   $("#runcount").textContent=rows.length;
   $("#runtools").hidden=(state.runs||[]).length<=6;
   var all=state.runs||[], hasEval=all.some(function(r){return r.eval_loss!=null}), hasBench=all.some(function(r){return r.lm_eval&&Object.keys(r.lm_eval).length}), hasEnergy=all.some(function(r){return r.energy_kwh!=null});
-  $("#runhead").innerHTML='<tr><th>Run</th><th>Status</th><th>Started</th>'+(hasEval?'<th class="num">Eval loss</th>':'')+(hasEnergy?'<th class="num" title="GPU energy the run used, from the power its GPUs drew">Energy</th>':'')+(hasBench?'<th>Benchmarks</th>':'')+'<th></th></tr>';
+  $("#runhead").innerHTML='<tr><th>Run</th><th>Status</th><th>Started</th>'+(hasEval?'<th class="num">Eval loss</th>':'')+(hasEnergy?'<th class="num" title="Energy the GPUs of the run used, worked out from the power they drew. CPUs, fans and the network are not counted.">GPU energy</th>':'')+(hasBench?'<th>Benchmarks</th>':'')+'<th></th></tr>';
   $("#runs").innerHTML = rows.length ? rows.map(function(r){
     var act=(r.has_adapter&&r.status!=="RUNNING") ? '<div class="runact"><button class="btn small primary" data-start="serve" data-run="'+esc(r.run_id)+'">Chat</button><button class="btn small" data-start="eval" data-run="'+esc(r.run_id)+'">Benchmark</button></div>' :
           ((r.status==="FAILED"||r.status==="KILLED"||r.stale)&&r.job ? '<div class="runact"><button class="btn small" data-start="resume" data-run="'+esc(r.run_id)+'">Resume</button></div>' : "");
@@ -928,7 +928,7 @@ function renderMenus(){
   var tile=function(k,v,attrs){ return '<button type="button" class="sumtile" '+attrs+'><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></button>'; };
   $("#sumrow").innerHTML=tile("Running now",running+(queued?' <small>· '+queued+' queued</small>':""),'data-go="home" data-scroll="#jobs"')+tile("Training runs",runs.length,'data-go="train" data-scroll="#runsec"')+
     tile("Saved models",(regModels||[]).length,'data-go="serve" data-scroll="#modsec"')+tile("Benchmarked",benched,'data-go="evaluate"')+
-    (energyTotal!=null?tile("Energy used",kwh(energyTotal),'data-go="train" data-scroll="#runsec"'):"");
+    (energyTotal!=null?tile("GPU energy used",kwh(energyTotal),'data-go="train" data-scroll="#runsec"'):"");
 }
 var menuOpen=null, menuOpenT=null, menuCloseT=null, TOUCH=window.matchMedia&&window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 function setMenu(el,on){ el.classList.toggle("open",on); var b=el.querySelector(".gb"); if(b) b.setAttribute("aria-expanded",on?"true":"false"); }
