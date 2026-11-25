@@ -67,6 +67,7 @@ h2 .count{font:12px var(--mono);color:var(--muted)}
 .meta{display:flex;flex-wrap:wrap;gap:0;margin-left:auto}
 .bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden}
 .bar>i{display:block;height:100%;background:var(--ink);transition:width .6s ease}
+.warnbar{background:var(--warn-soft);color:var(--warn);border-radius:12px;padding:10px 14px;margin:14px 0 0;font-size:13.5px;line-height:1.5}
 .runfoot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--border);font-size:13px}.runfoot .spacer{flex:1}
 .dstat{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px}.dstat.ok{color:var(--ok);background:var(--ok-soft)}.dstat.changed{color:var(--warn);background:var(--warn-soft)}.dstat.missing{color:var(--bad);background:var(--bad-soft)}
 .dlcard{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:12px 14px;margin-bottom:14px}.dlcard b{font-weight:650}
@@ -323,6 +324,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
 <main class="wrap">
   <div class="view" data-view="home">
     <div class="phead"><h1 id="home-title">Welcome</h1><p id="home-sub"></p></div>
+    <div class="warnbar" id="diskwarn" hidden></div>
     <div class="sumrow" id="sumrow"></div>
     <div class="agrid" id="ag-home"></div>
   <div class="h2row"><h2>Jobs <span class="count" id="jobcount">0</span></h2><span class="muted" id="stats"></span></div>
@@ -966,6 +968,8 @@ function renderMenus(){
   $("#home-sub").textContent="Train, chat with and test models, all in one place.";
   var jobs=s.jobs||[], running=jobs.filter(function(j){return j.state==="RUNNING"}).length, queued=jobs.filter(function(j){return j.state==="PENDING"}).length;
   var runs=s.runs||[], benched=runs.filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length}).length;
+  var dk=s.disk, dw=$("#diskwarn");
+  if(dk&&dk.low){ dw.hidden=false; dw.textContent="The disk with your run folder ("+dk.path+") has only "+dk.free_gb+" GB free of "+dk.total_gb+" GB. Checkpoints are large (tens of GB for a 14B model): save them on a disk with more room (New run, Create recipe, Checkpoints, Save them in), or clear old runs and checkpoints."; } else { dw.hidden=true; }
   var energyTotal=null; runs.forEach(function(r){ if(r.energy_kwh!=null) energyTotal=(energyTotal||0)+r.energy_kwh; });
   var tile=function(k,v,attrs){ return '<button type="button" class="sumtile" '+attrs+'><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></button>'; };
   $("#sumrow").innerHTML=tile("Running now",running+(queued?' <small>· '+queued+' queued</small>':""),'data-go="home" data-scroll="#jobs"')+tile("Training runs",runs.length,'data-go="train" data-scroll="#runsec"')+
@@ -1285,7 +1289,7 @@ $("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(cha
 
 /* ---- start a job ---- */
 var L = {opts:null, kind:"train", run:"", note:"", evalSel:[], own:{name:"",data:"",q:"question",a:"answer"}, shots:"", skipBase:false, rinfo:null, step:0, regname:"", alias:"",
-  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""},modelOther:false,dataMode:"",trainOther:false,valOther:false,trainPath:"",valPath:""}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",ckpt:"on",keep:"",ckdir:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""},modelOther:false,dataMode:"",trainOther:false,valOther:false,trainPath:"",valPath:""}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -1460,14 +1464,19 @@ function recipeForm(o){
        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div><div class="sub">One step teaches the model one batch of examples. 100 to 300 steps is a quick trial; use 1000 or more for a real run.</div></div>'+
        '<div class="srow half"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div><div class="sub">How big each learning step is. The usual value suits most runs; try a lower one if the loss jumps around.</div></div>'+
        '<div class="srow half"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Instead of changing the whole model, LoRA trains a small add-on. A larger rank can learn more and uses a little more memory.</div></div>'+
+       '<div class="srow"><label class="lbl">Checkpoints</label><div class="chips">'+chip("Save them",r.ckpt!=="off",'data-ckpt="on"')+chip("Do not save",r.ckpt==="off",'data-ckpt="off"')+
+         (r.ckpt==="off"?"":'<span class="muted" style="margin:0 4px 0 8px"></span><label class="muted">every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto" style="width:90px"> steps</label>'+
+           '<label class="muted">keep the newest <input id="f-rkeep" type="number" min="0" value="'+esc(r.keep)+'" placeholder="3" style="width:70px"></label>')+'</div>'+
+         (r.ckpt==="off"?"":'<div class="chips" style="margin-top:8px"><label class="muted" style="flex:1">Save them in <input id="f-rckdir" type="text" value="'+esc(r.ckdir)+'" placeholder="default: checkpoints/ in your run folder" spellcheck="false" autocomplete="off" style="width:100%"></label></div>')+
+         '<div class="sub">'+(r.ckpt==="off"?"Nothing is saved while training, so a run that stops cannot be continued with Resume; it has to start again. Only the final adapter is kept.":
+           "A checkpoint is the saved state of the run, so one that stops can continue from it with Resume. Older ones are deleted so that only the newest few stay. Each one holds the whole model, tens of GB for a 14B model, so keep few (0 keeps all). Home folders fill up fast on a cluster: give a folder on a large disk (for example under /scratch) in Save them in. The recipe gets its own folder inside it, and Check first tells you whether there is room.")+'</div></div>'+
        det(r,"more","More options",'<div class="chips" style="margin-top:8px">'+
          '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
          '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
-         '<label class="muted">Save every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto"> steps</label>'+
          '<label class="muted">Evaluate every <input id="f-revals" type="number" min="0" value="'+esc(r.evals)+'" placeholder="auto"> steps</label>'+
          (r.method==="hsdp"?'<label class="muted">GPUs per shard group <input id="f-rhsdp" type="number" min="0" value="'+esc(r.hsdp)+'" placeholder="one node"></label>':"")+
          (r.method==="pipeline"?'<label class="muted">Stages <input id="f-rstages" type="number" min="2" value="'+esc(r.stages)+'" placeholder="4"></label><label class="muted">Micro-batches <input id="f-rmicro" type="number" min="1" value="'+esc(r.micro)+'" placeholder="2 x stages"></label>':"")+'</div>'+
-         '<div class="sub">Batch size: examples each GPU handles per step. Gradient accumulation: gather several batches before each update. Save every: how often a checkpoint is written, so a stopped run can continue from it. Evaluate every: how often to check against the validation data.</div>'+
+         '<div class="sub">Batch size: examples each GPU handles per step. Gradient accumulation: gather several batches before each update.  Evaluate every: how often to check against the validation data.</div>'+
          (r.method==="hsdp"||r.method==="pipeline"?'<div class="sub">'+(r.method==="hsdp"?"The shard group must divide the number of GPUs you start with.":"The number of GPUs must divide by the stages.")+' The check on the Train page tells you if it does not.</div>':""));
   }
   h+='<div class="sec">'+(custom?"Settings on top":"More")+'</div>'+det(r,"all","All settings ("+((o.schema||[]).reduce(function(n,g){return n+g.fields.length},0))+" options)",allSettings(o,r));
@@ -1547,7 +1556,7 @@ function formData(action){
     if(r.method==="custom"){ f.yaml=r.yaml; f.copy=r.copy; }
     else {
       f.model=r.model; f.train_cache=r.trainOther?r.trainPath:r.train; f.val_cache=r.valOther?r.valPath:r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
-      if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; if(r.evals!=="") f.eval_steps=r.evals;
+      if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; f.checkpoints=r.ckpt!=="off"; if(r.keep!=="") f.keep_last_n=r.keep; if(r.ckdir.trim()) f.checkpoint_dir=r.ckdir.trim(); if(r.evals!=="") f.eval_steps=r.evals;
       if(r.method==="hsdp"&&r.hsdp!=="") f.hsdp_shard_size=r.hsdp; if(r.method==="pipeline"){ if(r.stages) f.stages=r.stages; if(r.micro) f.microbatches=r.micro; }
     }
   }
@@ -1661,6 +1670,7 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-steps")){ L.rc.steps=b.getAttribute("data-steps"); renderStart(); }
   else if(b.hasAttribute("data-lr")){ L.rc.lr=b.getAttribute("data-lr"); renderStart(); }
   else if(b.hasAttribute("data-rank")){ L.rc.rank=b.getAttribute("data-rank"); renderStart(); }
+  else if(b.hasAttribute("data-ckpt")){ L.rc.ckpt=b.getAttribute("data-ckpt"); renderStart(); }
   else if(b.hasAttribute("data-fmt")){ L.rc.raw.format=b.getAttribute("data-fmt"); renderStart(); }
   else if(b.id==="f-rawgo"){ prepareData(); }
   else if(b.hasAttribute("data-name")){ L.regname=b.getAttribute("data-name"); L.regnameFor=L.run; renderStart(); }
@@ -1694,6 +1704,8 @@ $("#startfields").addEventListener("input", function(e){
   else if(e.target.id==="f-rval-path"){ L.rc.valPath=e.target.value.trim(); }
   else if(e.target.id==="f-rsteps"){ if(e.target.value.trim()) L.rc.steps=e.target.value.trim(); }
   else if(e.target.id==="f-rbatch"){ L.rc.batch=e.target.value.trim(); }
+  else if(e.target.id==="f-rkeep"){ L.rc.keep=e.target.value.trim(); }
+  else if(e.target.id==="f-rckdir"){ L.rc.ckdir=e.target.value; }
   else if(e.target.id==="f-raccum"){ L.rc.accum=e.target.value.trim(); }
   else if(e.target.id==="f-revery"){ L.rc.every=e.target.value.trim(); }
   else if(e.target.id==="f-revals"){ L.rc.evals=e.target.value.trim(); }

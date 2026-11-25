@@ -185,7 +185,7 @@ def test_large_downloads_need_confirmation_and_space_is_checked(world, tmp_path,
     m = dl.Manager(popen=lambda cmd, **kw: Proc(Path(cmd[cmd.index("--target") + 1]), 0, [("config.json", 1)]))
     with pytest.raises(dl.DownloadError, match="confirm"):
         m.start_download("model", "a/b", "main", str(tmp_path / "x"), info_fn=lambda *a: info(*a, size=80 << 30))
-    monkeypatch.setattr(dl.shutil, "disk_usage", lambda p: NS(free=1 << 30))
+    monkeypatch.setattr("bhaskera.diskguard.shutil.disk_usage", lambda p: NS(free=1 << 30))
     with pytest.raises(dl.DownloadError, match="not enough space"):
         m.start_download("model", "a/b", "main", str(tmp_path / "y"), confirm_large=True, info_fn=lambda *a: info(*a, size=80 << 30))
 

@@ -7,6 +7,10 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Checkpoint choices and disk safety
+- **Create recipe** has a *Checkpoints* row in *The training*: save them or not, how often (every N steps), how many to keep (the newest N), and **where**: a folder of your choice (the recipe gets its own folder inside it). Without a choice, they go to `checkpoints/` in the run folder, as before.
+- **Disk safety, everywhere something large is written.** One shared check (`bhaskera.diskguard`) looks at the free space of the disk holding the folder, and stops with a plain message instead of failing half way: a new recipe whose checkpoints would not fit is refused; **Check first** shows how much room the checkpoints have; starting training re-checks the recipe's checkpoint folder; preparing data checks room for the result; downloads use the same rule; and no job (training, resume, chat server, benchmark, tokenising) is submitted when the run folder's disk has under 1 GB free. Home shows a warning when the run folder's disk has under 20 GB free. A quota on your account can be lower than the disk's free space, and is not visible to Bhaskera.
+
 ### Runs: ten at first, and clear what you do not need
 - The runs table shows the latest 10, with *Show 10 more*, *Show all* and *Show fewer*. Each finished, failed or stalled run has a *Remove* button, and *Clear failed and stalled* takes all of those off at once; both ask first. Removing marks a run deleted in MLflow (it is not erased and can be restored with `mlflow runs restore --run-id <id>`). Only your Bhaskera runs can be removed, and never one that is still running.
 

@@ -18,7 +18,6 @@ import collections
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -27,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import dataversions, paths
+from . import dataversions, diskguard, paths
 
 REPO = re.compile(r"^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,95}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
@@ -300,9 +299,10 @@ class Manager:
         dest = check_target(target)
         if info["large"] and not confirm_large:
             raise DownloadError(f"this is {info['bytes'] / 2**30:.0f} GB; confirm that you want a download this large on this machine")
-        free = shutil.disk_usage(dest if dest.exists() else _existing_parent(dest)).free
-        if info["bytes"] and free < info["bytes"] * 1.05:
-            raise DownloadError(f"there is not enough space in {dest}: {info['bytes'] / 2**30:.1f} GB needed, {free / 2**30:.1f} GB free")
+        try:
+            diskguard.require(dest, info["bytes"], "this download", margin=1.05)
+        except diskguard.DiskError as e:
+            raise DownloadError(str(e))
         dest.mkdir(parents=True, exist_ok=True)
         self._begin({"kind": "download", "state": "running", "repo": info["repo"], "revision": info["revision"], "what": info["kind"], "target": str(dest),
                      "total": info["bytes"], "done": _tree_bytes(dest), "message": "starting"})
@@ -373,12 +373,6 @@ class Manager:
             except OSError:
                 pass
         return self.status()
-
-
-def _existing_parent(p: Path) -> Path:
-    while not p.exists():
-        p = p.parent
-    return p
 
 
 # ---------------------------------------------------------------- the process that downloads

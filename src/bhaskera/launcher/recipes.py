@@ -277,6 +277,24 @@ def build(form: dict, workdir: Path) -> dict:
     batch = _num(form.get("batch_size"), "batch size", 1, 256, default=2 if multi else method["batch_size"])
     accum = _num(form.get("grad_accum"), "gradient accumulation", 1, 1024, default=1)
     every = _num(form.get("save_every_steps"), "save every (steps)", 1, 10_000_000, default=min(500, max(20, steps // 4)))
+    ckpt_on = form.get("checkpoints", True)
+    if not isinstance(ckpt_on, bool):
+        raise RecipeError("checkpoints are on or off")
+    keep = _num(form.get("keep_last_n"), "checkpoints to keep", 0, 1000, default=3)
+    base = workdir / "checkpoints"
+    if form.get("checkpoint_dir") not in (None, ""):
+        from .. import downloads
+        try:
+            base = downloads.check_target(form.get("checkpoint_dir"))        # a full path the user can write to, never a system folder
+        except downloads.DownloadError as e:
+            raise RecipeError(str(e).replace("the folder to download into", "the folder for the checkpoints").replace("download", "save"))
+    save_dir = (base / name).resolve()
+    if ckpt_on:
+        from .. import diskguard
+        try:
+            diskguard.require(save_dir, diskguard.checkpoint_need(model, keep)[0], "the checkpoints")
+        except diskguard.DiskError as e:
+            raise RecipeError(str(e))
     evals = _num(form.get("eval_steps"), "evaluate every (steps)", 0, 10_000_000, default=max(1, steps // 6)) if val else 0
     data: dict[str, Any] = {"name": "local", "seq_len": seq_len, "tokenized_path": train, **({"val_tokenized_path": val} if val else {})}
     if multi:
@@ -292,8 +310,8 @@ def build(form: dict, workdir: Path) -> dict:
         "training": {"batch_size": batch, "grad_accum": accum, "lr": lr, "weight_decay": 0.0, "max_steps": steps, "num_epochs": 100,
                      "warmup_steps": max(1, min(100, steps // 20)), "grad_clip": 1.0, "eval_steps": evals, "eval_batch_size": batch,
                      "seed": 42, "distributed": {"strategy": method["strategy"]}},
-        "checkpoint": {"enabled": True, "save_dir": str((workdir / "checkpoints" / name).resolve()), "save_interval": 1,
-                       "save_every_steps": every, "keep_last_n": 3},
+        "checkpoint": {"enabled": ckpt_on, "save_dir": str(save_dir), "save_interval": 1,
+                       "save_every_steps": every, "keep_last_n": keep},
         "logging": {"tracker": "mlflow", "project": "bhaskera", "run_name": name, "mlflow_log_adapter": True, "mlflow_eval_samples": 5},
         "monitoring": {"dashboard_host": "127.0.0.1"},
     }

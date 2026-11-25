@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from .. import dataversions, downloads, paths
+from .. import dataversions, diskguard, downloads, paths
 
 RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 TASKS = re.compile(r"^[A-Za-z0-9_,\-]{1,200}$")
@@ -318,6 +318,25 @@ class Launcher:
             self.after_change()
         return {"ok": True, "removed": len(removed), "skipped": skipped}
 
+    def _check_disk(self, recipe: Path) -> None:
+        """Before training: room for the checkpoints where the recipe saves them, and for logs and results in the run folder."""
+        try:
+            diskguard.floor(self.kit)
+        except diskguard.DiskError as e:
+            raise LaunchError(str(e))
+        try:
+            import yaml
+            raw = yaml.safe_load(recipe.read_text()) or {}
+        except Exception:
+            return
+        ck, model = raw.get("checkpoint") or {}, (raw.get("model") or {}).get("name")
+        if ck.get("enabled", True) and ck.get("save_dir") and isinstance(model, str) and "<" not in model:
+            try:
+                one, _ = diskguard.checkpoint_need(model, int(ck.get("keep_last_n", 2) or 0))
+                diskguard.require(ck["save_dir"], one, "the checkpoints of this run")
+            except diskguard.DiskError as e:
+                raise LaunchError(str(e) + " Change the folder in the recipe (checkpoint: save_dir), or turn checkpoints off.")
+
     def _check_data(self, recipe: Path) -> None:
         """Refuse to train on data that changed after it was registered: say which version it was and what to do."""
         try:
@@ -468,7 +487,12 @@ class Launcher:
             recipes.validate(text)
             name = form["name"]
             if dry:
-                return {"ok": True, "job": None, "dry": True, "output": text, "recipe": f"{name}.yaml"}
+                ck = recipe.get("checkpoint") or {}
+                line = ""
+                if ck.get("enabled"):
+                    one, allk = diskguard.checkpoint_need(recipe["model"]["name"], int(ck.get("keep_last_n", 0) or 0))
+                    line = diskguard.note(ck["save_dir"], one, allk, int(ck.get("keep_last_n", 0) or 0))
+                return {"ok": True, "job": None, "dry": True, "output": (f"# {line}\n" if line else "") + text, "recipe": f"{name}.yaml"}
             path = recipes.write(recipe_dirs(self.kit, self._env)[0] if recipe_dirs(self.kit, self._env) else self.kit / "recipes", name, text)
         except recipes.RecipeError as e:
             raise LaunchError(str(e))
@@ -477,6 +501,12 @@ class Launcher:
     def _tokenize(self, form: dict, dry: bool) -> dict:
         """Write a tokenising recipe for raw data and submit it as a CPU job (`./submit.sh tokenize`)."""
         from . import recipes
+        try:
+            diskguard.floor(self.kit, "the prepared data and logs")
+            raw = sum(os.path.getsize(f) for f in (form.get("train"), form.get("val")) if isinstance(f, str) and f and os.path.isfile(f))
+            diskguard.require(self.kit / "cache", max(raw * 2, 0), "the prepared data")
+        except diskguard.DiskError as e:
+            raise LaunchError(str(e))
         try:
             filename, text = recipes.tokenize_recipe(form, self.kit)
             if dry:
@@ -554,6 +584,7 @@ class Launcher:
             hours = _int(form.get("hours"), "hours", 1, MAX_HOURS, required=False)
             self._check_gpus(_describe(recipe), nodes)
             self._check_data(recipe)
+            self._check_disk(recipe)
             return [str(recipe), str(nodes)] + ([str(hours)] if hours else []), {}
         if kind == "resume":
             run = form.get("run")
@@ -618,6 +649,10 @@ class Launcher:
         if form.get("kind") == "evaltask":
             return self._evaltask(form, dry)
         args, extra = self.build(form)
+        try:
+            diskguard.floor(self.kit)                                  # logs and results need a little room, whatever the job is
+        except diskguard.DiskError as e:
+            raise LaunchError(str(e))
         if not self._lock.acquire(blocking=False):
             raise LaunchError("another start is still running; wait for it to finish")
         try:

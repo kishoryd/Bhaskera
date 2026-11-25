@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .. import diskguard, paths
+
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 RAY_PREFIX = re.compile(r"^\((?:RayTrainWorker|TrainController|raylet|PlacementGroupCleaner)[^)]*\)\s*")
 STATUS_NAMES = {"1": "RUNNING", "2": "SCHEDULED", "3": "FINISHED", "4": "FAILED", "5": "KILLED"}
@@ -423,6 +425,7 @@ class StateBuilder:
             "docs_url": self.docs_url or profile.docs_url, "cluster": profile.name, "gpus_per_node": per_node,
             "jobs": out_jobs,
             "runs": runs,
+            "disk": self._cached("disk", 30.0, lambda: diskguard.run_folder_status(paths.run_folder())),
             "bad_nodes": [{"host": h, "since": t, "reason": why} for h, (t, why) in sorted(bad.items())],
             "partitions": self._cached("partitions", 30.0, lambda: self._partitions(known)),
             "totals": {"running": len(running), "queued": sum(1 for j in out_jobs if j["state"] == "PENDING"),

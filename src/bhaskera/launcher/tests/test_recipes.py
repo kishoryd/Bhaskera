@@ -321,3 +321,17 @@ def test_the_side_falls_back_to_the_dataset_name_in_the_metadata(tmp_path):
     (d / "p.parquet").write_text("x")
     (d / "metadata.json").write_text(json.dumps({"model_name": "m", "seq_len": 8, "num_rows": 1, "dataset_name": "local_val"}))
     assert recipes.cache_info(d)["side"] == "val"
+
+
+def test_checkpoints_can_be_switched_off_and_their_number_and_interval_chosen(world):
+    work, model, cache = world
+    r = recipes.build(form(model, cache, save_every_steps="200", keep_last_n="5"), work)
+    assert r["checkpoint"]["enabled"] is True and r["checkpoint"]["save_every_steps"] == 200 and r["checkpoint"]["keep_last_n"] == 5
+    recipes.validate(recipes.render(r))
+    r = recipes.build(form(model, cache, checkpoints=False, name="no-ckpt"), work)
+    assert r["checkpoint"]["enabled"] is False and r["checkpoint"]["keep_last_n"] == 3          # the number is kept for when it is turned on
+    recipes.validate(recipes.render(r))
+    assert recipes.build(form(model, cache, keep_last_n="0", name="keep-all"), work)["checkpoint"]["keep_last_n"] == 0
+    for bad in ({"checkpoints": "no"}, {"keep_last_n": "-1"}, {"keep_last_n": "x"}, {"keep_last_n": "5000"}):
+        with pytest.raises(recipes.RecipeError):
+            recipes.build(form(model, cache, name="bad", **bad), work)
