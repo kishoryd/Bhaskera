@@ -8,6 +8,7 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 ## [Unreleased]
 
 ### Downloads, sign-in and dataset versions
+- The *Your path* strip (Prepare data to Register) is removed from Home; the cards and menus lead to the same places.
 - **Downloads** (header): a model or a dataset from Hugging Face into a folder you choose. A size and licence preview comes first, then a download with progress, cancel and resume (starting it again continues where it stopped). Only Hugging Face is contacted, the folder must be one you can write to, and a download above 50 GB asks for confirmation. A finished model joins the model lists; a finished dataset is registered as a dataset version with its repository and revision as the source.
 - **Hugging Face sign-in:** paste a key on the Downloads dialog. It is checked with Hugging Face, kept in a private file (`<hf home>/token`, readable by you only) and never shown, logged or put in a command line. Sign out deletes it.
 - **Dataset versions** (`bhaskera.dataversions`, a *Data* section on Train): a name, a number and a content fingerprint for a data folder or file. The same content keeps its version, changed content becomes the next number. A run records the version it trained on (`dataset.name`, `dataset.version`), the runs table shows it, and training on data that changed after it was registered is refused until it is registered again. Command line: `python -m bhaskera.dataversions add|list|show|verify|remove`.

@@ -82,8 +82,7 @@ bhaskera-dashboard ray
 ```
 
 prints one SSH command for your laptop. Open <http://localhost:8265> and you get your jobs with live loss, MFU and GPU load,
-the logs, links to the Ray Dashboard and MLflow, and your recent runs. A short path across the top walks a newcomer from data to a
-model they can use, and a **Guide** explains the words. The **Start** menu makes a recipe from a few choices (text or multimodal; QLoRA, DDP, FSDP2, HSDP, Pipeline,
+the logs, links to the Ray Dashboard and MLflow, and your recent runs. A **Guide** explains the words used. The **Start** menu makes a recipe from a few choices (text or multimodal; QLoRA, DDP, FSDP2, HSDP, Pipeline,
 or your own YAML, with every setting reachable), prepares raw data, and starts, resumes or cancels a job (with a *Check first* that submits nothing). You can chat with a model you trained (the tuned model, the base model, or both side by side),
 benchmark one or several models with the standard tests or your own, compare them side by side, and register a model with a hand-off note. For a model that reads images, video or audio, the chat window has an **Attach** button. Everything it does is also a plain command (`./submit.sh serve`, `./submit.sh eval`), and the docs
 show both ways side by side, including chatting from the terminal. `BHASKERA_HUB_LAUNCH=0` turns the Start buttons off.

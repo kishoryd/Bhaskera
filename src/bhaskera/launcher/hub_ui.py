@@ -232,23 +232,7 @@ dialog::backdrop{background:rgba(31,28,23,.5);backdrop-filter:blur(2px)}
 .msg .files img{max-height:130px;max-width:200px;border-radius:4px;border:1px solid rgba(255,255,255,.25)}
 .msg .files span{font:12px var(--mono);opacity:.85;border:1px solid rgba(255,255,255,.35);padding:1px 7px;border-radius:4px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-#path{margin-top:22px}
-.path-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;font-size:13px}
-#path.collapsed .path-head{margin-bottom:0}.path-head b{font:500 15px var(--serif)}
 .linkbtn{border:0;background:transparent;color:var(--muted);font-size:12.5px;text-decoration:underline;text-underline-offset:3px;padding:2px 4px}.linkbtn:hover{color:var(--text)}
-.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
-.step{display:flex;flex-direction:column;gap:3px;text-align:left;width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);transition:border-color .12s,background .12s}
-.step:hover{border-color:var(--border-strong);background:var(--surface-2)}
-.step .n{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600}
-.step .n i{font-style:normal;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surface-2);font-size:11px;color:var(--muted)}
-.step .d{font-size:12px;color:var(--muted);line-height:1.4}
-.step.done .n i{background:var(--ok-soft);color:var(--ok)}
-.step.next{border-color:var(--accent);box-shadow:var(--ring)}
-.step.next .n i{background:var(--accent);color:#fff}
-.step.next .d{color:var(--text)}
-.step.off{opacity:.55}
-.step .tag{font-size:11px;color:var(--accent-ink);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
-@media (max-width:980px){.steps{grid-template-columns:repeat(3,1fr)}}@media (max-width:560px){.steps{grid-template-columns:repeat(2,1fr)}}
 .intro{padding:11px 14px;background:var(--info-soft);border-radius:var(--radius-sm);font-size:13px;line-height:1.55}
 dialog.small{width:min(640px,94vw);height:auto;max-height:86vh}
 .gloss{margin:0}.gloss dt{font-weight:600;margin-top:14px}.gloss dd{margin:2px 0 0;color:var(--muted);line-height:1.55}
@@ -340,10 +324,6 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
     <div class="phead"><h1 id="home-title">Welcome</h1><p id="home-sub"></p></div>
     <div class="sumrow" id="sumrow"></div>
     <div class="agrid" id="ag-home"></div>
-  <section id="path" hidden>
-    <div class="path-head"><b>Your path</b><span class="muted">from your data to a model you can use</span><span class="spacer"></span><button class="linkbtn" id="pathhide" type="button">Hide</button></div>
-    <ol class="steps" id="steps"></ol>
-  </section>
   <div class="h2row"><h2>Jobs <span class="count" id="jobcount">0</span></h2><span class="muted" id="stats"></span></div>
   <div id="jobs"><div class="skeleton"></div></div>
 
@@ -815,38 +795,8 @@ $("#datarows").addEventListener("click",function(e){
 /* ---- registered models ---- */
 var regModels=null, pathOpts=null;
 function loadModels(){
-  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderPath(); renderMenus(); renderData(); }).catch(function(){});
+  fetch("api/launch",{cache:"no-store"}).then(function(r){ return r.json(); }).then(function(o){ regModels=o.models||[]; pathOpts=o; renderModels(); renderMenus(); renderData(); }).catch(function(){});
 }
-/* ---- the path from data to a usable model ---- */
-function pathHidden(){ try{ return localStorage.getItem("bhaskera-path")==="hidden"; }catch(e){ return false; } }
-function chattedBefore(){ try{ return localStorage.getItem("bhaskera-chatted")==="1"; }catch(e){ return false; } }
-function renderPath(){
-  var sec=$("#path"); if(!sec) return;
-  if(!pathOpts||!pathOpts.enabled){ sec.hidden=true; return; }
-  var hid=pathHidden(); $("#pathhide").textContent=hid?"Show":"Hide"; $("#steps").hidden=hid; sec.classList.toggle("collapsed",hid);
-  if(hid){ sec.hidden=false; return; }
-  var runs=(state&&state.runs)||[], mine=(pathOpts.recipes||[]).filter(function(r){return r.ready});
-  var adapter=runs.some(function(r){return r.has_adapter}), bench=runs.some(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length});
-  var steps=[
-    {t:"Prepare data",d:"Turn your examples into numbers the model reads",tab:"recipe",raw:true,done:(pathOpts.caches||[]).length>0},
-    {t:"Create recipe",d:"Choose the model, the data and how long",tab:"recipe",done:mine.length>0},
-    {t:"Train",d:"Run the recipe on the cluster",tab:"train",done:runs.length>0},
-    {t:"Chat",d:"Talk to the model you trained",tab:"serve",done:chattedBefore(),off:!adapter},
-    {t:"Benchmark",d:"Score it on questions with known answers",tab:"eval",done:bench,off:!adapter},
-    {t:"Register",d:"Keep it under a name you can find again",tab:"register",done:(regModels||[]).length>0,off:!adapter}
-  ];
-  var nxt=-1; for(var i=0;i<steps.length;i++){ if(!steps[i].done&&!steps[i].off){ nxt=i; break; } }
-  $("#steps").innerHTML=steps.map(function(x,i){
-    return '<li><button type="button" class="step'+(x.done?" done":"")+(i===nxt?" next":"")+(x.off?" off":"")+'" data-path="'+x.tab+'"'+(x.raw?' data-raw="1"':"")+(x.off?' title="Needs a finished run first"':"")+'><span class="n"><i>'+(x.done?"&#10003;":(i+1))+'</i>'+esc(x.t)+'</span><span class="d">'+esc(x.d)+'</span>'+(i===nxt?'<span class="tag">Next</span>':"")+'</button></li>';
-  }).join("");
-  sec.hidden=false;
-}
-$("#steps").addEventListener("click", function(e){
-  var b=e.target.closest("[data-path]"); if(!b) return;
-  if(b.hasAttribute("data-raw")) L.rc.dataMode="raw";
-  L.hours=""; openStart(b.getAttribute("data-path"));
-});
-$("#pathhide").addEventListener("click", function(){ try{ if(pathHidden()) localStorage.removeItem("bhaskera-path"); else localStorage.setItem("bhaskera-path","hidden"); }catch(e){} renderPath(); });
 $("#guideclose").addEventListener("click", function(){ $("#guide").close(); });
 function renderModels(){
   var rows=[]; (regModels||[]).forEach(function(m){ (m.refs||[]).forEach(function(v){ rows.push({name:m.name,v:v}); }); });
@@ -1095,7 +1045,7 @@ function render(){
   var jobs=(s.jobs||[]).slice().sort(function(a,b){ return ((order[a.state]||0)-(order[b.state]||0)) || (Number(b.id)-Number(a.id)); });
   $("#jobcount").textContent=jobs.length;
   $("#jobs").innerHTML=jobs.length ? jobs.map(jobCard).join("") : emptyJobs();
-  renderRuns(); renderCompare(); renderModels(); renderPath(); renderSide(); renderMenus(); renderChat();
+  renderRuns(); renderCompare(); renderModels(); renderSide(); renderMenus(); renderChat();
   $("#foot").innerHTML='Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a>';
 }
 function clock(){
@@ -1241,12 +1191,11 @@ function streamAnswer(history,useAdapter,el){
     })
     .catch(function(e){ if(e.name!=="AbortError") el.textContent=(text?text+"\n":"")+"[could not get an answer: "+e.message+"]"; return text; });
 }
-function markChatted(){ try{ localStorage.setItem("bhaskera-chatted","1"); }catch(e){} renderPath(); }
 function ask(text){
   chat.busy=true; $("#chat-send").hidden=true; $("#chat-stop").hidden=false;
   var files=chat.pending; chat.pending=[]; renderAttached();
   var content = files.length ? [{type:"text",text:text}].concat(files.map(function(a){ return {type:a.kind,data:a.data}; })) : text;
-  var history=chat.messages.concat([{role:"user",content:content}]); addUser(text,files); markChatted();
+  var history=chat.messages.concat([{role:"user",content:content}]); addUser(text,files);
   var done;
   if(chat.mode==="both"){
     var els=addPair();
