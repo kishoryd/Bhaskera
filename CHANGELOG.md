@@ -7,6 +7,10 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Setting up on another cluster, and a clean-up
+- The cluster profile has `gpu_mem_gb` (memory of one GPU), and the check before a job uses it instead of assuming 80 GB. A new guide, *Setting Up on Another Cluster*, walks through a first install: requirements, the profile, the modulefile, shared models and data, a check as an ordinary user, and where it breaks.
+- Removed: committed `.pyc` files, `requirements.txt` (a loose snapshot that said not to use it; the tested versions are in `slurm/requirements-paramrudra.lock`), and the design document for a central service, which lives on the `central-service` branch. The Open OnDemand app is on the `ood` branch.
+
 ### Downloads, sign-in and dataset versions
 - The *Your path* strip (Prepare data to Register) is removed from Home; the cards and menus lead to the same places.
 - **Downloads** (header): a model or a dataset from Hugging Face into a folder you choose. A size and licence preview comes first, then a download with progress, cancel and resume (starting it again continues where it stopped). Only Hugging Face is contacted, the folder must be one you can write to, and a download above 50 GB asks for confirmation. A finished model joins the model lists; a finished dataset is registered as a dataset version with its repository and revision as the source.
@@ -27,7 +31,7 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 - **Five pages** (Home, Train, Serve, Evaluate, Monitor) with a hover menu under each name in the header and under Docs, a new logo that returns to Home, a **New run** button, and one set of action cards per page.
   Home shows four numbers (running now, training runs, saved models, benchmarked) that lead to the pages. When a chat server finishes loading, the page opens Serve.
 - Only runs and saved models that Bhaskera made are listed: a run carries the tag `framework: bhaskera`, or is filed in a `bhaskera*` experiment (older runs); other tools' runs in the same MLflow store are not shown.
-- **Create recipe** (Start menu): a recipe from a few choices for text and multimodal models, with QLoRA + DDP, DDP, FSDP2, HSDP and Pipeline,
+- **Create recipe** (New run): a recipe from a few choices for text and multimodal models, with QLoRA + DDP, DDP, FSDP2, HSDP and Pipeline,
   *All settings* (every option, searchable, with its meaning), a *Custom* mode (paste or start from a starter) and *Prepare data* for raw JSONL.
   Recipes are checked with the training job's own loader before they are written. DDP and QLoRA recipes turn on activation checkpointing.
 - **Benchmark** takes several models (a job each), registered names, your own tests (from a question/answer file), a few-shot count and

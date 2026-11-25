@@ -228,8 +228,14 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Preflight checks for a Bhaskera training config")
     p.add_argument("--config", required=True)
     p.add_argument("--num-gpus", type=int, default=0, help="planned GPU count (default: show a table)")
-    p.add_argument("--gpu-mem-gb", type=float, default=80.0, help="per-GPU memory (A100 80GB)")
+    p.add_argument("--gpu-mem-gb", type=float, default=None, help="per-GPU memory in GB (default: gpu_mem_gb of the cluster profile, else 80)")
     args = p.parse_args()
+    if args.gpu_mem_gb is None:
+        try:
+            from bhaskera.launcher import cluster_profile
+            args.gpu_mem_gb = cluster_profile.current().gpu_mem_gb or 80.0
+        except Exception:
+            args.gpu_mem_gb = 80.0
 
     from bhaskera.config import load_config_checked
 

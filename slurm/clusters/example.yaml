@@ -2,6 +2,7 @@
 # Every line is optional. Without a profile, submit.sh uses $BHASKERA_PARTITION and skips the partition-limit checks.
 name: My Cluster          # shown on the Bhaskera home page
 gpus_per_node: 8
+gpu_mem_gb: 80         # memory of one GPU in GB, for the "will it fit" check before a job is submitted
 cpus_per_node: 64         # CPUs asked for on each node
 mem_per_node: 400G        # host memory asked for on each node
 net_interface: ib0        # network interface for NCCL and Ray (check with: ip -4 addr); "" = not checked

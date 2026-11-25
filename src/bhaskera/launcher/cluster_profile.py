@@ -7,6 +7,7 @@ A profile is a small YAML file. It is found, in this order, at ``$BHASKERA_CLUST
     gpus_per_node: 8
     cpus_per_node: 64               # optional: CPUs given to each job's node
     mem_per_node: 400G              # optional: host memory asked for on each node
+    gpu_mem_gb: 80                  # memory of one GPU, for the "will it fit" check before a job is submitted
     net_interface: ib0              # the network interface NCCL and Ray use ("" = none, not checked)
     docs_url: https://example.org/bhaskera
     partitions:                     # smallest jobs first: a job of up to max_nodes nodes goes to that partition
@@ -43,6 +44,7 @@ class ClusterProfile:
     gpus_per_node: Optional[int] = None
     cpus_per_node: Optional[int] = None
     mem_per_node: str = ""
+    gpu_mem_gb: Optional[float] = None
     net_interface: str = ""
     docs_url: str = ""
     partitions: list[PartitionRule] = field(default_factory=list)
@@ -65,7 +67,7 @@ def _from_dict(raw: dict, source: str) -> ClusterProfile:
     rules = [PartitionRule(int(p["max_nodes"]), str(p["name"]), float(p["max_hours"]) if p.get("max_hours") is not None else None)
              for p in (raw.get("partitions") or [])]
     return ClusterProfile(name=str(raw.get("name") or ""), gpus_per_node=as_int(raw.get("gpus_per_node")),
-                          cpus_per_node=as_int(raw.get("cpus_per_node")), mem_per_node=str(raw.get("mem_per_node") or ""),
+                          cpus_per_node=as_int(raw.get("cpus_per_node")), mem_per_node=str(raw.get("mem_per_node") or ""), gpu_mem_gb=(float(raw["gpu_mem_gb"]) if raw.get("gpu_mem_gb") not in (None, "") else None),
                           net_interface=str(raw.get("net_interface") or ""), docs_url=str(raw.get("docs_url") or ""),
                           partitions=rules, source=source)
 

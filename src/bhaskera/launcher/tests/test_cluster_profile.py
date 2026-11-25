@@ -66,3 +66,28 @@ def test_profile_in_the_home_folder_is_found(tmp_path, use_profile, monkeypatch)
     (tmp_path / ".bhaskera" / "cluster.yaml").write_text("name: Home Cluster\n")
     cp.reset()
     assert cp.current().name == "Home Cluster"
+
+
+def test_gpu_memory_comes_from_the_profile_and_the_preflight_check_uses_it(tmp_path, monkeypatch):
+    from bhaskera.launcher import cluster_profile, preflight
+    f = tmp_path / "p.yaml"
+    f.write_text("name: X\ngpus_per_node: 4\ngpu_mem_gb: 40\n")
+    assert cluster_profile.load(f).gpu_mem_gb == 40.0
+    (tmp_path / "q.yaml").write_text("name: Y\n")
+    assert cluster_profile.load(tmp_path / "q.yaml").gpu_mem_gb is None
+    seen = {}
+    monkeypatch.setattr(cluster_profile, "current", lambda: cluster_profile.load(f))
+    monkeypatch.setattr("sys.argv", ["preflight", "--config", str(tmp_path / "none.yaml")])
+    monkeypatch.setattr("bhaskera.config.load_config_checked", lambda path: (_ for _ in ()).throw(SystemExit(seen.setdefault("stop", 0))))
+    import argparse
+    orig = argparse.ArgumentParser.parse_args
+    def spy(self, *a, **k):
+        r = orig(self, *a, **k)
+        seen["arg"] = r
+        return r
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", spy)
+    try:
+        preflight.main()
+    except SystemExit:
+        pass
+    assert seen["arg"].gpu_mem_gb == 40.0

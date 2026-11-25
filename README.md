@@ -71,7 +71,7 @@ See `docs/multimodal/README.md`.
 
 Everything you create stays in the folder you set up, the one that holds `submit.sh` (your *run folder*): `recipes/`, `checkpoints/`, `cache/` (prepared data), `logs/`,
 `tasks/` (your own tests), benchmark results, `mlflow-runs/` (every run, its adapter, and the model registry), `.bhaskera/` (small settings) and `.cache/huggingface/`
-(benchmark data). Nothing is written to your home folder or to the shared install. If you already keep `~/mlflow-runs`, `~/.bhaskera` or `~/.cache/huggingface`, Bhaskera keeps
+(benchmark data). Nothing is written to the shared install. If you name no run folder, `~/bhaskera-runs` is made from the shared kit. If you already keep `~/mlflow-runs`, `~/.bhaskera` or `~/.cache/huggingface`, Bhaskera keeps
 using them until a copy or a link of the same name exists in the run folder (`ln -s ~/mlflow-runs mlflow-runs` brings them in with nothing moved). `MLFLOW_TRACKING_URI` overrides the MLflow place.
 Shared models and prepared data (`BHASKERA_MODELS`, `BHASKERA_DATA`) are read-only copies kept by the administrators.
 
@@ -81,26 +81,17 @@ Shared models and prepared data (`BHASKERA_MODELS`, `BHASKERA_DATA`) are read-on
 bhaskera-dashboard ray
 ```
 
-prints one SSH command for your laptop. Open <http://localhost:8265> and you get your jobs with live loss, MFU and GPU load,
-the logs, links to the Ray Dashboard and MLflow, and your recent runs. A **Guide** explains the words used. The **Start** menu makes a recipe from a few choices (text or multimodal; QLoRA, DDP, FSDP2, HSDP, Pipeline,
-or your own YAML, with every setting reachable), prepares raw data, and starts, resumes or cancels a job (with a *Check first* that submits nothing). You can chat with a model you trained (the tuned model, the base model, or both side by side),
-benchmark one or several models with the standard tests or your own, compare them side by side, and register a model with a hand-off note. For a model that reads images, video or audio, the chat window has an **Attach** button. Everything it does is also a plain command (`./submit.sh serve`, `./submit.sh eval`), and the docs
-show both ways side by side, including chatting from the terminal. `BHASKERA_HUB_LAUNCH=0` turns the Start buttons off.
+prints one SSH command for your laptop. Open <http://localhost:8265>. It has five pages (Home, Train, Serve, Evaluate, Monitor), and everything below is also available from the terminal:
 
-To test a model on your own questions, `python -m bhaskera.launcher.evaluate init-task` turns a question/answer JSONL file into a test,
-`./submit.sh eval ... --tasks <your test> --save-samples` runs it, and `evaluate review` shows what tuning fixed, what it broke and what
-is still wrong, with a file of the examples to correct in your training data. A job can be cancelled, and a chat server closed, from the
-page (two clicks) or with `scancel`.
+- **Jobs and runs:** live loss, MFU, GPU load and the **GPU energy** a run used, the logs, and links to MLflow and the Ray Dashboard. A job can be cancelled, and a chat server closed, with two clicks.
+- **New run:** make a recipe from a few choices (text or multimodal; QLoRA, DDP, FSDP2, HSDP, Pipeline, or your own YAML with every setting reachable), prepare raw data, then train, resume or cancel. *Check first* runs every check and submits nothing.
+- **Chat** with a trained model (tuned, base, or side by side; pictures and audio can be attached), **benchmark** one or several models with the standard tests or your own, **compare** them, and **register** a model under a name with a hand-off note (`name@alias` works wherever a run id does).
+- **Downloads:** a model or dataset from Hugging Face into a folder you choose, with sign-in for private and gated repositories.
+- **Data:** give a data folder a name, a number and a fingerprint, so every run records exactly what it trained on.
 
-A trained model can be saved in the MLflow model registry under a name and version (`python -m bhaskera.launcher.register add`, or the
-**Register a model** card), with an alias such as `champion`; chat and benchmark accept `name@alias` wherever a run id goes.
-
-If a job stops half way, `./submit.sh resume --run <run id>` (or the **Resume** button) submits the same recipe, nodes and time again and
-continues from the last checkpoint, skipping the data already used; `--step N` goes back to an earlier checkpoint, for example before a loss
-spike. A checkpoint is saved every 500 steps by default (`checkpoint.save_every_steps`), so a failure loses little.
-
-MLflow keeps about 20 curves per run by default, and can store the trained adapter in standard PEFT format. Before each job
-every node is checked, and a failed job ends with a plain explanation of what went wrong and on which node.
+To test a model on your own questions, `python -m bhaskera.launcher.evaluate init-task` turns a question/answer JSONL file into a test, and `evaluate review` shows what tuning fixed, what it broke and what is still wrong.
+If a job stops half way, `./submit.sh resume --run <run id>` (or **Resume**) continues from the last checkpoint; `--step N` goes back to an earlier one. A checkpoint is saved every 500 steps by default (`checkpoint.save_every_steps`).
+Before each job every node is checked, and a failed job ends with a plain explanation of what went wrong and on which node. `BHASKERA_HUB_LAUNCH=0` turns starting jobs from the page off.
 
 ## Sweeps
 
@@ -109,26 +100,28 @@ trials within your Slurm limits, and lists them best first.
 
 ## Other clusters
 
+Everything that belongs to one cluster is in a **cluster profile** (partitions and their time limits, GPUs and their memory, CPUs and host memory per node, network interface):
+
 ```bash
 cp slurm/clusters/example.yaml .bhaskera/cluster.yaml          # in your run folder; then edit it
 python -m bhaskera.launcher.cluster_profile show
 ```
 
-The profile holds the partitions and their time limits, GPUs and CPUs per node, host memory and the network interface.
-Without one, `submit.sh` uses `$BHASKERA_PARTITION` and the hours you give.
+Without one, `submit.sh` uses `$BHASKERA_PARTITION` and the hours you give. To install Bhaskera for everyone on a new cluster, follow
+[Setting Up on Another Cluster](https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/new-cluster/) in the guide.
+It has been run end to end only on PARAM Rudra.
 
 ## Install
 
 ```bash
-git clone --branch v1.0.0 https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
+git clone https://github.com/kishoryd/Bhaskera.git && cd Bhaskera
 BHASKERA_CUDA=12.4 bash setup.sh           # name the CUDA version: login nodes have no GPU
 source .venv/bin/activate
 uv pip install -r slurm/requirements-paramrudra.lock    # the package versions the benchmarks used
 export BHASKERA_DIR=$PWD
 ```
 
-Details, including flash-attention and the shared install for administrators (`slurm/install-bhaskera.sh` and an Lmod
-modulefile), are in the docs.
+For all users of a cluster, `slurm/install-bhaskera.sh` builds a shared install and `slurm/modulefiles/` has the Lmod modulefile; flash-attention and the other details are in the guide.
 
 ## Security
 
