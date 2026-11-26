@@ -149,9 +149,12 @@ def resolve(config: str, say=print, fetch=fetch_repo, plan_only: bool = False) -
     if not jobs:
         return config, []
     if plan_only:
+        pending = [j for j in dict.fromkeys(jobs) if not _fetched(_dest(*j[:1], j[1], j[2]), j[1], j[2])]
         for kind, repo, rev in dict.fromkeys(jobs):
-            say(f"would download {kind} {repo} ({rev})" if not _fetched(_dest(kind, repo, rev), repo, rev) else f"already downloaded: {repo}")
-        return config, ["plan"]
+            say(f"would download {kind} {repo} ({rev})" if (kind, repo, rev) in pending else f"already downloaded: {repo}")
+        if pending:                                             # something is still to be downloaded: only say so
+            return config, ["plan"]
+        # everything is on disk already: resolve for real (no network is used), so that the dry run can go on to check the rest
     changes: list[str] = []
     if looks_like_repo(model.get("name")):
         repo, rev = parse_ref(model["name"])

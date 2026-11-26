@@ -139,6 +139,21 @@ def test_a_plan_only_run_downloads_nothing(run):
     assert out == p and changes == ["plan"] and any("would download model Qwen/Qwen3-1.7B" in m for m in said)
 
 
+def test_a_plan_only_run_resolves_for_real_when_everything_is_already_downloaded(run):
+    p = recipe(run, model={"name": "Qwen/Qwen3-1.7B"}, data={"name": "local", "train_path": "hf://owner/chat"})
+    f, calls = fake_fetch(run)
+    fetch.resolve(p, say=lambda m: None, fetch=f)                                             # a real run downloads (the fake leaves no marker, so write them)
+    for kind, repo in (("model", "Qwen/Qwen3-1.7B"), ("dataset", "owner/chat")):
+        (fetch._dest(kind, repo, "main") / fetch.MARKER).write_text(json.dumps({"repo": repo, "revision": "main"}))
+    said = []
+    out, changes = fetch.resolve(p, say=said.append, fetch=fetch_noop, plan_only=True)
+    assert out.endswith(".bhaskera/resolved/my.yaml") and changes and changes != ["plan"] and any("already downloaded" in m for m in said)
+
+
+def fetch_noop(kind, repo, rev, say=print):
+    return fetch._dest(kind, repo, rev)
+
+
 def test_a_download_that_finished_is_not_repeated_and_the_marker_is_checked(run, monkeypatch):
     dest = run / "models" / "Qwen__Qwen3-1.7B"
     dest.mkdir(parents=True)
