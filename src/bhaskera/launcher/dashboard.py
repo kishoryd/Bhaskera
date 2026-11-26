@@ -113,12 +113,13 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def cmd_start(cfg: DashboardConfig) -> None:
-    """Start the MLflow UI as a detached background process."""
+def cmd_start(cfg: DashboardConfig, show_tunnel: bool = True) -> None:
+    """Start the MLflow UI as a detached background process. ``show_tunnel`` False when the home page links MLflow itself."""
     pid = _read_pid()
     if pid and _pid_alive(pid):
         print(f"MLflow UI is already running (PID {pid}). Use 'bhaskera-dashboard status'.")
-        _print_tunnel(cfg)
+        if show_tunnel:
+            _print_tunnel(cfg)
         return
 
     if cfg.host not in ("127.0.0.1", "localhost", "::1"):
@@ -174,11 +175,13 @@ def cmd_start(cfg: DashboardConfig) -> None:
     print(f"  Port  : {cfg.port}  (on {socket.gethostname()})")
     print(f"  Log   : {_LOG_FILE}")
     print()
-    _print_tunnel(cfg)
+    if show_tunnel:
+        _print_tunnel(cfg)
     print("─" * 60)
     print()
-    print("Stop with:  bhaskera-dashboard stop")
-    print()
+    if show_tunnel:
+        print("Stop with:  bhaskera-dashboard stop")
+        print()
 
 
 def cmd_stop() -> None:
@@ -247,15 +250,41 @@ def ssh_options(cfg: DashboardConfig) -> str:
     return f"-p {port} " if port else ""
 
 
+def _hop_port(port: int) -> int:
+    """The port used on the first login node when the tunnel goes on to a named node (any free port will do)."""
+    return port + 10000 if port <= 55000 else port - 10000
+
+
+def _this_node() -> str:
+    return socket.gethostname().split(".")[0]
+
+
+def tunnel_command(cfg: DashboardConfig, local_port: int, remote_port: int, node: str = "", remote: str = "") -> str:
+    """The ssh command to run on a laptop so that ``localhost:<local_port>`` reaches ``<remote_port>`` on ``node``.
+
+    The cluster's address may hand out a different login node each time, so a service that lives on one login node is reached in
+    two hops: log in, then ssh on to that node. (``ssh -J`` is not used: the login nodes refuse to forward to other machines.)
+    With no ``node``, or when the address already is that node, one hop is enough. ``remote`` is a command to run on the node."""
+    target = ssh_target(cfg)
+    opts = ssh_options(cfg)
+    if not node or node == target.rpartition("@")[2].split(".")[0]:
+        cmd = f"ssh {opts}-L {local_port}:localhost:{remote_port} {target}"
+        return cmd + (f" \"{remote}\"" if remote else "")
+    hop = _hop_port(local_port)
+    inner = f"ssh -t -t -L {hop}:localhost:{remote_port} {node}" + (f" \\\"{remote}\\\"" if remote else "")
+    return f"ssh {opts}-t -t -L {local_port}:localhost:{hop} {target} \"{inner}\""
+
+
 def _print_tunnel(cfg: DashboardConfig, *, verbose: bool = False) -> None:
     local_url  = f"http://localhost:{cfg.port}"
-    tunnel_cmd = f"ssh {ssh_options(cfg)}-L {cfg.port}:localhost:{cfg.port} {ssh_target(cfg)}"
+    # the page runs on this login node, so the tunnel must end on this node (the address alone may land on another one)
+    tunnel_cmd = tunnel_command(cfg, cfg.port, cfg.port, node=_this_node())
 
     if verbose:
         print()
-    print(f"  From your laptop:")
+    print(f"  From your laptop (leave it open):")
     print(f"    {tunnel_cmd}")
-    print(f"    open {local_url}")
+    print(f"    then open {local_url}")
     if verbose:
         print()
 
@@ -383,7 +412,7 @@ def ensure_mlflow(cfg: DashboardConfig) -> None:
         print(f"The MLflow page on port {old} of {socket.gethostname()} does not work (it is probably an old MLflow whose files were "
               f"removed); starting a new one on port {cfg.port}.")
     try:
-        cmd_start(cfg)
+        cmd_start(cfg, show_tunnel=False)
     except SystemExit:
         print("MLflow could not be started here; run 'bhaskera-dashboard start --port <free port>' to see why.")
 
@@ -435,9 +464,10 @@ def _remote_command() -> str:
     return f"bash -lc '{tool} ray'"
 
 
-def laptop_command(cfg: DashboardConfig, local_port: int = _LAPTOP_PORT) -> str:
-    """The one command to run on a laptop: it logs in and runs this tool, which does the rest."""
-    return f"ssh {ssh_options(cfg)}-L {local_port}:localhost:{hub_port()} {ssh_target(cfg)} \"{_remote_command()}\""
+def laptop_command(cfg: DashboardConfig, local_port: int = _LAPTOP_PORT, node: str = "") -> str:
+    """The one command to run on a laptop: it logs in and runs this tool, which does the rest. With ``node`` (for example ``login01``),
+    the page is started on that login node, whichever one the address would have handed out (see ``tunnel_command``)."""
+    return tunnel_command(cfg, local_port, hub_port(), node=node, remote=_remote_command())
 
 
 def ssh_config_block(cfg: DashboardConfig, local_port: int = _LAPTOP_PORT) -> str:
@@ -480,12 +510,12 @@ def forward_command_serve(head: str, local_port: int, remote_port: int) -> list[
             "-L", f"{local_port}:localhost:{remote_port}", head]
 
 
-def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_port: int = _LAPTOP_PORT) -> None:
+def cmd_ray(cfg: DashboardConfig, job: Optional[str], info: bool = False, local_port: int = _LAPTOP_PORT, node: str = "") -> None:
     print()
     print("From your laptop, this one command logs in and keeps everything open")
     print("(the command is always the same; it finds your jobs and their nodes by itself):")
     print()
-    print(f"    {laptop_command(cfg, local_port)}")
+    print(f"    {laptop_command(cfg, local_port, node)}")
     print()
     print(f"Then open http://localhost:{local_port} in a browser: your running jobs, with their Ray Dashboards,")
     print("charts and MLflow, are linked from that page.")
@@ -684,6 +714,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "(default: current hostname).",
     )
     p.add_argument(
+        "--node",
+        default="",
+        metavar="LOGIN_NODE",
+        help="With 'ray': the login node to run the page on, for example login01 (the one with internet). The printed command logs in "
+             "and goes on to that node.",
+    )
+    p.add_argument(
         "--user",
         default=None,
         metavar="USER",
@@ -764,7 +801,7 @@ def main() -> None:
     elif args.action == "ssh-config":
         cmd_ssh_config(cfg, args.ray_port)
     elif args.action == "ray":
-        cmd_ray(cfg, args.job, args.info, args.ray_port)
+        cmd_ray(cfg, args.job, args.info, args.ray_port, args.node)
     elif args.action == "portal":
         cmd_portal(cfg, args.bind, args.hub_port or hub_port())
 

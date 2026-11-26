@@ -124,14 +124,26 @@ def test_ssh_target_and_options(monkeypatch):
     assert dashboard.ssh_options(_cfg(login_port=0)) == ""
 
 
-def test_mlflow_tunnel_uses_the_same_target(capsys):
-    cfg = _cfg(login_node="paramrudra", user="dlapp", login_port=0)
+def test_mlflow_tunnel_ends_on_the_node_the_page_runs_on(capsys, monkeypatch):
+    monkeypatch.setattr(dashboard, "_this_node", lambda: "login01")
+    cfg = _cfg(login_node="paramrudra.cdacb.in", user="dlapp", login_port=4422)
     cfg.port = 5055
     dashboard._print_tunnel(cfg)
-    assert "ssh -L 5055:localhost:5055 dlapp@paramrudra" in capsys.readouterr().out
-    cfg.login_port = 4422
+    assert 'ssh -p 4422 -t -t -L 5055:localhost:15055 dlapp@paramrudra.cdacb.in "ssh -t -t -L 15055:localhost:5055 login01"' in capsys.readouterr().out
+    cfg.login_node, cfg.login_port = "login01", 0                       # the address already is this node: one hop
     dashboard._print_tunnel(cfg)
-    assert "ssh -p 4422 -L 5055:localhost:5055 dlapp@paramrudra" in capsys.readouterr().out
+    assert "ssh -L 5055:localhost:5055 dlapp@login01" in capsys.readouterr().out
+
+
+def test_ray_command_can_be_pinned_to_a_login_node(monkeypatch):
+    monkeypatch.setenv("BHASKERA_MODULE", "bhaskera/1.0.0")
+    cfg = _cfg(login_node="paramrudra.cdacb.in", user="dlapp", login_port=4422)
+    port = dashboard.hub_port()
+    plain = dashboard.laptop_command(cfg)
+    assert plain.startswith(f"ssh -p 4422 -L 8265:localhost:{port} dlapp@paramrudra.cdacb.in ")
+    pinned = dashboard.laptop_command(cfg, node="login01")
+    assert pinned.startswith(f"ssh -p 4422 -t -t -L 8265:localhost:18265 dlapp@paramrudra.cdacb.in \"ssh -t -t -L 18265:localhost:{port} login01 ")
+    assert "module load bhaskera/1.0.0 && bhaskera-dashboard ray" in pinned and "ssh -J" not in pinned
 
 
 def test_ssh_config_block(monkeypatch):
@@ -164,7 +176,7 @@ def test_ensure_mlflow_starts_it_once(monkeypatch, capsys):
     monkeypatch.setattr(dashboard.os, "getuid", lambda: 80029)
     started = []
     monkeypatch.setattr(dashboard, "_read_pid", lambda: None)
-    monkeypatch.setattr(dashboard, "cmd_start", lambda c: started.append(c.port))
+    monkeypatch.setattr(dashboard, "cmd_start", lambda c, show_tunnel=True: started.append(c.port))
     dashboard.ensure_mlflow(dashboard.DashboardConfig())
     assert started == [40029]
     monkeypatch.setattr(dashboard, "_read_pid", lambda: 123)
@@ -199,7 +211,7 @@ def test_a_broken_mlflow_on_the_port_is_left_alone_and_a_new_one_starts_elsewher
     monkeypatch.setattr(dashboard, "close_orphan_runs", lambda cfg: 0)
     monkeypatch.setattr(dashboard, "mlflow_page_state", lambda port, fetch=None: False)
     monkeypatch.setattr(dashboard.ray_hub, "free_port", lambda: 45678)
-    monkeypatch.setattr(dashboard, "cmd_start", lambda cfg: started.append((cfg.port, cfg.host)))
+    monkeypatch.setattr(dashboard, "cmd_start", lambda cfg, show_tunnel=True: started.append((cfg.port, cfg.host)))
     cfg = _cfg(login_node="x", user="u")
     cfg.port = 5055
     dashboard.ensure_mlflow(cfg)
@@ -212,7 +224,7 @@ def test_a_working_mlflow_on_the_port_is_reused(monkeypatch, capsys):
     monkeypatch.setattr(dashboard, "_read_pid", lambda: None)
     monkeypatch.setattr(dashboard, "close_orphan_runs", lambda cfg: 0)
     monkeypatch.setattr(dashboard, "mlflow_page_state", lambda port, fetch=None: True)
-    monkeypatch.setattr(dashboard, "cmd_start", lambda cfg: started.append(cfg.port))
+    monkeypatch.setattr(dashboard, "cmd_start", lambda cfg, show_tunnel=True: started.append(cfg.port))
     cfg = _cfg(login_node="x", user="u")
     cfg.port = 5055
     dashboard.ensure_mlflow(cfg)
