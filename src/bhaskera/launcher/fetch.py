@@ -207,7 +207,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"error: could not read {args[0]}: {e}", file=sys.stderr)
         return 1
     print(path)
-    return PLAN_ONLY if plan and changes else 0
+    return PLAN_ONLY if changes == ["plan"] else 0          # only "there is something to download" ends a dry run early
 
 
 if __name__ == "__main__":

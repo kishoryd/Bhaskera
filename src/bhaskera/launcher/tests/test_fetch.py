@@ -195,3 +195,14 @@ def test_the_command_line_prints_only_the_recipe_path_on_stdout(run, capsys, mon
     out = capsys.readouterr()
     assert out.out.strip() == p2 and "would download model" in out.err
     assert fetch.main([]) == 2
+
+
+def test_a_plan_only_command_line_goes_on_when_everything_is_downloaded(run, capsys, monkeypatch):
+    p = recipe(run, model={"name": "Qwen/Qwen3-1.7B"}, data={"name": "local", "tokenized_path": "/c"})
+    dest = fetch._dest("model", "Qwen/Qwen3-1.7B", "main")
+    dest.mkdir(parents=True)
+    (dest / "config.json").write_text("{}")
+    (dest / fetch.MARKER).write_text(json.dumps({"repo": "Qwen/Qwen3-1.7B", "revision": "main"}))
+    monkeypatch.setenv("BHASKERA_NO_FETCH", "1")
+    assert fetch.main([p]) == 0                                                          # not the 'something to download' code
+    assert capsys.readouterr().out.strip().endswith("/.bhaskera/resolved/my.yaml")
