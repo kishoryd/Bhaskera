@@ -37,6 +37,7 @@ def _cache_version_hash(
     dataset_name: str,
     format_name: Optional[str] = None,
     format_options: Optional[dict] = None,
+    source: str = "",
 ) -> str:
     """
     Deterministic 16-char hex hash.
@@ -54,8 +55,26 @@ def _cache_version_hash(
         parts.append(f"fmt:{format_name}")
     if format_options:
         parts.append(f"opts:{json.dumps(format_options, sort_keys=True, default=str)}")
+    if source:                          # a fingerprint of the input files (data/cache_key.py): other data, other cache
+        parts.append(f"src:{source}")
     key = "|".join(parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _source_signature(cfg, dataset_name: str) -> str:
+    """A fingerprint of the local input files this split is made from ('' for the built-in datasets, which have no local files)."""
+    data = cfg.data
+    if getattr(data, "name", None) != "local":
+        return ""
+    path = (getattr(data, "val_path", None) if dataset_name.endswith("_val") else (getattr(data, "train_path", None) or getattr(data, "path", None)))
+    if not path:
+        return ""
+    try:
+        from bhaskera.data.datasets.local_chat import _resolve_files
+        from bhaskera.data.cache_key import files_signature
+        return files_signature(_resolve_files(path))
+    except (OSError, ValueError):
+        return ""
 
 
 def _write_metadata(
@@ -67,6 +86,7 @@ def _write_metadata(
     format_name: Optional[str] = None,
     format_options: Optional[dict] = None,
     schema: Optional[list] = None,
+    source: str = "",
 ) -> None:
     """
     Write metadata.json alongside the parquet files.
@@ -85,6 +105,7 @@ def _write_metadata(
         "bhaskera_version": _BHASKERA_VERSION,
         "format_name":      format_name,
         "format_options":   format_options or {},
+        **({"source": source} if source else {}),
     }
     meta_path = os.path.join(cache_path, "metadata.json")
     with open(meta_path, "w") as f:
@@ -191,8 +212,9 @@ def persist_tokenized(
         format_options = {**format_options, "media": media_options(cfg)}
         schema = ["input_ids", "attention_mask", "labels", "text", "media"]
 
+    source     = _source_signature(cfg, dataset_name)
     version    = _cache_version_hash(model_name, seq_len, dataset_name,
-                                     format_name, format_options)
+                                     format_name, format_options, source)
     cache_path = os.path.join(cfg.data.cache_dir, f"{dataset_name}_{version}")
 
     if (_verify_cache(cache_path, model_name, seq_len, dataset_name, format_name)
@@ -230,7 +252,7 @@ def persist_tokenized(
         num_rows = -1
 
     _write_metadata(cache_path, model_name, seq_len, dataset_name, num_rows,
-                    format_name, format_options, schema)
+                    format_name, format_options, schema, source)
 
     logger.info(f"Tokenization complete → {cache_path}")
     return cache_path
