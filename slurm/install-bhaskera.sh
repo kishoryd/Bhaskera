@@ -9,7 +9,7 @@
 #   python/     the Python 3.11 interpreter the environment uses (must be readable by everyone)
 #   venv/       Python 3.11 environment: torch 2.6.0+cu124, flash-attn 2.7.3 (prebuilt), bitsandbytes
 #   observability/  Prometheus and Grafana (charts in the Ray Dashboard; skip with WITH_CHARTS=0)
-#   share/kit/  train.sbatch, tokenize.sbatch, submit.sh, make-quickstart.py, recipes/  (users copy this to /scratch)
+#   share/kit/  train.sbatch, tokenize.sbatch, submit.sh, make-quickstart.py, recipes/, configs/  (users copy this to /scratch)
 # Then install the modulefile:  bhaskera/1.0.0.lua  ->  <a MODULEPATH dir>/bhaskera/1.0.0.lua
 #
 # The environment is built at its final path on purpose: Python environments cannot be moved.
@@ -42,6 +42,7 @@ uv pip install -r "$KIT/requirements-paramrudra.lock"
 mkdir -p "$PREFIX/share/kit/recipes"
 cp "$KIT"/train.sbatch "$KIT"/eval.sbatch "$KIT"/serve.sbatch "$KIT"/tokenize.sbatch "$KIT"/submit.sh "$KIT"/make-quickstart.py "$PREFIX/share/kit/"
 cp "$KIT"/recipes/*.yaml "$PREFIX/share/kit/recipes/"
+rm -rf "$PREFIX/share/kit/configs" && cp -r "$PREFIX/src/configs" "$PREFIX/share/kit/configs"      # the text and multimodal starters (configs/multimodal/ddp.yaml ...)
 mkdir -p "$PREFIX/share/kit/clusters" && cp "$KIT"/clusters/*.yaml "$PREFIX/share/kit/clusters/"      # cluster profiles
 chmod +x "$PREFIX/share/kit/submit.sh"
 
