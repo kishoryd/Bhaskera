@@ -82,6 +82,7 @@ logging:
   tracker: mlflow
   project: bhaskera
   run_name: llama-3.3-70b-fsdp
+  mlflow_log_adapter: true         # keep the trained adapter with the run: Chat, Benchmark and Register need it
   mlflow_tracking_uri: ''
   log_gpu_every_n_steps: 10
 monitoring:
