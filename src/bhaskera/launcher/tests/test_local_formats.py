@@ -51,7 +51,7 @@ def rows(n=3):
 
 def test_each_format_is_recognised_by_its_name(loc, tmp_path):
     for name, want in (("a.jsonl", "json"), ("a.json", "json"), ("a.ndjson", "json"), ("a.JSONL", "json"), ("a.parquet", "parquet"), ("a.csv", "csv"),
-                       ("a.tsv", "tsv"), ("a.arrow", "arrow"), ("a.feather", "arrow"), ("a.csv.gz", "csv"), ("a.jsonl.gz", "json"), ("a.txt", ""), ("a.xlsx", "")):
+                       ("a.tsv", "tsv"), ("a.arrow", "arrow"), ("a.feather", "arrow"), ("a.csv.gz", "csv"), ("a.jsonl.gz", "json"), ("a.txt", "text"), ("a.md", "text"), ("a.txt.gz", "text"), ("a.xlsx", "")):
         assert loc._kind(str(tmp_path / name)) == want, name
     d = tmp_path / "hfds"
     d.mkdir()
@@ -61,7 +61,7 @@ def test_each_format_is_recognised_by_its_name(loc, tmp_path):
 
 
 def test_a_folder_is_searched_for_every_supported_format_and_a_saved_dataset_is_one_item(loc, tmp_path):
-    for n in ("train.jsonl", "b.csv", "c.tsv", "d.parquet", "e.arrow", "f.csv.gz", "notes.txt", "x.bin"):
+    for n in ("train.jsonl", "b.csv", "c.tsv", "d.parquet", "e.arrow", "f.csv.gz", "notes.pdf", "x.bin"):
         (tmp_path / n).write_text("x")
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "g.json").write_text("[]")
@@ -143,10 +143,44 @@ def test_arrow_and_saved_datasets_are_read(loc, tmp_path):
 
 
 def test_mixed_formats_and_unknown_files_are_refused_with_the_names(loc, tmp_path):
-    a, b, c = tmp_path / "a.csv", tmp_path / "b.parquet", tmp_path / "c.txt"
+    a, b, c = tmp_path / "a.csv", tmp_path / "b.parquet", tmp_path / "c.pdf"
     for f in (a, b, c):
         f.write_text("x")
     with pytest.raises(ValueError, match="mixed formats"):
         loc._read_files([str(a), str(b)])
     with pytest.raises(ValueError, match="unsupported file"):
         loc._read_files([str(c)])
+
+
+def test_plain_text_is_split_as_asked(loc):
+    body = "first para\nstill first\n\n\n  second para  \n\nthird"
+    assert loc._split_text(body, "file") == [body.strip()]
+    assert loc._split_text(body, "paragraphs") == ["first para\nstill first", "second para", "third"]
+    assert loc._split_text(body, "lines") == ["first para", "still first", "second para", "third"]
+    assert loc._split_text("  \n\n ", "file") == []
+
+
+def test_text_files_become_a_text_column(loc, monkeypatch, tmp_path):
+    (tmp_path / "a.txt").write_text("alpha\n\nbeta")
+    with gzip.open(tmp_path / "b.txt.gz", "wt") as f:
+        f.write("gamma")
+    class Fake:
+        def __init__(self, items): self.items = items
+        def map_batches(self, fn, batch_size=None, batch_format=None):
+            out = []
+            for it in self.items:
+                out.extend(fn({"path": [it["path"]]})["text"])
+            return out
+    monkeypatch.setattr(loc.ray.data, "from_items", lambda items, override_num_blocks=None: Fake(items), raising=False)
+    files = loc._resolve_files(str(tmp_path))
+    assert loc._read_files(files, "file") == ["alpha\n\nbeta", "gamma"]
+    assert loc._read_files(files, "paragraphs") == ["alpha", "beta", "gamma"]
+    with pytest.raises(ValueError, match="text_split"):
+        loc._read_files(files, "words")
+
+
+def test_text_cannot_be_mixed_with_other_formats(loc, tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+    (tmp_path / "b.csv").write_text("text\nx")
+    with pytest.raises(ValueError, match="mixed"):
+        loc._read_files(loc._resolve_files(str(tmp_path)))

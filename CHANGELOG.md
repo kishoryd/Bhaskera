@@ -7,6 +7,10 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 
 ## [Unreleased]
 
+### Plain text, and a recipe for every benchmarked method
+- **Plain text tokenising.** `.txt`, `.text` and `.md` files (optionally `.gz`) are read as documents, with no `data.format` needed. `data.format_options.text_split` says what one example is (`file`, `paragraphs` or `lines`), and `chunk: true` cuts every document into `seq_len` rows ending with the end-of-text token, instead of keeping only the first `seq_len` tokens. Hugging Face datasets that hold only `.txt` files work too (a stray `readme.txt` next to real data files is ignored). Checked on PARAM Rudra with a real tokenizer.
+- **Recipes for the whole benchmark matrix.** `slurm/recipes/` now has a recipe for every model and method that fitted in the benchmark: QLoRA, LoRA + DDP, Pipeline, HSDP and FSDP2 for Qwen3-14B, Qwen3-30B-A3B, Llama 3.3 70B, Mistral Large 123B and Qwen3-235B-A22B (21 recipes; the 4 combinations that ran out of memory have none). A test loads every shipped recipe with the real configuration loader.
+
 ### Full fine-tuning, more data formats, and Hugging Face names
 - **Full fine-tuning in the page.** *What to train* in Create recipe: a small add-on (LoRA, the default) or the whole model. The whole model uses DDP, FSDP2 or HSDP (not QLoRA or Pipeline), a smaller learning rate (1e-5), always keeps its checkpoints (the result is in them), and does not offer Chat, Benchmark or Register, which need an adapter. The disk estimate is corrected: a LoRA or QLoRA checkpoint holds only the trained add-on and its optimizer state (measured about 1 GB for Qwen3-14B), a full fine-tune checkpoint about five times the size of the model.
 - **More data formats for the tokenizer:** JSONL, JSON (lines or one array), CSV, TSV, Parquet, Arrow/Feather, any of them gzipped, and Hugging Face datasets saved to disk. A CSV or TSV cell that holds a list (`messages`, `conversations`) as JSON text is decoded.

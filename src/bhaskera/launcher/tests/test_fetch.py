@@ -68,11 +68,20 @@ def test_test_is_used_when_there_is_no_validation_part_and_a_single_file_is_all_
 
 
 def test_folders_named_after_the_split_count_and_every_supported_format_is_found(tmp_path):
-    make_files(tmp_path, ["train/a.csv", "train/b.csv.gz", "val/a.csv", "x/readme.txt"])
+    make_files(tmp_path, ["train/a.csv", "train/b.csv.gz", "val/a.csv", "x/paper.pdf"])
     train, val = fetch.make_splits(tmp_path)
     assert len(list(train.iterdir())) == 2 and len(list(val.iterdir())) == 1
     with pytest.raises(dl.DownloadError, match="no data files"):
         fetch.make_splits(tmp_path / "x")
+
+
+def test_plain_text_is_data_only_when_there_is_nothing_else(tmp_path):
+    make_files(tmp_path / "t", ["train.txt", "val.txt", "LICENSE.txt"])
+    train, val = fetch.make_splits(tmp_path / "t")
+    assert sorted(f.name[5:] for f in train.iterdir()) == ["train.txt"] and [f.name[5:] for f in val.iterdir()] == ["val.txt"]
+    make_files(tmp_path / "m", ["train.csv", "notes.txt"])
+    train, _ = fetch.make_splits(tmp_path / "m")
+    assert [f.name[5:] for f in train.iterdir()] == ["train.csv"]
 
 
 def test_splitting_again_replaces_the_links(tmp_path):

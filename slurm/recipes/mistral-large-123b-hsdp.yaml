@@ -1,0 +1,103 @@
+# Bhaskera recipe: mistral-large-123b-hsdp
+# Model    : mistralai/Mistral-Large-Instruct-2411   (download to /scratch/<project>/<username>/models/Mistral-Large-Instruct-2411)
+# Strategy : HSDP (shard group of 16 GPUs)
+# Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):
+#            11.8% MFU, 13.4 days/epoch on 8 nodes, 35.2 h on 128 nodes, 50 GB/GPU
+# Nodes    : a multiple of 8 (shard group of 16 GPUs)
+#
+# Before use: replace every <project>/<username>, and set data.tokenized_path /
+# data.val_tokenized_path to the two lines printed by the tokenize job.
+# max_steps is 10, so a first job finishes in minutes. For a full run set it to:
+#   max_steps = (training-set tokens) / (tok/s x step_s from the [step] log line)
+# Run with:  ./submit.sh recipes/mistral-large-123b-hsdp.yaml <nodes> <hours>
+model:
+  name: /scratch/<project>/<username>/models/Mistral-Large-Instruct-2411
+  dtype: bfloat16
+  attn_impl: flash_attention_2
+  trust_remote_code: false
+  use_liger_kernel: true
+data:
+  name: local
+  seq_len: 4096
+  num_workers: 16
+  tokenized_path: /scratch/<project>/<username>/cache/REPLACE_local_train_<hash>
+  val_tokenized_path: /scratch/<project>/<username>/cache/REPLACE_local_val_<hash>
+  prefetch_batches: 2
+  local_shuffle_buffer_multiplier: 10
+  runtime_packing: true
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+  - auto
+  include_experts: false
+  freeze_router: true
+  modules_to_save: []
+training:
+  batch_size: 1
+  grad_accum: 1
+  lr: 0.0001
+  weight_decay: 0.0
+  max_steps: 10
+  num_epochs: 1
+  warmup_steps: 50
+  max_grad_norm: 1.0
+  grad_clip: 1.0
+  max_grad_skip_steps: 100
+  seed: 42
+  deterministic: false
+  eval_steps: 200
+  eval_batch_size: 1
+  target_eval_loss: null
+  distributed:
+    strategy: fsdp
+    fsdp:
+      sharding_strategy: HYBRID_SHARD
+      transformer_layer_cls: []
+      param_dtype: bfloat16
+      reduce_dtype: bfloat16
+      buffer_dtype: bfloat16
+      activation_checkpointing: true
+      cpu_offload: false
+      shard_experts_individually: false
+      root_reshard_after_forward: false
+      forward_prefetch: true
+      backward_prefetch: true
+      hsdp_shard_size: 16
+    ddp:
+      find_unused_parameters: false
+      gradient_as_bucket_view: true
+      broadcast_buffers: false
+      activation_checkpointing: true
+      static_graph: false
+  eval_max_rows: 1000
+checkpoint:
+  enabled: true
+  save_dir: /scratch/<project>/<username>/bhaskera-runs/checkpoints/mistral-large-123b-hsdp
+  save_interval: 1
+  save_every_steps: 500
+  keep_last_n: 2
+logging:
+  tracker: mlflow
+  project: bhaskera
+  run_name: mistral-large-123b-hsdp
+  mlflow_tracking_uri: ''
+  log_gpu_every_n_steps: 10
+monitoring:
+  dashboard: true
+  dashboard_host: 127.0.0.1
+  dashboard_port: 8265
+  metrics_export_port: 8080
+  metrics:
+    enabled: true
+    system_every_n_steps: 1
+    cuda_every_n_steps: 2
+    gpu: true
+    cpu: true
+    cuda_memory: true
+    throughput: true
+    peak_tflops_per_gpu: 312.0
+    throughput_window: 5
+    throughput_warmup: 5

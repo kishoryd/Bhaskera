@@ -9,7 +9,7 @@ In the `data` section of a recipe:
 | Key | Meaning |
 |---|---|
 | `name` | `local` for your own files, or a built-in: `ultrachat`, `openassistant`, `redpajama` |
-| `train_path`, `val_path` | A file, a folder, or a glob of `.jsonl`, `.json` or `.parquet` (one kind per path) |
+| `train_path`, `val_path` | A file, a folder, or a glob of `.jsonl`, `.json`, `.csv`, `.tsv`, `.parquet`, `.arrow` or plain text `.txt` (one kind per path). Plain text: `format_options: {text_split: file|paragraphs|lines, chunk: true}` |
 | `format` | How a row becomes text: `chatml`, `alpaca`, `sharegpt`, or your own. `format_options` passes settings to it |
 | `seq_len` | Tokens per row |
 | `cache_dir`, `overwrite_cache` | Where the tokenised cache goes, and whether to redo it |

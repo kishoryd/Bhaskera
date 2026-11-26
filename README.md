@@ -44,7 +44,7 @@ rows that are too long.
 
 ## Recipes and starter configs
 
-`slurm/recipes/` has eleven tested recipes for nine models (Qwen3, Llama 3.3, Mistral Large, BharatGen Param), each with
+`slurm/recipes/` has 24 recipes: the five benchmarked models (Qwen3-14B, Qwen3-30B-A3B, Llama 3.3 70B, Mistral Large 123B, Qwen3-235B-A22B) with every method that fits them (QLoRA, LoRA + DDP, Pipeline, HSDP, FSDP2), plus the BharatGen Param models and a tokenise recipe, each with
 its measured speed in the header. For a model that is not there, copy a starter from `configs/`: DDP, FSDP2, HSDP and pipeline for text models, and image, video
 and audio for multimodal ones, each with its tokenizer config. `configs/config.yaml` lists every option. A key
 that does nothing, like a typo, is reported with the closest real name.

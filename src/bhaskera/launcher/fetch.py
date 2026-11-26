@@ -37,6 +37,7 @@ PLAN_ONLY = 10                      # exit code when only a plan was asked for (
 _TRAIN = {"train", "training"}
 _VAL_ORDER = ({"validation", "valid", "val"}, {"dev"}, {"test"})
 _EXTS = (".jsonl", ".json", ".ndjson", ".parquet", ".csv", ".tsv", ".arrow", ".feather")
+_TEXT = (".txt", ".text")            # plain text counts only when the dataset has nothing else (a stray readme.txt is not data)
 MARKER = ".bhaskera_fetched.json"
 
 
@@ -105,10 +106,11 @@ def _words(path: Path) -> set[str]:
 def make_splits(dest: Path) -> tuple[Path, Optional[Path]]:
     """Sort a downloaded dataset's files into <dest>/_splits/train and _splits/val (links, nothing is copied).
     Returns (train folder, validation folder or None). Without any train-named file, every file is training data."""
-    files = [f for f in sorted(dest.rglob("*")) if f.is_file() and "_splits" not in f.parts and not f.name.startswith(".") and
-             (f.name.lower().removesuffix(".gz").endswith(_EXTS))]
+    every = [f for f in sorted(dest.rglob("*")) if f.is_file() and "_splits" not in f.parts and not f.name.startswith(".")]
+    ends = lambda f, exts: f.name.lower().removesuffix(".gz").endswith(exts)
+    files = [f for f in every if ends(f, _EXTS)] or [f for f in every if ends(f, _TEXT)]
     if not files:
-        raise downloads.DownloadError(f"{dest} has no data files of a supported format ({', '.join(_EXTS)}, optionally .gz)")
+        raise downloads.DownloadError(f"{dest} has no data files of a supported format ({', '.join(_EXTS + _TEXT)}, optionally .gz)")
     rel = {f: _words(f.relative_to(dest)) for f in files}
     is_val = lambda f: any(rel[f] & group for group in _VAL_ORDER)
     train = [f for f in files if rel[f] & _TRAIN] or [f for f in files if not is_val(f)] or files        # train-named files, else all that are not validation, else all

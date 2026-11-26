@@ -1,8 +1,13 @@
 """
 bhaskera.data.datasets.local_chat
 =================================
-Generic dataset builder for *local* files: JSONL, JSON (lines or one array), CSV, TSV, Parquet, Arrow/Feather, any of them gzipped
-(.gz), and Hugging Face datasets saved to disk.
+Generic dataset builder for *local* files: JSONL, JSON (lines or one array), CSV, TSV, Parquet, Arrow/Feather, plain text (.txt, .md),
+any of them gzipped (.gz), and Hugging Face datasets saved to disk.
+
+Plain text needs no ``format``: each file is read into a ``text`` column. ``data.format_options`` then says how (both are optional):
+
+    text_split: file          # file (default: one document per file) | paragraphs (blank-line separated) | lines (one per line)
+    chunk: true               # cut every document into seq_len pieces instead of keeping only the first seq_len tokens (see data/tokenize.py)
 
 Reads from a path you specify in YAML and forwards everything else to the
 existing tokenizer pipeline. The ``format`` column determines how rows are
@@ -49,7 +54,9 @@ _PARQUET_EXTS = (".parquet",)
 _CSV_EXTS     = (".csv",)
 _TSV_EXTS     = (".tsv",)
 _ARROW_EXTS   = (".arrow", ".feather")
-_ALL_EXTS     = _JSON_EXTS + _PARQUET_EXTS + _CSV_EXTS + _TSV_EXTS + _ARROW_EXTS
+_TEXT_EXTS    = (".txt", ".text", ".md")
+_ALL_EXTS     = _JSON_EXTS + _PARQUET_EXTS + _CSV_EXTS + _TSV_EXTS + _ARROW_EXTS + _TEXT_EXTS
+TEXT_SPLITS   = ("file", "paragraphs", "lines")
 _STRUCTURED   = ("messages", "conversations")      # columns that hold a list: a CSV or TSV cell holds it as JSON text
 
 
@@ -60,11 +67,11 @@ def _base(f: str) -> str:
 
 
 def _kind(f: str) -> str:
-    """json | parquet | csv | tsv | arrow | hf (a Hugging Face dataset saved to disk) | '' (not supported)."""
+    """json | parquet | csv | tsv | arrow | text | hf (a Hugging Face dataset saved to disk) | '' (not supported)."""
     if Path(f).is_dir() and _is_hf_disk(Path(f)):
         return "hf"
     b = _base(f)
-    for kind, exts in (("json", _JSON_EXTS), ("parquet", _PARQUET_EXTS), ("csv", _CSV_EXTS), ("tsv", _TSV_EXTS), ("arrow", _ARROW_EXTS)):
+    for kind, exts in (("json", _JSON_EXTS), ("parquet", _PARQUET_EXTS), ("csv", _CSV_EXTS), ("tsv", _TSV_EXTS), ("arrow", _ARROW_EXTS), ("text", _TEXT_EXTS)):
         if b.endswith(exts):
             return kind
     return ""
@@ -131,8 +138,39 @@ def _from_pandas(df):
     return ray.data.from_pandas(_decode_structured(df))
 
 
-def _read_files(files: List[str]) -> ray.data.Dataset:
-    """Read the files with Ray Data, whatever their format: JSONL, JSON arrays, CSV, TSV, Parquet, Arrow, a saved Hugging Face dataset."""
+def _split_text(body: str, how: str) -> List[str]:
+    """One file's text as documents: the whole file, its blank-line separated paragraphs, or its lines. Empty pieces are dropped."""
+    import re
+    if how == "lines":
+        parts = body.splitlines()
+    elif how == "paragraphs":
+        parts = re.split(r"\n\s*\n", body.replace("\r\n", "\n"))
+    else:
+        parts = [body]
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _read_text(files: List[str], how: str) -> ray.data.Dataset:
+    """Plain text files -> rows with one column, ``text``. Each file is read by a Ray task of its own, so a big corpus is never held by one process."""
+    if how not in TEXT_SPLITS:
+        raise ValueError(f"data.format_options.text_split is {how!r}; use one of {', '.join(TEXT_SPLITS)}")
+
+    def read(batch: dict) -> dict:
+        import gzip
+        out: List[str] = []
+        for f in batch["path"]:
+            opener = gzip.open if str(f).lower().endswith(".gz") else open
+            with opener(f, "rt", encoding="utf-8", errors="replace") as fh:
+                out.extend(_split_text(fh.read(), how))
+        return {"text": out}
+
+    paths = ray.data.from_items([{"path": f} for f in files], override_num_blocks=min(len(files), 64))
+    ds = paths.map_batches(read, batch_size=1, batch_format="numpy")
+    return ds
+
+
+def _read_files(files: List[str], text_split: str = "file") -> ray.data.Dataset:
+    """Read the files with Ray Data, whatever their format: JSONL, JSON arrays, CSV, TSV, Parquet, Arrow, plain text, a saved Hugging Face dataset."""
     kinds = {f: _kind(f) for f in files}
     bad = [f for f, k in kinds.items() if not k]
     if bad:
@@ -141,6 +179,8 @@ def _read_files(files: List[str]) -> ray.data.Dataset:
     if len(found) > 1 and not (set(found) <= {"json"}):
         raise ValueError(f"mixed formats in one local dataset path ({', '.join(found)}). Keep one format per path.")
     kind = found[0]
+    if kind == "text":
+        return _read_text(files, text_split)
     if kind == "parquet":
         return ray.data.read_parquet(files)
     if kind == "json":
@@ -218,7 +258,7 @@ def _path_for_split(cfg, split: Optional[str]) -> str:
     if not chosen:
         raise ValueError(
             "data.train_path (or data.path) must be set for the local dataset. "
-            "Point it at a data file (JSONL, JSON, CSV, TSV, Parquet, Arrow), a directory, or a glob."
+            "Point it at a data file (JSONL, JSON, CSV, TSV, Parquet, Arrow, plain text), a directory, or a glob."
         )
     return chosen
 
@@ -238,7 +278,8 @@ def _build_raw(cfg, split: Optional[str] = None) -> ray.data.Dataset:
         f"local dataset: split={split!r} path={path!r} "
         f"-> {len(files)} file(s)"
     )
-    return _read_files(files)
+    opts = getattr(cfg.data, "format_options", None) or {}
+    return _read_files(files, str(opts.get("text_split", "file")))
 
 
 @register("local")

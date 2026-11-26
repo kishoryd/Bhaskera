@@ -468,6 +468,33 @@ class TokenizerActor:
             )
         return texts
 
+    def _chunked(self, texts) -> dict:
+        """data.format_options.chunk: every document becomes as many seq_len rows as it needs, instead of being cut to the first seq_len tokens.
+
+        Each document ends with the end-of-text token (when the tokenizer has one) so the model learns where documents stop; the last piece
+        is padded and its padding is masked out of the loss, like any other row."""
+        eos = self.tokenizer.eos_token_id
+        ids = self.tokenizer(list(texts), truncation=False, padding=False)["input_ids"]
+        rows: list = []
+        for doc in ids:
+            doc = list(doc)
+            if eos is not None and (not doc or doc[-1] != eos):
+                doc.append(eos)
+            rows.extend(doc[i:i + self.seq_len] for i in range(0, len(doc), self.seq_len))
+        n = len(rows)
+        if n == 0:
+            dummy = np.zeros((1, self.seq_len), dtype=np.int32)
+            return {"input_ids": dummy, "attention_mask": dummy, "labels": np.full_like(dummy, -100)}
+        pad = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        input_ids = np.full((n, self.seq_len), pad, dtype=np.int64)
+        mask = np.zeros((n, self.seq_len), dtype=np.int64)
+        for r, row in enumerate(rows):
+            input_ids[r, :len(row)] = row
+            mask[r, :len(row)] = 1
+        labels = input_ids.copy()
+        labels[mask == 0] = -100
+        return {"input_ids": input_ids, "attention_mask": mask, "labels": labels}
+
     def __call__(self, batch: dict) -> dict:
         if self.format_name:
             texts = self._render_batch(batch)
@@ -475,6 +502,9 @@ class TokenizerActor:
             texts = batch[self.text_col]
             if hasattr(texts, "tolist"):
                 texts = texts.tolist()
+
+        if self.format_options.get("chunk"):
+            return self._chunked(texts)
 
         out = self.tokenizer(
             texts,
