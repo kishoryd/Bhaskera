@@ -317,7 +317,7 @@ def _parse_args() -> argparse.Namespace:
         help="Which split(s) to tokenize. 'none' disables split handling. "
              "Only meaningful for the 'local' dataset.")
     p.add_argument("--format", type=str, default=None,
-        help="Format renderer name: chatml | alpaca | sharegpt | <custom>. "
+        help="Format renderer name: chatml | alpaca | sharegpt | prompt_completion | <custom>. "
              "Overrides config.data.format.")
     p.add_argument("--train-path", type=str, default=None,
         help="Path/dir/glob for train data (overrides config.data.train_path)")

@@ -198,3 +198,29 @@ def render_sharegpt(row: dict, tokenizer: Any, options: dict) -> str:
         messages.append({"role": role, "content": c.get("value", "") or ""})
 
     return _apply_chat_template_safe(tokenizer, messages)
+
+
+# Prompt and completion
+
+@register_format("prompt_completion")
+def render_prompt_completion(row: dict, tokenizer: Any, options: dict) -> str:
+    """
+    Rows with a prompt column and a completion column (the layout of OpenAI's legacy fine-tuning files, and of many question/answer sets).
+
+    options:
+      * prompt_field: str — column name of the prompt (default "prompt")
+      * completion_field: str — column name of the completion (default "completion")
+      * separator: str — text placed between them (default "\n")
+      * use_chat_template: bool — render as a 2-turn chat (user=prompt, assistant=completion) with the model's chat template instead
+        of joining the two with the separator. Default False.
+
+    Other question/answer layouts need only the two column names, for example ``{prompt_field: question, completion_field: answer}``
+    or ``{prompt_field: instruction, completion_field: response}``.
+    """
+    prompt     = str(row.get(options.get("prompt_field", "prompt"), "") or "")
+    completion = str(row.get(options.get("completion_field", "completion"), "") or "")
+    if not prompt and not completion:
+        return ""
+    if options.get("use_chat_template", False):
+        return _apply_chat_template_safe(tokenizer, [{"role": "user", "content": prompt}, {"role": "assistant", "content": completion}])
+    return prompt + str(options.get("separator", "\n")) + completion

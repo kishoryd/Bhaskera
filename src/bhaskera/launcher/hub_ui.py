@@ -1460,7 +1460,7 @@ function recipeForm(o){
          '<input id="f-rawtrain" type="text" value="'+esc(r.raw.train)+'" placeholder="training file: /path/to/train.jsonl" style="margin-top:8px">'+
          '<input id="f-rawval" type="text" value="'+esc(r.raw.val)+'" placeholder="validation file (optional)" style="margin-top:6px">'+
          (multi?'<input id="f-rawmedia" type="text" value="'+esc(r.raw.media)+'" placeholder="folder the media paths in the file are relative to (optional)" style="margin-top:6px">':"")+
-         '<div class="chips" style="margin-top:8px">'+["chatml","alpaca","sharegpt"].map(function(f){return chip(f,r.raw.format===f,'data-fmt="'+f+'"')}).join("")+
+         '<div class="chips" style="margin-top:8px">'+["chatml","alpaca","sharegpt","prompt_completion"].map(function(f){return chip(f,r.raw.format===f,'data-fmt="'+f+'"')}).join("")+
          '<label class="muted">Sequence length <input id="f-rawseq" type="number" min="128" value="'+esc(r.raw.seq)+'" placeholder="'+(multi?"1280":"4096")+'"></label>'+
          '<button class="btn small" id="f-rawgo" type="button">Prepare data</button></div></div>';
     }

@@ -65,6 +65,8 @@ def has_answer(row: dict, fmt: str) -> bool:
     if fmt == "sharegpt":
         return any(isinstance(m, dict) and m.get("from") in ("gpt", "assistant") and str(m.get("value", "")).strip()
                    for m in row.get("conversations") or [])
+    if fmt == "prompt_completion":
+        return bool(str(row.get("completion", "")).strip())
     return True
 
 
@@ -216,7 +218,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         sp.add_argument("input")
         if out:
             sp.add_argument("output")
-        sp.add_argument("--format", default="chatml", help="chatml (default), alpaca or sharegpt")
+        sp.add_argument("--format", default="chatml", help="chatml (default), alpaca, sharegpt or prompt_completion")
         sp.add_argument("--tokenizer", help="model folder: exact token counts")
 
     i = sub.add_parser("inspect")

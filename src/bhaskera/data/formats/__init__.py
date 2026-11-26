@@ -17,6 +17,7 @@ Built-in formats (see ``builtins.py``):
   * "chatml"    — rows have ``messages: [{role, content}, ...]``
   * "alpaca"    — rows have ``instruction``, optional ``input``, ``output``
   * "sharegpt"  — rows have ``conversations: [{from, value}, ...]``
+  * "prompt_completion" — rows have ``prompt`` and ``completion`` (other column names: ``prompt_field`` / ``completion_field``)
 
 Adding your own (no repo changes — drop a file anywhere your code imports):
 
