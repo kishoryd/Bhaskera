@@ -82,7 +82,7 @@ def fetch_repo(kind: str, repo: str, rev: str, say=print) -> Path:
     say(f"downloading {kind} {repo} ({rev}): {info['bytes'] / 2**30:.1f} GB in {info['files']} files -> {dest}"
         + (f", on {info['via']} (this machine has no internet)" if info.get("via") else ""))
     if info.get("gated"):
-        say("note: this repository asks you to accept its licence on huggingface.co and to sign in (the Downloads menu of the home page)")
+        say("note: this repository asks you to accept its licence on huggingface.co and to sign in (the Downloads menu of the dashboard)")
     try:
         diskguard.require(dest, info["bytes"], "this download", margin=1.05)
     except diskguard.DiskError as e:

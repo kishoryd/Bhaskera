@@ -4,7 +4,7 @@
     ./submit.sh serve --model <base folder> --adapter <adapter folder>
     python -m bhaskera.launcher.serve --model <base> --adapter <adapter> --port 8000      # directly, on a node with a GPU
 
-The home page (``bhaskera-dashboard ray``) links the running server and shows a chat window for it. The same question can
+The dashboard (``bhaskera-dashboard ray``) links the running server and shows a chat window for it. The same question can
 be sent to the tuned model, to the base model, or to both side by side: the base answer comes from the same weights with the
 adapter switched off, so no second copy is loaded.
 
@@ -19,7 +19,7 @@ A message's ``content`` is text, or for a model that reads images, video or audi
 ``[{"type": "text", "text": "What is in this?"}, {"type": "image", "data": "<base64 or data: URL>"}]`` (also ``video`` and ``audio``).
 /health lists what the model accepts under ``modalities``. Each file is checked against its own type and size before it is decoded.
 
-It listens on 127.0.0.1 only and serves only connections from the user who started it (see hub_guard.py); the home page
+It listens on 127.0.0.1 only and serves only connections from the user who started it (see hub_guard.py); the dashboard
 reaches it through an SSH link. One answer is generated at a time; others wait their turn.
 """
 from __future__ import annotations
@@ -61,7 +61,7 @@ def adapter_label(path: Optional[str]) -> Optional[str]:
 
 
 def port_for_job(job_id: str | int, base: int = 8000) -> int:
-    """The port a serve job listens on, so the home page can find it from the job id alone."""
+    """The port a serve job listens on, so the dashboard can find it from the job id alone."""
     try:
         return base + int(job_id) % 1000
     except (TypeError, ValueError):

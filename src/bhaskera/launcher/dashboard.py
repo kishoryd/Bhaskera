@@ -114,7 +114,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def cmd_start(cfg: DashboardConfig, show_tunnel: bool = True) -> None:
-    """Start the MLflow UI as a detached background process. ``show_tunnel`` False when the home page links MLflow itself."""
+    """Start the MLflow UI as a detached background process. ``show_tunnel`` False when the dashboard links MLflow itself."""
     pid = _read_pid()
     if pid and _pid_alive(pid):
         print(f"MLflow UI is already running (PID {pid}). Use 'bhaskera-dashboard status'.")
@@ -592,7 +592,7 @@ def _start_portal_mlflow(cfg: DashboardConfig, prefix: str) -> Optional[tuple]:
 
 
 def cmd_portal(cfg: DashboardConfig, bind: str, port: int) -> None:
-    """The home page for use behind a web portal (Open OnDemand): reached over the network, protected by a session token that only
+    """The dashboard for use behind a web portal (Open OnDemand): reached over the network, protected by a session token that only
     the portal's own link carries (BHASKERA_HUB_TOKEN). MLflow's pages are served inside the same tab; the Ray Dashboard, which cannot
     live under a path prefix, is not offered (the page shows the same job numbers itself)."""
     token = os.environ.get("BHASKERA_HUB_TOKEN", "")

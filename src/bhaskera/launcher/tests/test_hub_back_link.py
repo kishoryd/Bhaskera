@@ -1,4 +1,4 @@
-"""The hub adds a link back to the home page to the MLflow and Ray Dashboard pages it relays, and nothing else."""
+"""The hub adds a link back to the dashboard to the MLflow and Ray Dashboard pages it relays, and nothing else."""
 from __future__ import annotations
 
 import http.client

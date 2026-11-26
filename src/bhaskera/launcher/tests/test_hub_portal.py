@@ -1,4 +1,4 @@
-"""The home page behind a web portal: reached over the network, protected by a session token, working under any path prefix."""
+"""The dashboard behind a web portal: reached over the network, protected by a session token, working under any path prefix."""
 from __future__ import annotations
 
 import base64

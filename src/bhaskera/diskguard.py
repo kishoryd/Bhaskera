@@ -89,7 +89,7 @@ def note(path, need_one: int, need_all: int, keep: int) -> str:
 
 
 def run_folder_status(folder: Optional[Path]) -> Optional[dict]:
-    """{'path', 'free_gb', 'low'} for the disk of a run folder, for the home page; None when unknown."""
+    """{'path', 'free_gb', 'low'} for the disk of a run folder, for the dashboard; None when unknown."""
     if not folder:
         return None
     try:

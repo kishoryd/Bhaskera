@@ -2,7 +2,7 @@
 
 The run folder is ``$BHASKERA_WORKDIR`` (``submit.sh`` exports it for every job), else the current folder when it has a ``submit.sh``. Inside it:
 
-    recipes/  checkpoints/  cache/  logs/  tasks/     made by the commands and the home page
+    recipes/  checkpoints/  cache/  logs/  tasks/     made by the commands and the dashboard
     mlflow-runs/                                      the MLflow store: runs, adapters, evaluation samples and the model registry
     .bhaskera/                                        small settings (saved MLflow port, faulty nodes, an optional cluster profile) and training logs
     .cache/huggingface/                               benchmark data for offline evaluation

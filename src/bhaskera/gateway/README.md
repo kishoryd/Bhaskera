@@ -1,6 +1,6 @@
 # gateway
 
-Planned, not built. One front door for every user of a cluster: sign in with the cluster login (LDAP), then reach your own copy of the home page.
+Planned, not built. One front door for every user of a cluster: sign in with the cluster login (LDAP), then reach your own copy of the dashboard.
 The plan, the choices and the questions for the admins are in [docs/central-service/DESIGN.md](../../../docs/central-service/DESIGN.md).
 
 ## What you will control

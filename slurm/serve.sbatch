@@ -3,7 +3,7 @@
 # Normally started by ./submit.sh, which picks the partition and time limit for you:
 #     ./submit.sh serve --run <mlflow run id>
 #     ./submit.sh serve --model <base folder> --adapter <adapter folder>
-# The Bhaskera home page (bhaskera-dashboard ray) links the server by itself and shows a chat window for it.
+# The Bhaskera dashboard (bhaskera-dashboard ray) links the server by itself and shows a chat window for it.
 # The server stops when the time limit ends (SERVE_HOURS, default 2) or when you cancel the job.
 #
 # The #SBATCH lines are defaults for submitting this file by hand; ./submit.sh overrides them from the cluster profile.

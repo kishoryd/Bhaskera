@@ -1,4 +1,4 @@
-"""What the Bhaskera home page shows: your jobs with live training numbers, their nodes, recent MLflow runs,
+"""What the Bhaskera dashboard shows: your jobs with live training numbers, their nodes, recent MLflow runs,
 partition limits and faulty nodes.
 
 Everything is read from places that already exist (Slurm, the job log, the Ray Dashboard of each running job, the

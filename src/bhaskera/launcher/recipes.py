@@ -1,6 +1,6 @@
 """Create a training recipe from a few plain choices, instead of writing the YAML by hand.
 
-The home page's *Create a recipe* card calls this. It asks for what a person knows (the model folder, the method, the tokenised data,
+The dashboard's *Create a recipe* card calls this. It asks for what a person knows (the model folder, the method, the tokenised data,
 how long to train) and fills in the rest from sensible defaults, writes ``recipes/<name>.yaml`` next to ``submit.sh``, and checks
 the result with the same loader the training job uses, so a recipe it writes loads without warnings. It never overwrites a file.
 
@@ -526,7 +526,7 @@ def apply_settings(recipe: dict, settings) -> None:
 
 def render(recipe: dict, note: str = "") -> str:
     import yaml
-    head = ["# Written by the Bhaskera home page (Create a recipe). Edit it freely: the job reads it again every time it starts.",
+    head = ["# Written by the Bhaskera dashboard (Create a recipe). Edit it freely: the job reads it again every time it starts.",
             "# Run it with:  ./submit.sh recipes/<this file> <nodes> <hours>"]
     if note:
         head.append(f"# {note}")
@@ -607,6 +607,6 @@ def tokenize_recipe(form: dict, workdir: Path) -> tuple[str, str]:
             data["media_root"] = root
         data["loss_on"] = "assistant"
     import yaml
-    text = ("# Written by the Bhaskera home page (Prepare data): tokenises your files once. The training recipe then uses the cache it makes.\n"
+    text = ("# Written by the Bhaskera dashboard (Prepare data): tokenises your files once. The training recipe then uses the cache it makes.\n"
             + yaml.safe_dump({"model": {"name": model, "trust_remote_code": needs_remote_code(model), **({"kind": "multimodal"} if multi else {})}, "data": data}, sort_keys=False))
     return f"tokenize-{name}.yaml", text

@@ -19,7 +19,7 @@ On PARAM Rudra the module has everything:
 
 ```bash
 module load bhaskera/1.0.0
-cp -r $BHASKERA_KIT ~/bhaskera-runs && cd ~/bhaskera-runs        # or any folder you choose; the home page makes ~/bhaskera-runs for you if you skip this
+cp -r $BHASKERA_KIT ~/bhaskera-runs && cd ~/bhaskera-runs        # or any folder you choose; the dashboard makes ~/bhaskera-runs for you if you skip this
 
 ./submit.sh recipes/qwen3-14b-qlora.yaml 8 1     # recipe, nodes, hours
 ```
@@ -78,7 +78,7 @@ Everything you create stays in the folder you set up, the one that holds `submit
 using them until a copy or a link of the same name exists in the run folder (`ln -s ~/mlflow-runs mlflow-runs` brings them in with nothing moved). `MLFLOW_TRACKING_URI` overrides the MLflow place.
 Shared models and prepared data (`BHASKERA_MODELS`, `BHASKERA_DATA`) are read-only copies kept by the administrators.
 
-## The home page
+## The dashboard
 
 ```bash
 bhaskera-dashboard ray
@@ -128,8 +128,8 @@ For all users of a cluster, `slurm/install-bhaskera.sh` builds a shared install 
 
 ## Security
 
-The home page is private to your user, MLflow and the Ray Dashboard listen on the local machine only, and the Ray Dashboard is
-read-only through the home page. [SECURITY.md](SECURITY.md) says what is protected and how to report a problem.
+The dashboard is private to your user, MLflow and the Ray Dashboard listen on the local machine only, and the Ray Dashboard is
+read-only through the dashboard. [SECURITY.md](SECURITY.md) says what is protected and how to report a problem.
 
 ## Known limits
 
@@ -143,7 +143,7 @@ environment variables named in `src/bhaskera/launcher/README.md`, and your data.
 folder it belongs to: `data/`, `models/`, `distributed/`, `trainer/` and `utils/` under `src/bhaskera/`.
 
 **Handled for you:** starting Ray on the nodes Slurm gives you, finding the layers LoRA and the parallel strategies need, sharding,
-checkpoint writing and resuming, node checks, choosing the partition, and the home page. These are in `src/bhaskera/`, and you do not
+checkpoint writing and resuming, node checks, choosing the partition, and the dashboard. These are in `src/bhaskera/`, and you do not
 need to touch them.
 
 `scripts/` has a few tools: multimodal sample data, adapter export, and the MXFP4 converter. The history is in

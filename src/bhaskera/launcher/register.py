@@ -10,7 +10,7 @@ the registry shows what each version is. An alias such as ``champion`` points at
 ``list`` shows every model with its versions and aliases. ``resolve`` turns ``name``, ``name:3`` or ``name@champion`` into the training
 run behind it: ``./submit.sh serve --run name@champion`` and ``./submit.sh eval --run name:3`` accept the same names.
 
-The registry is part of the MLflow store (``~/mlflow-runs`` by default), so the home page's *Models* link shows it.
+The registry is part of the MLflow store (``~/mlflow-runs`` by default), so the dashboard's *Models* link shows it.
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def model_card(run, run_id: str, note: str = "") -> str:
 def add(client, run_id: str, name: str, alias: Optional[str] = None, note: str = "") -> dict:
     """Register the adapter stored with a run as a new version of ``name``; point ``alias`` at it when given."""
     if not RUN_ID.match(run_id or ""):
-        raise RegisterError("give the 32-character MLflow run id (the home page lists it, and `evaluate`/`serve` use the same id)")
+        raise RegisterError("give the 32-character MLflow run id (the dashboard lists it, and `evaluate`/`serve` use the same id)")
     if not NAME.match(name or ""):
         raise RegisterError("a model name is letters, digits, _, - and . (at most 64), starting with a letter or digit")
     if alias and not ALIAS.match(alias):

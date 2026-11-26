@@ -1,4 +1,4 @@
-"""What the home page shows: parsing the job log, the MLflow store, the combined state and the endpoints."""
+"""What the dashboard shows: parsing the job log, the MLflow store, the combined state and the endpoints."""
 from __future__ import annotations
 
 import http.client

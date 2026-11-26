@@ -1,4 +1,4 @@
-"""Guards for the home page and the proxy behind it (ray_hub.py).
+"""Guards for the dashboard and the proxy behind it (ray_hub.py).
 
 The hub runs on a login node that many users share, and it is opened from a laptop browser that also visits other
 web sites. Three things protect it:
@@ -90,7 +90,7 @@ def same_user_peer(client: tuple, server: tuple, uid: Optional[int] = None, proc
 
 
 def with_back_link(page: bytes, host: str) -> bytes:
-    """An HTML page with a small link back to the home page (the address it was opened from, without the job or MLflow
+    """An HTML page with a small link back to the dashboard (the address it was opened from, without the job or MLflow
     prefix) added before </body>. The page is returned unchanged when it is not text we can extend."""
     m = re.match(r"^[^:]+:(\d{1,5})$", (host or "").strip())
     port = f":{m.group(1)}" if m else ""

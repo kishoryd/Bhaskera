@@ -33,7 +33,7 @@ if [[ -n "$SKIP" ]]; then
     [[ "$SKIP" != "${BHASKERA_EXCLUDE:-}" ]] && echo "skipping nodes that failed before: ${SKIP}"
 fi
 
-# DRY_RUN=1 runs every check (partition limits, preflight) and stops before sbatch; the home page's "Check first" uses it.
+# DRY_RUN=1 runs every check (partition limits, preflight) and stops before sbatch; the dashboard's "Check first" uses it.
 sb() {
     if [[ "${DRY_RUN:-0}" == 1 ]]; then echo "dry run: every check passed; nothing was submitted" >&2; echo "dry"; else sbatch --parsable "$@"; fi
 }
@@ -87,7 +87,7 @@ if [[ "${1:-}" == "eval" || "${1:-}" == "serve" ]]; then
         echo "follow it:  tail -f logs/bhaskera-eval_${jid}.out"
     else
         echo "submitted job $jid: chat server, ${part:+$part, }${hours} h"
-        echo "Loading the model takes a few minutes. Then open the Bhaskera home page (bhaskera-dashboard ray): the chat window appears."
+        echo "Loading the model takes a few minutes. Then open the Bhaskera dashboard (bhaskera-dashboard ray): the chat window appears."
         echo "follow it:  tail -f logs/bhaskera-serve_${jid}.out"
     fi
     exit

@@ -1,7 +1,7 @@
 """Download a model or a dataset from Hugging Face into a folder you choose, and sign in with your Hugging Face key.
 
 Compute nodes have no internet, so models and data have to be on disk before a job starts. This runs on the machine that serves
-the home page (a login node), as the user, and writes into the folder the user names.
+the dashboard (a login node), as the user, and writes into the folder the user names.
 
 * The repository name is checked against Hugging Face's own format, and only Hugging Face is contacted: the page never takes a web address.
 * The folder must be a full path the user can write to. System folders are refused, and the operating system's permissions still apply.
@@ -481,7 +481,7 @@ def _run(args) -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(prog="python -m bhaskera.downloads", description="Download a model or dataset from Hugging Face (also used by the home page).")
+    ap = argparse.ArgumentParser(prog="python -m bhaskera.downloads", description="Download a model or dataset from Hugging Face (also used by the dashboard).")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="download into a folder")
     r.add_argument("--kind", choices=KINDS, required=True)

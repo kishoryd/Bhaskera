@@ -88,7 +88,7 @@ class Hub:
         self._links: dict[str, JobLink] = {}
         self._lock = threading.Lock()
         self.stopping = threading.Event()      # set when the user logs out of the stand-alone page: the command that serves it then ends
-        # Set by the command: what the home page shows (see hub_state.py) and how it reads a job's log.
+        # Set by the command: what the dashboard shows (see hub_state.py) and how it reads a job's log.
         self.state_provider: Optional[Callable[[], dict]] = None
         self.log_provider: Optional[Callable[[str, int], dict]] = None
         self.launcher = None   # launch.Launcher: the Start buttons
@@ -229,7 +229,7 @@ def _handler(hub: Hub):
 
         def _relay(self, port: int, service_port: int, path: str, body: Optional[bytes], what: str, back_link: bool = False, strip_auth: bool = False) -> None:
             """Send the request to a service behind an SSH link and pass its answer back as it arrives (streaming works).
-            With back_link, a page of that service gets a small link back to the home page."""
+            With back_link, a page of that service gets a small link back to the dashboard."""
             headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP and not (strip_auth and k.lower() in ("cookie", "authorization"))}
             headers["Host"] = f"localhost:{service_port}"
             if back_link and self.command == "GET":

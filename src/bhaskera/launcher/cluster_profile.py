@@ -3,7 +3,7 @@
 A profile is a small YAML file. It is found, in this order, at ``$BHASKERA_CLUSTER_PROFILE``, at
 ``~/.bhaskera/cluster.yaml``, or not at all:
 
-    name: My Cluster                # shown on the home page
+    name: My Cluster                # shown on the dashboard
     gpus_per_node: 8
     cpus_per_node: 64               # optional: CPUs given to each job's node
     mem_per_node: 400G              # optional: host memory asked for on each node

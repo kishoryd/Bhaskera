@@ -1,4 +1,4 @@
-"""The Bhaskera home page: one self-contained HTML document (no outside fonts, scripts or images), because it is
+"""The Bhaskera dashboard: one self-contained HTML document (no outside fonts, scripts or images), because it is
 served through an SSH tunnel and must work on any laptop. It reads /api/state every few seconds (see hub_state.py)."""
 
 INDEX_HTML = r"""<!doctype html>

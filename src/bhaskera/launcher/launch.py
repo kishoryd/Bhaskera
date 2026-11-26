@@ -1,4 +1,4 @@
-"""Start a training, chat-server or benchmark job from the home page (the Start button).
+"""Start a training, chat-server or benchmark job from the dashboard (the Start button).
 
 The page sends a small form, never a command. Everything that reaches ``submit.sh`` is checked here first:
 
