@@ -31,8 +31,11 @@ To install your own copy, see [Install](#install) below.
 
 ## Your own model and data
 
-Compute nodes have no internet, so download the model on a login node (`huggingface-cli download ...`). Data is a JSONL file with
-one conversation per line (`chatml`, `alpaca` and `sharegpt` are built in). Tokenise once, then train:
+Compute nodes have no internet, so the model and data must be on disk first. Name them by their Hugging Face address in a recipe
+(`model.name: Qwen/Qwen3-14B`, `data.train_path: hf://owner/dataset`) and `./submit.sh` downloads them on a machine that has internet,
+or fetch them yourself with `python -m bhaskera.downloads get`. Your own data can be JSONL, JSON, CSV, TSV, Parquet, Arrow or plain
+text (`.txt`), and `data.format` says what the columns mean: `chatml`, `alpaca`, `sharegpt`, `prompt_completion`, `dolly`, `qa`,
+`scored_response`, `tool_calling` or `reasoning`. Tokenise once, then train:
 
 ```bash
 ./submit.sh tokenize recipes/tokenize-chatml.yaml    # prints two cache paths: put them in your recipe
