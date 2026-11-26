@@ -247,6 +247,10 @@ def _resolve_splits(arg_split: str, cfg) -> List[str | None]:
     if arg_split == "val":
         return ["val"]
     if arg_split == "both":
+        if cfg.data.name == "local" and not getattr(cfg.data, "val_path", None):
+            logger.info("data.val_path is not set, so only the training data is tokenised (training then runs without an evaluation set; "
+                        "set val_path and tokenise again to add one).")
+            return ["train"]
         return ["train", "val"]
 
     # Default if --split not given: tokenize train only.

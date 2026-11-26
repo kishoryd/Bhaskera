@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -154,6 +155,7 @@ def test_fetching_checks_the_room_and_runs_the_download_that_routes(run, monkeyp
     ran = []
 
     def fake_run(cmd, **k):
+        assert k.get("stdout") is sys.stderr                              # nothing the download prints may reach stdout (the recipe path)
         ran.append(cmd)
         d = Path(cmd[cmd.index("--target") + 1])
         (d / "config.json").write_text("{}")

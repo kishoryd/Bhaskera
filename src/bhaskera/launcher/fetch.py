@@ -87,7 +87,9 @@ def fetch_repo(kind: str, repo: str, rev: str, say=print) -> Path:
     except diskguard.DiskError as e:
         raise downloads.DownloadError(str(e))
     dest.mkdir(parents=True, exist_ok=True)
-    done = subprocess.run([sys.executable, "-m", "bhaskera.downloads", "get", "--kind", kind, "--repo", repo, "--revision", rev, "--target", str(dest)])
+    # the download's own messages go to stderr: stdout is reserved for the path of the recipe to use (./submit.sh reads it)
+    done = subprocess.run([sys.executable, "-m", "bhaskera.downloads", "get", "--kind", kind, "--repo", repo, "--revision", rev, "--target", str(dest)],
+                          stdout=sys.stderr)
     if done.returncode != 0:
         raise downloads.DownloadError(f"the download of {repo} did not finish (exit code {done.returncode}); run the same command again to continue")
     if kind == "model" and not (dest / "config.json").is_file():
