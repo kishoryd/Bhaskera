@@ -46,14 +46,16 @@ def test_the_floor_stops_a_nearly_full_disk(monkeypatch, tmp_path):
     assert dg.floor(tmp_path) == 3 * GB
 
 
-def test_a_checkpoint_is_about_the_size_of_the_weights(tmp_path):
+def test_a_lora_checkpoint_is_small_and_a_full_one_is_about_five_times_the_weights(tmp_path):
     m = tmp_path / "m"
     m.mkdir()
     (m / "a.safetensors").write_bytes(b"x" * 1000)
     (m / "b.bin").write_bytes(b"x" * 500)
     (m / "notes.txt").write_bytes(b"x" * 9999)
     assert dg.model_bytes(m) == 1500 and dg.model_bytes(tmp_path / "none") == 0
-    assert dg.checkpoint_need(m, 3) == (1500, 4500) and dg.checkpoint_need(m, 0) == (1500, 4500)       # keep-all is counted as 3
+    assert dg.checkpoint_need(m, 3) == (75, 225)                                   # LoRA: only the add-on and its optimizer (5% of the weights, measured 3%)
+    assert dg.checkpoint_need(m, 0) == (75, 225)                                   # keep-all is counted as 3
+    assert dg.checkpoint_need(m, 2, full=True) == (7500, 15000)                    # full: every weight and the optimizer state
 
 
 def test_the_note_for_a_preview_says_whether_there_is_room(monkeypatch, tmp_path):
@@ -90,13 +92,17 @@ def test_a_recipe_saves_checkpoints_in_the_folder_you_choose(world, tmp_path):
             recipes.build(form(model, cache, name="bad", checkpoint_dir=bad), work)
 
 
-def test_a_recipe_is_refused_when_the_checkpoints_would_not_fit(world, monkeypatch):
+def test_a_full_fine_tune_is_refused_when_its_checkpoints_would_not_fit_and_a_lora_one_is_not(world, monkeypatch):
     work, model, cache = world
     heavy_model(model)
     monkeypatch.setattr("bhaskera.diskguard.model_bytes", lambda f: 60 * GB)
     disk(monkeypatch, 30)
-    with pytest.raises(recipes.RecipeError, match="not enough space for the checkpoints.*60.0 GB is needed and 30.0 GB is free"):
-        recipes.build(form(model, cache), work)
+    recipes.build(form(model, cache), work)                                          # LoRA: about 3 GB, fits
+    with pytest.raises(recipes.RecipeError, match="not enough space for the checkpoints.*300.0 GB is needed and 30.0 GB is free"):
+        recipes.build(form(model, cache, method="fsdp", tuning="full", name="full"), work)
+    disk(monkeypatch, 2)
+    with pytest.raises(recipes.RecipeError, match="not enough space for the checkpoints"):
+        recipes.build(form(model, cache, name="lora-too"), work)
     r = recipes.build(form(model, cache, checkpoints=False, name="nockpt"), work)        # with checkpoints off there is nothing to fit
     assert r["checkpoint"]["enabled"] is False
 
@@ -113,9 +119,9 @@ def launcher(world, tmp_path, monkeypatch):
     return work, model, cache, L, calls
 
 
-def write_recipe(work, model, save_dir, **ck):
+def write_recipe(work, model, save_dir, lora=True, **ck):
     p = work / "recipes" / "r.yaml"
-    p.write_text(yaml.safe_dump({"model": {"name": str(model)}, "training": {"distributed": {"strategy": "ddp"}},
+    p.write_text(yaml.safe_dump({"model": {"name": str(model)}, "lora": {"enabled": lora}, "training": {"distributed": {"strategy": "ddp"}},
                                  "checkpoint": {"enabled": True, "save_dir": str(save_dir), "keep_last_n": 2, **ck}}))
     return p
 
@@ -123,8 +129,8 @@ def write_recipe(work, model, save_dir, **ck):
 def test_training_is_not_started_when_its_checkpoints_would_not_fit(launcher, monkeypatch, tmp_path):
     work, model, cache, L, calls = launcher
     write_recipe(work, model, tmp_path / "ck")
-    monkeypatch.setattr("bhaskera.diskguard.model_bytes", lambda f: 60 * GB)
-    disk(monkeypatch, 30)
+    monkeypatch.setattr("bhaskera.diskguard.model_bytes", lambda f: 600 * GB)
+    disk(monkeypatch, 20)
     with pytest.raises(launch.LaunchError, match="not enough space for the checkpoints of this run.*checkpoint: save_dir"):
         L.build({"kind": "train", "recipe": "r.yaml", "nodes": 1})
     disk(monkeypatch, 500)
@@ -132,6 +138,10 @@ def test_training_is_not_started_when_its_checkpoints_would_not_fit(launcher, mo
     write_recipe(work, model, tmp_path / "ck", enabled=False)
     disk(monkeypatch, 30)
     L.build({"kind": "train", "recipe": "r.yaml", "nodes": 1})                       # checkpoints off: nothing to fit
+    write_recipe(work, model, tmp_path / "ck", lora=False)
+    disk(monkeypatch, 500)
+    with pytest.raises(launch.LaunchError, match="not enough space for the checkpoints of this run"):
+        L.build({"kind": "train", "recipe": "r.yaml", "nodes": 1})                   # a full fine-tune of a 600 GB model needs far more than a LoRA run
 
 
 def test_no_job_is_submitted_on_a_practically_full_disk(launcher, monkeypatch):
@@ -157,11 +167,15 @@ def test_preparing_data_needs_room_for_the_result(launcher, monkeypatch, tmp_pat
 
 def test_a_preview_of_a_recipe_says_how_much_room_the_checkpoints_have(launcher, monkeypatch):
     work, model, cache, L, calls = launcher
-    monkeypatch.setattr("bhaskera.diskguard.model_bytes", lambda f: 10 * GB)
-    disk(monkeypatch, 100)
+    monkeypatch.setattr("bhaskera.diskguard.model_bytes", lambda f: 100 * GB)
+    disk(monkeypatch, 600)
     out = L.launch({"kind": "recipe", "action": "check", **form(model, cache)})
-    assert out["dry"] and out["output"].startswith("# Disk: 100.0 GB free where the checkpoints go") and "enough room" in out["output"].splitlines()[0]
+    line = out["output"].splitlines()[0]
+    assert out["dry"] and line.startswith("# Disk: 600.0 GB free where the checkpoints go") and "each is about 5.0 GB" in line and "enough room" in line
     yaml.safe_load(out["output"])                                                   # the note is a comment: still a valid recipe
+    full = L.launch({"kind": "recipe", "action": "check", **form(model, cache, method="fsdp", tuning="full")})
+    line = full["output"].splitlines()[0]
+    assert "each is about 500.0 GB" in line and "room for one, not for all of them" in line
 
 
 def test_the_page_state_carries_the_disk_of_the_run_folder(monkeypatch, tmp_path):

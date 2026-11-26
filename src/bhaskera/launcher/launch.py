@@ -332,7 +332,7 @@ class Launcher:
         ck, model = raw.get("checkpoint") or {}, (raw.get("model") or {}).get("name")
         if ck.get("enabled", True) and ck.get("save_dir") and isinstance(model, str) and "<" not in model:
             try:
-                one, _ = diskguard.checkpoint_need(model, int(ck.get("keep_last_n", 2) or 0))
+                one, _ = diskguard.checkpoint_need(model, int(ck.get("keep_last_n", 2) or 0), full=not (raw.get("lora") or {}).get("enabled", False))
                 diskguard.require(ck["save_dir"], one, "the checkpoints of this run")
             except diskguard.DiskError as e:
                 raise LaunchError(str(e) + " Change the folder in the recipe (checkpoint: save_dir), or turn checkpoints off.")
@@ -490,7 +490,7 @@ class Launcher:
                 ck = recipe.get("checkpoint") or {}
                 line = ""
                 if ck.get("enabled"):
-                    one, allk = diskguard.checkpoint_need(recipe["model"]["name"], int(ck.get("keep_last_n", 0) or 0))
+                    one, allk = diskguard.checkpoint_need(recipe["model"]["name"], int(ck.get("keep_last_n", 0) or 0), full=not (recipe.get("lora") or {}).get("enabled", False))
                     line = diskguard.note(ck["save_dir"], one, allk, int(ck.get("keep_last_n", 0) or 0))
                 return {"ok": True, "job": None, "dry": True, "output": (f"# {line}\n" if line else "") + text, "recipe": f"{name}.yaml"}
             path = recipes.write(recipe_dirs(self.kit, self._env)[0] if recipe_dirs(self.kit, self._env) else self.kit / "recipes", name, text)

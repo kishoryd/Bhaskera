@@ -256,6 +256,13 @@ def build(form: dict, workdir: Path) -> dict:
     if not isinstance(name, str) or not NAME.match(name):
         raise RecipeError("the recipe name is letters, digits, - and _, starting with a letter (at most 61 characters)")
     key, method, kind, mods = _choice(form)
+    tuning = form.get("tuning", "lora")
+    if tuning not in ("lora", "full"):
+        raise RecipeError("choose what to train: a small add-on (LoRA) or the whole model (full fine-tune)")
+    full = tuning == "full"
+    if full and key in ("qlora", "pipeline"):
+        raise RecipeError(("QLoRA squeezes the model to 4 bits and trains a small add-on on it, so it cannot train every weight" if key == "qlora" else
+                           "Pipeline trains a LoRA add-on only") + ": choose DDP (a model that fits on one GPU), FSDP2 or HSDP to train the whole model")
     if key == "custom":
         return custom(form, workdir)
     multi = kind == "multimodal"
@@ -272,7 +279,7 @@ def build(form: dict, workdir: Path) -> dict:
     if info["seq_len"] and int(info["seq_len"]) != seq_len:
         raise RecipeError(f"the training data was tokenised with sequence length {info['seq_len']}, not {seq_len}: tokenise again, or use {info['seq_len']}")
     steps = _num(form.get("steps"), "steps", 1, 10_000_000, default=300)
-    lr = _num(form.get("lr"), "learning rate", 1e-7, 1.0, integer=False, default=1e-4)
+    lr = _num(form.get("lr"), "learning rate", 1e-7, 1.0, integer=False, default=1e-5 if full else 1e-4)
     rank = _num(form.get("rank"), "LoRA rank", 1, 512, default=16)
     batch = _num(form.get("batch_size"), "batch size", 1, 256, default=2 if multi else method["batch_size"])
     accum = _num(form.get("grad_accum"), "gradient accumulation", 1, 1024, default=1)
@@ -280,6 +287,8 @@ def build(form: dict, workdir: Path) -> dict:
     ckpt_on = form.get("checkpoints", True)
     if not isinstance(ckpt_on, bool):
         raise RecipeError("checkpoints are on or off")
+    if full and not ckpt_on:
+        raise RecipeError("a full fine-tune keeps its result only in its checkpoints, so they cannot be switched off")
     keep = _num(form.get("keep_last_n"), "checkpoints to keep", 0, 1000, default=3)
     base = workdir / "checkpoints"
     if form.get("checkpoint_dir") not in (None, ""):
@@ -292,7 +301,7 @@ def build(form: dict, workdir: Path) -> dict:
     if ckpt_on:
         from .. import diskguard
         try:
-            diskguard.require(save_dir, diskguard.checkpoint_need(model, keep)[0], "the checkpoints")
+            diskguard.require(save_dir, diskguard.checkpoint_need(model, keep, full=full)[0], "the checkpoints")
         except diskguard.DiskError as e:
             raise RecipeError(str(e))
     evals = _num(form.get("eval_steps"), "evaluate every (steps)", 0, 10_000_000, default=max(1, steps // 6)) if val else 0
@@ -306,13 +315,13 @@ def build(form: dict, workdir: Path) -> dict:
                   "use_liger_kernel": not multi, "quantization": method["quantization"],
                   **({"kind": "multimodal", "freeze_encoders": ["all"]} if multi else {})},
         "data": data,
-        "lora": {"enabled": True, "r": rank, "alpha": 2 * rank, "dropout": 0.05, "target_modules": ["auto"]},
+        "lora": {"enabled": False} if full else {"enabled": True, "r": rank, "alpha": 2 * rank, "dropout": 0.05, "target_modules": ["auto"]},
         "training": {"batch_size": batch, "grad_accum": accum, "lr": lr, "weight_decay": 0.0, "max_steps": steps, "num_epochs": 100,
                      "warmup_steps": max(1, min(100, steps // 20)), "grad_clip": 1.0, "eval_steps": evals, "eval_batch_size": batch,
                      "seed": 42, "distributed": {"strategy": method["strategy"]}},
         "checkpoint": {"enabled": ckpt_on, "save_dir": str(save_dir), "save_interval": 1,
                        "save_every_steps": every, "keep_last_n": keep},
-        "logging": {"tracker": "mlflow", "project": "bhaskera", "run_name": name, "mlflow_log_adapter": True, "mlflow_eval_samples": 5},
+        "logging": {"tracker": "mlflow", "project": "bhaskera", "run_name": name, "mlflow_log_adapter": not full, "mlflow_eval_samples": 5},
         "monitoring": {"dashboard_host": "127.0.0.1"},
     }
     dist = recipe["training"]["distributed"]

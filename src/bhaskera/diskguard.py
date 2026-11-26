@@ -67,10 +67,14 @@ def model_bytes(folder) -> int:
         return 0
 
 
-def checkpoint_need(model_folder, keep: int) -> tuple[int, int]:
-    """(one checkpoint, all that are kept) in bytes. A checkpoint holds the whole wrapped model, so about the size of the weights.
-    ``keep`` of 0 means keep all, which has no limit: it is counted as 3 here."""
-    one = model_bytes(model_folder)
+def checkpoint_need(model_folder, keep: int, full: bool = False) -> tuple[int, int]:
+    """(one checkpoint, all that are kept) in bytes, as an estimate.
+
+    LoRA and QLoRA save only the trained add-on and its optimizer state, not the frozen model: measured 0.9 GB for Qwen3-14B (449 MB + 493 MB),
+    so 5% of the weights is counted. A full fine-tune saves every weight and the optimizer state (two more values per weight), about 5 times
+    the size of bf16 weights. ``keep`` of 0 means keep all, which has no limit: it is counted as 3 here."""
+    weights = model_bytes(model_folder)
+    one = int(weights * (5 if full else 0.05))
     return one, one * (keep if keep and keep > 0 else 3)
 
 

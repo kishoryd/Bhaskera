@@ -335,3 +335,29 @@ def test_checkpoints_can_be_switched_off_and_their_number_and_interval_chosen(wo
     for bad in ({"checkpoints": "no"}, {"keep_last_n": "-1"}, {"keep_last_n": "x"}, {"keep_last_n": "5000"}):
         with pytest.raises(recipes.RecipeError):
             recipes.build(form(model, cache, name="bad", **bad), work)
+
+
+def test_a_full_fine_tune_trains_every_weight_and_needs_its_checkpoints(world):
+    work, model, cache = world
+    r = recipes.build(form(model, cache, method="fsdp", tuning="full", name="full-ft"), work)
+    assert r["lora"] == {"enabled": False} and r["training"]["distributed"]["strategy"] == "fsdp" and r["model"]["quantization"] == "none"
+    assert r["training"]["lr"] == 1e-5 and r["logging"]["mlflow_log_adapter"] is False and r["checkpoint"]["enabled"] is True      # a lower rate; no adapter to keep
+    recipes.validate(recipes.render(r))
+    assert recipes.build(form(model, cache, method="fsdp", tuning="full", lr="2e-5", name="ft2"), work)["training"]["lr"] == 2e-5
+    ddp = recipes.build(form(model, cache, method="ddp", tuning="full", name="ft-ddp"), work)
+    assert ddp["lora"]["enabled"] is False
+    hs = recipes.build(form(model, cache, method="hsdp", tuning="full", name="ft-hs"), work)
+    assert hs["training"]["distributed"]["fsdp"]["sharding_strategy"] == "HYBRID_SHARD" and hs["lora"]["enabled"] is False
+    assert recipes.build(form(model, cache, method="fsdp", name="lora-fsdp"), work)["lora"]["enabled"] is True      # LoRA stays the default
+
+
+def test_full_fine_tuning_is_refused_where_it_cannot_work_and_cannot_have_checkpoints_off(world):
+    work, model, cache = world
+    with pytest.raises(recipes.RecipeError, match="QLoRA.*cannot train every weight"):
+        recipes.build(form(model, cache, tuning="full", name="a"), work)                       # the form's default method is QLoRA
+    with pytest.raises(recipes.RecipeError, match="Pipeline trains a LoRA add-on only"):
+        recipes.build(form(model, cache, method="pipeline", tuning="full", name="b"), work)
+    with pytest.raises(recipes.RecipeError, match="only in its checkpoints"):
+        recipes.build(form(model, cache, method="fsdp", tuning="full", checkpoints=False, name="c"), work)
+    with pytest.raises(recipes.RecipeError, match="choose what to train"):
+        recipes.build(form(model, cache, tuning="everything", name="d"), work)

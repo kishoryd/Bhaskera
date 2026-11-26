@@ -8,6 +8,7 @@ A profile is a small YAML file. It is found, in this order, at ``$BHASKERA_CLUST
     cpus_per_node: 64               # optional: CPUs given to each job's node
     mem_per_node: 400G              # optional: host memory asked for on each node
     gpu_mem_gb: 80                  # memory of one GPU, for the "will it fit" check before a job is submitted
+    download_hosts: [login01, login02]   # machines with internet, for downloads when the machine running the page has none
     net_interface: ib0              # the network interface NCCL and Ray use ("" = none, not checked)
     docs_url: https://example.org/bhaskera
     partitions:                     # smallest jobs first: a job of up to max_nodes nodes goes to that partition
@@ -46,6 +47,7 @@ class ClusterProfile:
     mem_per_node: str = ""
     gpu_mem_gb: Optional[float] = None
     net_interface: str = ""
+    download_hosts: list = field(default_factory=list)
     docs_url: str = ""
     partitions: list[PartitionRule] = field(default_factory=list)
     source: str = ""
@@ -68,7 +70,7 @@ def _from_dict(raw: dict, source: str) -> ClusterProfile:
              for p in (raw.get("partitions") or [])]
     return ClusterProfile(name=str(raw.get("name") or ""), gpus_per_node=as_int(raw.get("gpus_per_node")),
                           cpus_per_node=as_int(raw.get("cpus_per_node")), mem_per_node=str(raw.get("mem_per_node") or ""), gpu_mem_gb=(float(raw["gpu_mem_gb"]) if raw.get("gpu_mem_gb") not in (None, "") else None),
-                          net_interface=str(raw.get("net_interface") or ""), docs_url=str(raw.get("docs_url") or ""),
+                          net_interface=str(raw.get("net_interface") or ""), download_hosts=[str(h) for h in (raw.get("download_hosts") or [])], docs_url=str(raw.get("docs_url") or ""),
                           partitions=rules, source=source)
 
 

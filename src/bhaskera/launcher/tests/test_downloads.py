@@ -308,3 +308,82 @@ def test_runs_can_be_removed_but_never_a_running_one_or_one_that_is_not_ours(wor
     changed.clear()
     L.launch({"kind": "runs", "action": "remove", "runs": [ids["c"]]})
     assert changed == []                                                     # nothing removed, nothing to refresh
+
+
+# ---- a machine without internet: the preview and the download run on one that has it
+def test_this_machine_is_used_when_it_has_internet(world, monkeypatch):
+    dl._route_cache.clear()
+    assert dl.route(probe=lambda: True) is None
+
+
+def test_another_machine_is_used_when_this_one_has_no_internet(world, monkeypatch):
+    dl._route_cache.clear()
+    monkeypatch.setenv("BHASKERA_DOWNLOAD_HOSTS", "login04, login01 login02")
+    monkeypatch.setattr("socket.gethostname", lambda: "login04")
+    asked = []
+
+    def run(cmd, **kw):
+        asked.append(cmd[-1] if cmd[0] == "ssh" else cmd)
+        host = [c for c in cmd if c.startswith("login")][0]
+        return NS(returncode=0 if host == "login02" else 255, stdout="", stderr="")
+    assert dl.route(probe=lambda: False, run=run) == "login02"
+    assert len(asked) == 2 and all("bhaskera.downloads online" in a for a in asked)        # login04 (this one) is skipped; login01 failed; login02 answered
+    assert dl.route(probe=lambda: False, run=lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked again"))) == "login02"      # remembered
+
+
+def test_with_no_internet_anywhere_the_message_names_this_machine_and_what_to_set(world, monkeypatch):
+    dl._route_cache.clear()
+    monkeypatch.delenv("BHASKERA_DOWNLOAD_HOSTS", raising=False)
+    monkeypatch.setattr("socket.gethostname", lambda: "login06")
+    monkeypatch.setattr(cluster_profile, "current", lambda: NS(download_hosts=[]))
+    with pytest.raises(dl.DownloadError, match="login06.*cannot reach the internet.*download_hosts"):
+        dl.route(probe=lambda: False)
+    dl._route_cache.clear()
+    monkeypatch.setenv("BHASKERA_DOWNLOAD_HOSTS", "login01")
+    with pytest.raises(dl.DownloadError, match="login06.*login01"):
+        dl.route(probe=lambda: False, run=lambda *a, **k: NS(returncode=255, stdout="", stderr=""))
+
+
+def test_download_hosts_come_from_the_environment_or_the_profile_and_are_checked(world, monkeypatch):
+    monkeypatch.setenv("BHASKERA_DOWNLOAD_HOSTS", "a1,b-2;rm,$(x), ok.host,-oProxyCommand=x")
+    assert dl.download_hosts() == ["a1", "ok.host"]            # a name that is not a plain host name (an ssh option, a command) is dropped
+    monkeypatch.delenv("BHASKERA_DOWNLOAD_HOSTS")
+    monkeypatch.setattr(cluster_profile, "current", lambda: NS(download_hosts=["login01", "bad host"]))
+    assert dl.download_hosts() == ["login01"]
+
+
+def test_the_command_for_another_machine_has_no_key_and_is_quoted(world, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/a b/src")
+    cmd = dl._remote("login01", ["run", "--repo", "x/y", "--target", "/t t"], tty=True, python="/venv/bin/python")
+    assert cmd[:2] == ["ssh", "-o"] and "-tt" in cmd and "login01" in cmd and "BatchMode=yes" in cmd
+    remote = cmd[-1]
+    assert "'PYTHONPATH=/a b/src'" in remote and "/venv/bin/python -m bhaskera.downloads run" in remote and "'/t t'" in remote
+    assert "hf_" not in " ".join(cmd) and "HF_TOKEN" not in " ".join(cmd)
+
+
+def test_the_preview_is_asked_of_the_machine_with_internet(world, monkeypatch):
+    dl._route_cache.clear()
+    answer = {"kind": "model", "repo": "a/b", "revision": "main", "bytes": 10, "files": 1, "largest": [], "gated": False, "private": False, "license": "", "sha": "", "large": False}
+    seen = []
+    monkeypatch.setattr(dl, "route", lambda env=None, **k: "login01")
+    monkeypatch.setattr(dl.subprocess, "run", lambda cmd, **k: (seen.append(cmd), NS(returncode=0, stdout="noise\n" + json.dumps(answer) + "\n", stderr=""))[1])
+    out = dl.preview("model", "a/b", None)
+    assert out["via"] == "login01" and out["bytes"] == 10 and "preview" in seen[0][-1]
+    monkeypatch.setattr(dl.subprocess, "run", lambda cmd, **k: NS(returncode=2, stdout="", stderr="error: Hugging Face has no such repository\n"))
+    with pytest.raises(dl.DownloadError, match="no such repository"):
+        dl.preview("model", "a/b", None)
+
+
+def test_a_download_runs_on_the_machine_with_internet_and_says_so(world, tmp_path, monkeypatch):
+    seen = []
+
+    def popen(cmd, **kw):
+        seen.append((cmd, kw))
+        return Proc(tmp_path / "m", 0, [("config.json", 10)])
+    (tmp_path / "m").mkdir()
+    m = dl.Manager(popen=popen)
+    s = m.start_download("model", "a/b", "main", str(tmp_path / "m"), info_fn=lambda *a: info(*a, size=10))
+    assert "via" in s
+    cmd = seen[0][0]
+    assert cmd[0] == "python3" or "bhaskera.downloads" in " ".join(cmd)
+    wait_for(m, ("done", "failed"))

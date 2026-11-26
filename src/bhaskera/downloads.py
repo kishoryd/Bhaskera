@@ -170,10 +170,97 @@ def check_target(path) -> Path:
     return p
 
 
-def preview(kind, repo, revision, env: Optional[dict] = None, info_fn: Optional[Callable] = None) -> dict:
+# ---------------------------------------------------------------- which machine has internet
+HF_URL = "https://huggingface.co"
+_route_cache: dict[str, tuple[float, Optional[str]]] = {}
+
+
+def internet_ok(timeout: float = 4.0, url: str = HF_URL) -> bool:
+    """True when this machine can reach Hugging Face (any answer counts, even an error page)."""
+    import urllib.error
+    import urllib.request
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=timeout)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
+def download_hosts(env: Optional[dict] = None) -> list[str]:
+    """Other machines to download on when this one has no internet: ``download_hosts`` in the cluster profile, or $BHASKERA_DOWNLOAD_HOSTS."""
+    env = os.environ if env is None else env
+    raw = [h for h in re.split(r"[,\s]+", env.get("BHASKERA_DOWNLOAD_HOSTS", "")) if h]
+    if not raw:
+        try:
+            from .launcher import cluster_profile
+            raw = list(cluster_profile.current().download_hosts or [])
+        except Exception:
+            raw = []
+    return [h for h in raw if re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$", h)]
+
+
+def _ssh(host: str, tty: bool = False) -> list[str]:
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-o", "StrictHostKeyChecking=accept-new", *(["-tt"] if tty else []), host]
+
+
+def _remote(host: str, args: list[str], env: Optional[dict] = None, tty: bool = False, python: Optional[str] = None) -> list[str]:
+    """The command that runs ``python -m bhaskera.downloads <args>`` on another machine (the Python and the folders are on the shared file system)."""
+    import shlex
+    env = os.environ if env is None else env
+    pre = ["env", f"PYTHONPATH={env['PYTHONPATH']}"] if env.get("PYTHONPATH") else []
+    return _ssh(host, tty) + [shlex.join(pre + [python or sys.executable, "-m", "bhaskera.downloads", *args])]
+
+
+def route(env: Optional[dict] = None, probe: Callable[[], bool] = internet_ok, run: Callable = subprocess.run, force: bool = False) -> Optional[str]:
+    """None when this machine has internet, else the name of a machine from ``download_hosts`` that has it. Remembered for a minute.
+    Raises DownloadError when neither this machine nor any listed one can reach Hugging Face."""
+    import socket
+    here = socket.gethostname()
+    hit = _route_cache.get(here)
+    if hit and not force and time.monotonic() - hit[0] < 60:
+        if hit[1] == "":
+            return None
+        if hit[1]:
+            return hit[1]
+    if probe():
+        _route_cache[here] = (time.monotonic(), "")
+        return None
+    hosts = [h for h in download_hosts(env) if h != here and not here.startswith(h + ".")]
+    for h in hosts:
+        try:
+            done = run(_remote(h, ["online"], env), capture_output=True, text=True, timeout=25, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            _route_cache[here] = (time.monotonic(), h)
+            return h
+    _route_cache[here] = (time.monotonic(), None)
+    raise DownloadError(f"this page runs on {here}, which cannot reach the internet (compute nodes and some login nodes cannot). "
+                        + ("None of the other nodes listed in the cluster profile (download_hosts: " + ", ".join(hosts) + ") could be reached with internet either."
+                           if hosts else "Name a login node that has internet in the cluster profile (download_hosts), or start the page on one that has.")
+                        + " You can also download on a machine with internet and copy the files in.")
+
+
+def preview(kind, repo, revision, env: Optional[dict] = None, info_fn: Optional[Callable] = None, local_only: bool = False) -> dict:
     """What a download would fetch: size, files, licence, and whether it needs access. Reads Hugging Face only (no file is downloaded)."""
     kind, repo, rev = check_repo(kind, repo, revision)
     tok = token(env)
+    if info_fn is None and not local_only:
+        host = route(env)
+        if host:                                               # this machine has no internet: ask one that has
+            import json as _json
+            try:
+                done = subprocess.run(_remote(host, ["preview", "--kind", kind, "--repo", repo, "--revision", rev], env), capture_output=True, text=True,
+                                      timeout=60, stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError) as e:
+                raise DownloadError(f"could not reach {host} to look the repository up: {e}")
+            if done.returncode != 0:
+                raise DownloadError((done.stderr or done.stdout).replace("error: ", "").strip()[-300:] or f"{host} could not look the repository up")
+            out = _json.loads(done.stdout.strip().splitlines()[-1])
+            out["via"] = host
+            return out
     try:
         if info_fn is not None:
             info = info_fn(kind, repo, rev, tok)
@@ -194,6 +281,10 @@ def preview(kind, repo, revision, env: Optional[dict] = None, info_fn: Optional[
     return {"kind": kind, "repo": repo, "revision": rev, "bytes": total, "files": len(files), "largest": [{"name": n, "bytes": s} for n, s in files[:8]],
             "gated": bool(getattr(info, "gated", False)), "private": bool(getattr(info, "private", False)), "license": lic,
             "sha": str(getattr(info, "sha", "") or "")[:12], "large": total > LARGE_BYTES}
+
+
+def _local_preview(kind, repo, rev) -> dict:
+    return preview(kind, repo, rev, local_only=True)
 
 
 # ---------------------------------------------------------------- remembered downloads
@@ -311,7 +402,12 @@ class Manager:
         if tok:
             env["HF_TOKEN"] = tok                                        # through the environment only, never a command line
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
-        cmd = [self._python, "-m", "bhaskera.downloads", "run", "--kind", info["kind"], "--repo", info["repo"], "--revision", info["revision"], "--target", str(dest)]
+        args = ["run", "--kind", info["kind"], "--repo", info["repo"], "--revision", info["revision"], "--target", str(dest)]
+        via = info.get("via")
+        if via is None and info_fn is None:
+            via = route(self._env)
+        self._set(via=via)
+        cmd = _remote(via, args, self._env, tty=True, python=self._python) if via else [self._python, "-m", "bhaskera.downloads", *args]
         try:
             self._proc = self._popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
         except OSError as e:
@@ -332,7 +428,7 @@ class Manager:
         reader.start()
         while proc.poll() is None:
             t0 = time.monotonic()
-            self._set(done=_tree_bytes(dest), message="downloading")
+            self._set(done=_tree_bytes(dest), message="downloading" + (f" on {self.status().get('via')}" if self.status().get("via") else ""))
             time.sleep(max(2.0, 4 * (time.monotonic() - t0)))          # a folder of very many files is counted less often
         reader.join(timeout=2)
         if stop.is_set():
@@ -392,10 +488,33 @@ def main(argv: Optional[list[str]] = None) -> int:
     r.add_argument("--repo", required=True)
     r.add_argument("--revision", default="main")
     r.add_argument("--target", required=True)
+    sub.add_parser("online", help="exit 0 when this machine can reach Hugging Face")
+    pv = sub.add_parser("preview", help="print what a download would fetch, as JSON")
+    pv.add_argument("--kind", choices=KINDS, required=True)
+    pv.add_argument("--repo", required=True)
+    pv.add_argument("--revision", default="main")
+    g = sub.add_parser("get", help="download into a folder, on a machine that has internet (this one, else one from download_hosts)")
+    g.add_argument("--kind", choices=KINDS, required=True)
+    g.add_argument("--repo", required=True)
+    g.add_argument("--revision", default="main")
+    g.add_argument("--target", required=True)
     args = ap.parse_args(argv)
+    if args.cmd == "online":
+        return 0 if internet_ok() else 1
     try:
+        if args.cmd == "preview":
+            import json as _json
+            kind, repo, rev = check_repo(args.kind, args.repo, args.revision)
+            print(_json.dumps(_local_preview(kind, repo, rev)))
+            return 0
         check_repo(args.kind, args.repo, args.revision)
         check_target(args.target)
+        if args.cmd == "get":
+            host = route()
+            if host:
+                print(f"this machine has no internet; downloading on {host} ...", flush=True)
+                return subprocess.run(_remote(host, ["run", "--kind", args.kind, "--repo", args.repo, "--revision", args.revision, "--target", args.target],
+                                              tty=False)).returncode
         return _run(args)
     except DownloadError as e:
         print(f"error: {e}", file=sys.stderr)

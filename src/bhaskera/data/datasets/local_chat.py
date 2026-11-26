@@ -1,7 +1,8 @@
 """
 bhaskera.data.datasets.local_chat
 =================================
-Generic dataset builder for *local* files (JSONL / JSON / Parquet).
+Generic dataset builder for *local* files: JSONL, JSON (lines or one array), CSV, TSV, Parquet, Arrow/Feather, any of them gzipped
+(.gz), and Hugging Face datasets saved to disk.
 
 Reads from a path you specify in YAML and forwards everything else to the
 existing tokenizer pipeline. The ``format`` column determines how rows are
@@ -43,21 +44,51 @@ logger = logging.getLogger(__name__)
 
 # File discovery
 
-_JSON_EXTS    = (".jsonl", ".json")
+_JSON_EXTS    = (".jsonl", ".json", ".ndjson")
 _PARQUET_EXTS = (".parquet",)
+_CSV_EXTS     = (".csv",)
+_TSV_EXTS     = (".tsv",)
+_ARROW_EXTS   = (".arrow", ".feather")
+_ALL_EXTS     = _JSON_EXTS + _PARQUET_EXTS + _CSV_EXTS + _TSV_EXTS + _ARROW_EXTS
+_STRUCTURED   = ("messages", "conversations")      # columns that hold a list: a CSV or TSV cell holds it as JSON text
+
+
+def _base(f: str) -> str:
+    """The file name without a compression suffix (.gz): data.csv.gz -> data.csv."""
+    f = f.lower()
+    return f[:-3] if f.endswith(".gz") else f
+
+
+def _kind(f: str) -> str:
+    """json | parquet | csv | tsv | arrow | hf (a Hugging Face dataset saved to disk) | '' (not supported)."""
+    if Path(f).is_dir() and _is_hf_disk(Path(f)):
+        return "hf"
+    b = _base(f)
+    for kind, exts in (("json", _JSON_EXTS), ("parquet", _PARQUET_EXTS), ("csv", _CSV_EXTS), ("tsv", _TSV_EXTS), ("arrow", _ARROW_EXTS)):
+        if b.endswith(exts):
+            return kind
+    return ""
+
+
+def _is_hf_disk(p: Path) -> bool:
+    """A folder written by ``datasets``' save_to_disk (one split, or several)."""
+    return (p / "dataset_info.json").is_file() or (p / "state.json").is_file() or (p / "dataset_dict.json").is_file()
 
 
 def _resolve_files(path: str) -> List[str]:
-    """Expand ``path`` (file, directory, or glob) into a sorted list of files."""
+    """Expand ``path`` (file, directory, or glob) into a sorted list of files. A Hugging Face dataset folder is returned as itself."""
     p = Path(path)
 
     if p.is_file():
         return [str(p)]
 
     if p.is_dir():
+        if _is_hf_disk(p):
+            return [str(p)]
         files = []
-        for ext in _JSON_EXTS + _PARQUET_EXTS:
-            files.extend(sorted(p.rglob(f"*{ext}")))
+        for f in sorted(p.rglob("*")):
+            if f.is_file() and _kind(str(f)):
+                files.append(f)
         return [str(f) for f in files]
 
     # Treat as glob (e.g. "/data/shards/*.jsonl")
@@ -71,35 +102,95 @@ def _resolve_files(path: str) -> List[str]:
     return [str(m) for m in matches]
 
 
+def _is_json_array(f: str) -> bool:
+    """True when a JSON file is one array of rows ([{...}, {...}]) instead of one row per line."""
+    import gzip
+    opener = gzip.open if f.lower().endswith(".gz") else open
+    with opener(f, "rb") as fh:
+        head = fh.read(4096).lstrip()
+    return head[:1] == b"["
+
+
+def _decode_structured(df, cols=_STRUCTURED):
+    """Turn a JSON-text cell into the list it holds, for the columns that hold lists (a CSV cannot hold a list)."""
+    import json
+    for c in cols:
+        if c in df.columns and df[c].dtype == object:
+            def fix(v):
+                if isinstance(v, str) and v.lstrip()[:1] in ("[", "{"):
+                    try:
+                        return json.loads(v)
+                    except ValueError:
+                        return v
+                return v
+            df[c] = df[c].map(fix)
+    return df
+
+
+def _from_pandas(df):
+    return ray.data.from_pandas(_decode_structured(df))
+
+
 def _read_files(files: List[str]) -> ray.data.Dataset:
-    """Dispatch to ray.data.read_parquet / read_json based on extension."""
-    parquet = [f for f in files if f.lower().endswith(_PARQUET_EXTS)]
-    json_   = [f for f in files if f.lower().endswith(_JSON_EXTS)]
+    """Read the files with Ray Data, whatever their format: JSONL, JSON arrays, CSV, TSV, Parquet, Arrow, a saved Hugging Face dataset."""
+    kinds = {f: _kind(f) for f in files}
+    bad = [f for f, k in kinds.items() if not k]
+    if bad:
+        raise ValueError(f"unsupported file(s) {bad[:3]}: expected one of {_ALL_EXTS} (optionally .gz), or a Hugging Face dataset folder")
+    found = sorted(set(kinds.values()))
+    if len(found) > 1 and not (set(found) <= {"json"}):
+        raise ValueError(f"mixed formats in one local dataset path ({', '.join(found)}). Keep one format per path.")
+    kind = found[0]
+    if kind == "parquet":
+        return ray.data.read_parquet(files)
+    if kind == "json":
+        lines = [f for f in files if not _is_json_array(f)]
+        arrays = [f for f in files if _is_json_array(f)]
+        parts = []
+        if lines:
+            # ray.data.read_json handles line-delimited JSON (.jsonl and one-row-per-line .json).
+            #
+            # override_num_blocks targets one block per input file. Note this is
+            # a hint, not a guarantee: Ray Data's streaming executor budgets
+            # resources across operators and will backpressure reads
+            # ("[backpressured:tasks(ResourceBudget)]") regardless, so read
+            # concurrency does not scale indefinitely with file count. At ~200
+            # files / 54GB it serialises badly; at a few dozen files it is fine.
+            # Keep the *input* sized to what training actually consumes rather
+            # than relying on read parallelism to absorb an oversized corpus.
+            parts.append(ray.data.read_json(lines, override_num_blocks=len(lines) if len(lines) > 1 else None))
+        if arrays:                                    # one array per file is read whole, so prefer one row per line for large data
+            import pandas as pd
+            for f in arrays:
+                parts.append(ray.data.from_pandas(pd.read_json(f, compression="infer")))
+        ds = parts[0]
+        for extra in parts[1:]:
+            ds = ds.union(extra)
+        return ds
+    if kind in ("csv", "tsv"):
+        import pandas as pd
+        sep = "\t" if kind == "tsv" else ","
+        frames = [pd.read_csv(f, sep=sep, compression="infer", dtype=str, keep_default_na=False) for f in files]
+        return _from_pandas(pd.concat(frames, ignore_index=True))
+    if kind == "arrow":
+        import pandas as pd
+        import pyarrow as pa
 
-    if parquet and json_:
-        raise ValueError(
-            f"Mixed parquet and json files in local dataset path. "
-            f"Keep them separated.  parquet={parquet[:3]} json={json_[:3]}"
-        )
-    if parquet:
-        return ray.data.read_parquet(parquet)
-    if json_:
-        # ray.data.read_json handles both .json and .jsonl (line-delimited).
-        #
-        # override_num_blocks targets one block per input file. Note this is
-        # a hint, not a guarantee: Ray Data's streaming executor budgets
-        # resources across operators and will backpressure reads
-        # ("[backpressured:tasks(ResourceBudget)]") regardless, so read
-        # concurrency does not scale indefinitely with file count. At ~200
-        # files / 54GB it serialises badly; at a few dozen files it is fine.
-        # Keep the *input* sized to what training actually consumes rather
-        # than relying on read parallelism to absorb an oversized corpus.
-        num_blocks = len(json_) if len(json_) > 1 else None
-        return ray.data.read_json(json_, override_num_blocks=num_blocks)
-
-    raise ValueError(
-        f"No supported files found. Expected one of {_JSON_EXTS + _PARQUET_EXTS}."
-    )
+        def read_arrow(f):                            # .arrow and .feather are the Arrow IPC file format (or its stream form)
+            with pa.memory_map(f, "r") as src:
+                try:
+                    return pa.ipc.open_file(src).read_all()
+                except pa.ArrowInvalid:
+                    return pa.ipc.open_stream(src).read_all()
+        return _from_pandas(pd.concat([read_arrow(f).to_pandas() for f in files], ignore_index=True))
+    if kind == "hf":
+        from datasets import DatasetDict, load_from_disk
+        ds = load_from_disk(files[0])
+        if isinstance(ds, DatasetDict):
+            names = list(ds.keys())
+            raise ValueError(f"{files[0]} holds several splits ({', '.join(names)}); point data.train_path / val_path at one split's folder, e.g. {files[0]}/{names[0]}")
+        return ray.data.from_pandas(_decode_structured(ds.to_pandas()))
+    raise ValueError(f"no supported files found. Expected one of {_ALL_EXTS}.")
 
 
 # Path resolution per split
@@ -127,7 +218,7 @@ def _path_for_split(cfg, split: Optional[str]) -> str:
     if not chosen:
         raise ValueError(
             "data.train_path (or data.path) must be set for the local dataset. "
-            "Point it at a JSONL file, a directory, or a glob."
+            "Point it at a data file (JSONL, JSON, CSV, TSV, Parquet, Arrow), a directory, or a glob."
         )
     return chosen
 

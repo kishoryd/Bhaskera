@@ -5,6 +5,7 @@ gpu_mem_gb: 80
 cpus_per_node: 48
 mem_per_node: 170G        # the GPU partitions give only 20 GB per node by default
 net_interface: ib0
+download_hosts: [login01, login02, login03, login05]   # login nodes with internet (the others have none): downloads run there when the page is on one without
 partitions:               # a job of up to max_nodes nodes goes to the first partition that fits
   - {max_nodes: 4,   name: gpu-debug,   max_hours: 1}
   - {max_nodes: 25,  name: gpu-small,   max_hours: 24}

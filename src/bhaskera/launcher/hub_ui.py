@@ -969,7 +969,7 @@ function renderMenus(){
   var jobs=s.jobs||[], running=jobs.filter(function(j){return j.state==="RUNNING"}).length, queued=jobs.filter(function(j){return j.state==="PENDING"}).length;
   var runs=s.runs||[], benched=runs.filter(function(r){return r.lm_scores&&Object.keys(r.lm_scores).length}).length;
   var dk=s.disk, dw=$("#diskwarn");
-  if(dk&&dk.low){ dw.hidden=false; dw.textContent="The disk with your run folder ("+dk.path+") has only "+dk.free_gb+" GB free of "+dk.total_gb+" GB. Checkpoints are large (tens of GB for a 14B model): save them on a disk with more room (New run, Create recipe, Checkpoints, Save them in), or clear old runs and checkpoints."; } else { dw.hidden=true; }
+  if(dk&&dk.low){ dw.hidden=false; dw.textContent="The disk with your run folder ("+dk.path+") has only "+dk.free_gb+" GB free of "+dk.total_gb+" GB. Checkpoints can be large (about 1 GB for a LoRA run of a 14B model, but around 140 GB for a full fine-tune of it): save them on a disk with more room (New run, Create recipe, Checkpoints, Save them in), or clear old runs and checkpoints."; } else { dw.hidden=true; }
   var energyTotal=null; runs.forEach(function(r){ if(r.energy_kwh!=null) energyTotal=(energyTotal||0)+r.energy_kwh; });
   var tile=function(k,v,attrs){ return '<button type="button" class="sumtile" '+attrs+'><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></button>'; };
   $("#sumrow").innerHTML=tile("Running now",running+(queued?' <small>· '+queued+' queued</small>':""),'data-go="home" data-scroll="#jobs"')+tile("Training runs",runs.length,'data-go="train" data-scroll="#runsec"')+
@@ -1289,7 +1289,7 @@ $("#chat-close").addEventListener("click", function(){ if(chat.job) doCancel(cha
 
 /* ---- start a job ---- */
 var L = {opts:null, kind:"train", run:"", note:"", evalSel:[], own:{name:"",data:"",q:"question",a:"answer"}, shots:"", skipBase:false, rinfo:null, step:0, regname:"", alias:"",
-  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",ckpt:"on",keep:"",ckdir:"",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""},modelOther:false,dataMode:"",trainOther:false,valOther:false,trainPath:"",valPath:""}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
+  rc:{name:"my-run",kind:"text",mods:["image"],model:"",method:"qlora",train:"",val:"",steps:"300",lr:"1e-4",rank:"16",batch:"",accum:"",every:"",ckpt:"on",keep:"",ckdir:"",tuning:"lora",evals:"",hsdp:"",stages:"",micro:"",yaml:"",copy:false,base:"",settings:{},open:{},raw:{train:"",val:"",format:"chatml",seq:"",media:""},modelOther:false,dataMode:"",trainOther:false,valOther:false,trainPath:"",valPath:""}, nodes:2, hours:"", tasks:{arc_easy:1,hellaswag:1}, quick:true, confirm:false, busy:false};
 var COMMON_TASKS=["arc_easy","hellaswag","winogrande","mmlu","gsm8k","truthfulqa_mc2"];
 function api(path,opts){ return fetch(path,opts).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); }); }
 function planFor(n){
@@ -1380,6 +1380,7 @@ function renderStart(){
   $("#startcheck").disabled=$("#startgo").disabled=!o.enabled||L.busy||none;
   if(k==="resume") loadResume();
 }
+function setTuningLr(t){ var full=t==='full'; if(full&&['5e-5','1e-4','2e-4'].indexOf(L.rc.lr)>=0) L.rc.lr='1e-5'; if(!full&&['5e-6','1e-5','2e-5'].indexOf(L.rc.lr)>=0) L.rc.lr='1e-4'; }
 function cacheLabel(c){ return (c.data_version?c.data_version.name+" v"+c.data_version.version+(c.data_version.status==="changed"?" (changed) · ":" · "):"")+c.name+" · "+(c.model||"?")+" · sequence "+(c.seq_len||"?")+" · "+(c.rows!=null?Number(c.rows).toLocaleString()+" rows":""); }
 function cacheOptions(list,sel,none,other){
   var group=function(items,label){ return items.length?'<optgroup label="'+label+'">'+items.map(function(c){ return '<option value="'+esc(c.path)+'"'+(!other&&c.path===sel?" selected":"")+'>'+esc(cacheLabel(c))+'</option>'; }).join("")+'</optgroup>':""; };
@@ -1433,7 +1434,10 @@ function recipeForm(o){
   var h='<div class="srow intro"><b>What is a recipe?</b> It is the saved list of choices for one training run: which model to teach, which examples to teach it with, and for how long. You make it once here, then <b>Train</b> runs it on the cluster. Unsure about a choice? Leave it as it is: the defaults suit a first run.</div><div class="sec">The model</div><div class="srow half"><label class="lbl" for="f-rname">Name of the recipe</label><input id="f-rname" type="text" value="'+esc(r.name)+'" maxlength="61"><div class="sub">A short name for this run. It is the file name (<code>recipes/'+esc(r.name||"name")+'.yaml</code>) and the name you will see in MLflow.</div></div>'+
     '<div class="srow half"><label class="lbl">Kind of model</label><div class="chips">'+chip("Text",!multi,'data-kind="text"')+chip("Multimodal (images, video, audio)",multi,'data-kind="multimodal"')+'</div><div class="sub">Text models read and write words. Multimodal models also look at images, video or audio.</div></div>'+
     (multi?'<div class="srow"><label class="lbl">The data holds</label><div class="chips">'+["image","video","audio"].map(function(m){return chip(m,r.mods.indexOf(m)>=0,'data-mod="'+m+'"')}).join("")+'<span class="muted">besides text</span></div></div>':"")+
-    '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label+(m===(multi?"fsdp":"qlora")?" · start here":""),r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div><div class="sub">The method decides how the model is spread over the GPUs. If you are new, keep the one marked start here.</div></div>';
+    '<div class="srow"><label class="lbl">Method</label><div class="chips">'+methods.map(function(m){return chip(o.methods[m].label+(m===(multi?"fsdp":"qlora")?" · start here":""),r.method===m,'data-method="'+m+'"')}).join("")+'</div><div class="sub">'+esc((o.methods[r.method]||{}).about||"")+'</div><div class="sub">The method decides how the model is spread over the GPUs. If you are new, keep the one marked start here.</div></div>'+
+    (r.method==="custom"?"":'<div class="srow"><label class="lbl">What to train</label><div class="chips">'+chip("A small add-on (LoRA)",r.tuning!=="full",'data-tuning="lora"')+chip("The whole model (full fine-tune)",r.tuning==="full",'data-tuning="full"')+'</div>'+
+      '<div class="sub">'+(r.tuning==="full"?"Trains every weight of the model. It can learn more, but it needs far more GPU memory (every weight, its gradient and the optimizer state) and disk for the checkpoints, so use FSDP2 or HSDP on several nodes. The result stays in the checkpoints: Chat, Benchmark and Register on this page need an adapter, so they are not offered for a full fine-tune yet. Needs a smaller learning rate, which is set for you.":
+        "LoRA keeps the model as it is and trains a small add-on on top: far less memory and disk, and the usual choice. QLoRA does the same on a model squeezed to 4 bits.")+'</div></div>');
   if(custom){ h+='<div class="sec">The recipe</div>'+customForm(o,r); }
   else {
     var typed=r.modelOther||!cat.length||(r.model&&!cat.some(function(m){return m.path===r.model}));
@@ -1462,14 +1466,14 @@ function recipeForm(o){
     }
     h+='<div class="sec">The training</div><div class="srow"><label class="lbl">How long</label><div class="chips">'+["100","300","1000","3000"].map(function(s){return chip(s+" steps",r.steps===s,'data-steps="'+s+'"')}).join("")+
        '<span class="muted" style="margin:0 4px 0 8px">or</span><input id="f-rsteps" type="number" min="1" value="'+(["100","300","1000","3000"].indexOf(r.steps)<0?esc(r.steps):"")+'" placeholder="steps"></div><div class="sub">One step teaches the model one batch of examples. 100 to 300 steps is a quick trial; use 1000 or more for a real run.</div></div>'+
-       '<div class="srow half"><label class="lbl">Learning rate</label><div class="chips">'+[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]].map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div><div class="sub">How big each learning step is. The usual value suits most runs; try a lower one if the loss jumps around.</div></div>'+
-       '<div class="srow half"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Instead of changing the whole model, LoRA trains a small add-on. A larger rank can learn more and uses a little more memory.</div></div>'+
-       '<div class="srow"><label class="lbl">Checkpoints</label><div class="chips">'+chip("Save them",r.ckpt!=="off",'data-ckpt="on"')+chip("Do not save",r.ckpt==="off",'data-ckpt="off"')+
-         (r.ckpt==="off"?"":'<span class="muted" style="margin:0 4px 0 8px"></span><label class="muted">every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto" style="width:90px"> steps</label>'+
+       '<div class="srow half"><label class="lbl">Learning rate</label><div class="chips">'+(r.tuning==="full"?[["5e-6","5e-6"],["1e-5","1e-5 (usual)"],["2e-5","2e-5"]]:[["5e-5","5e-5"],["1e-4","1e-4 (usual)"],["2e-4","2e-4"]]).map(function(x){return chip(x[1],r.lr===x[0],'data-lr="'+x[0]+'"')}).join("")+'</div><div class="sub">How big each learning step is. The usual value suits most runs; try a lower one if the loss jumps around.</div></div>'+
+       (r.tuning==="full"?"":'<div class="srow half"><label class="lbl">LoRA rank</label><div class="chips">'+["8","16","32"].map(function(x){return chip(x,r.rank===x,'data-rank="'+x+'"')}).join("")+'</div><div class="sub">Instead of changing the whole model, LoRA trains a small add-on. A larger rank can learn more and uses a little more memory.</div></div>')+
+       '<div class="srow"><label class="lbl">Checkpoints</label><div class="chips">'+chip("Save them",r.ckpt!=="off"||r.tuning==="full",'data-ckpt="on"')+(r.tuning==="full"?"":chip("Do not save",r.ckpt==="off",'data-ckpt="off"'))+
+         ((r.ckpt==="off"&&r.tuning!=="full")?"":'<span class="muted" style="margin:0 4px 0 8px"></span><label class="muted">every <input id="f-revery" type="number" min="1" value="'+esc(r.every)+'" placeholder="auto" style="width:90px"> steps</label>'+
            '<label class="muted">keep the newest <input id="f-rkeep" type="number" min="0" value="'+esc(r.keep)+'" placeholder="3" style="width:70px"></label>')+'</div>'+
-         (r.ckpt==="off"?"":'<div class="chips" style="margin-top:8px"><label class="muted" style="flex:1">Save them in <input id="f-rckdir" type="text" value="'+esc(r.ckdir)+'" placeholder="default: checkpoints/ in your run folder" spellcheck="false" autocomplete="off" style="width:100%"></label></div>')+
-         '<div class="sub">'+(r.ckpt==="off"?"Nothing is saved while training, so a run that stops cannot be continued with Resume; it has to start again. Only the final adapter is kept.":
-           "A checkpoint is the saved state of the run, so one that stops can continue from it with Resume. Older ones are deleted so that only the newest few stay. Each one holds the whole model, tens of GB for a 14B model, so keep few (0 keeps all). Home folders fill up fast on a cluster: give a folder on a large disk (for example under /scratch) in Save them in. The recipe gets its own folder inside it, and Check first tells you whether there is room.")+'</div></div>'+
+         ((r.ckpt==="off"&&r.tuning!=="full")?"":'<div class="chips" style="margin-top:8px"><label class="muted" style="flex:1">Save them in <input id="f-rckdir" type="text" value="'+esc(r.ckdir)+'" placeholder="default: checkpoints/ in your run folder" spellcheck="false" autocomplete="off" style="width:100%"></label></div>')+
+         '<div class="sub">'+((r.ckpt==="off"&&r.tuning!=="full")?"Nothing is saved while training, so a run that stops cannot be continued with Resume; it has to start again. Only the final adapter is kept.":
+           "A checkpoint is the saved state of the run, so one that stops can continue from it with Resume. Older ones are deleted so that only the newest few stay. "+(r.tuning==="full"?"Each one holds every weight and the optimizer state, about five times the size of the model (an estimate: around 140 GB for a 14B model), so keep few and use a large disk.":"Each one holds only the trained add-on and its optimizer state (about 1 GB for a 14B model).")+" (0 keeps all.) Home folders fill up fast on a cluster: give a folder on a large disk (for example under /scratch) in Save them in. The recipe gets its own folder inside it, and Check first tells you whether there is room.")+'</div></div>'+
        det(r,"more","More options",'<div class="chips" style="margin-top:8px">'+
          '<label class="muted">Batch size <input id="f-rbatch" type="number" min="1" value="'+esc(r.batch)+'" placeholder="auto"></label>'+
          '<label class="muted">Gradient accumulation <input id="f-raccum" type="number" min="1" value="'+esc(r.accum)+'" placeholder="1"></label>'+
@@ -1522,7 +1526,7 @@ function showSum(){
   if(L.kind==="recipe"){
     var rc=L.rc; el.className="ssum"; var lab=(o.methods&&o.methods[rc.method]?o.methods[rc.method].label:"")+(rc.kind==="multimodal"?" · multimodal":"");
     var tc=(o.caches||[]).filter(function(c){return c.path===rc.train})[0], mname=(rc.model||"").split("/").filter(Boolean).pop()||"the model";
-    el.textContent=rc.method==="custom"?"Saves the recipe exactly as you wrote it. Nothing runs until you start it under Train.":"Saves a recipe that teaches "+mname+(tc&&tc.rows!=null?" with "+Number(tc.rows).toLocaleString()+" examples":"")+" for "+rc.steps+" steps ("+lab+"). Nothing runs yet: start it afterwards under Train."; return;
+    el.textContent=rc.method==="custom"?"Saves the recipe exactly as you wrote it. Nothing runs until you start it under Train.":"Saves a recipe that teaches "+mname+(tc&&tc.rows!=null?" with "+Number(tc.rows).toLocaleString()+" examples":"")+" for "+rc.steps+" steps ("+lab+(rc.tuning==="full"?", all weights":"")+"). Nothing runs yet: start it afterwards under Train."; return;
   }
   if(L.kind==="register"){
     var rr=runInfo(L.run); el.className="ssum"; el.textContent=rr.name?"Registers the adapter of "+rr.name+" as a new version"+(L.alias?", and points "+L.alias+" at it":""):""; return;
@@ -1555,8 +1559,8 @@ function formData(action){
     f.settings=r.settings;
     if(r.method==="custom"){ f.yaml=r.yaml; f.copy=r.copy; }
     else {
-      f.model=r.model; f.train_cache=r.trainOther?r.trainPath:r.train; f.val_cache=r.valOther?r.valPath:r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank;
-      if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; f.checkpoints=r.ckpt!=="off"; if(r.keep!=="") f.keep_last_n=r.keep; if(r.ckdir.trim()) f.checkpoint_dir=r.ckdir.trim(); if(r.evals!=="") f.eval_steps=r.evals;
+      f.model=r.model; f.train_cache=r.trainOther?r.trainPath:r.train; f.val_cache=r.valOther?r.valPath:r.val; f.steps=r.steps; f.lr=r.lr; f.rank=r.rank; f.tuning=r.tuning;
+      if(r.batch) f.batch_size=r.batch; if(r.accum) f.grad_accum=r.accum; if(r.every) f.save_every_steps=r.every; f.checkpoints=r.tuning==="full"?true:r.ckpt!=="off"; if(r.keep!=="") f.keep_last_n=r.keep; if(r.ckdir.trim()) f.checkpoint_dir=r.ckdir.trim(); if(r.evals!=="") f.eval_steps=r.evals;
       if(r.method==="hsdp"&&r.hsdp!=="") f.hsdp_shard_size=r.hsdp; if(r.method==="pipeline"){ if(r.stages) f.stages=r.stages; if(r.micro) f.microbatches=r.micro; }
     }
   }
@@ -1662,7 +1666,12 @@ $("#startfields").addEventListener("click", function(e){
   else if(b.hasAttribute("data-h")){ L.hours=b.getAttribute("data-h"); renderStart(); }
   else if(b.hasAttribute("data-t")){ var t=b.getAttribute("data-t"); L.tasks[t]=!L.tasks[t]; renderStart(); }
   else if(b.hasAttribute("data-q")){ L.quick=b.getAttribute("data-q")==="1"; renderStart(); }
-  else if(b.hasAttribute("data-method")){ L.rc.method=b.getAttribute("data-method"); renderStart(); }
+  else if(b.hasAttribute("data-method")){ L.rc.method=b.getAttribute("data-method"); if(L.rc.tuning==="full"&&(L.rc.method==="qlora"||L.rc.method==="pipeline")){ L.rc.tuning="lora"; setTuningLr("lora"); } renderStart(); }
+  else if(b.hasAttribute("data-tuning")){
+    var tn=b.getAttribute("data-tuning"); L.rc.tuning=tn; setTuningLr(tn);
+    if(tn==="full"){ L.rc.ckpt="on"; if(L.rc.method==="qlora"||L.rc.method==="pipeline") L.rc.method=L.rc.kind==="multimodal"?"fsdp":"fsdp"; }
+    renderStart();
+  }
   else if(b.hasAttribute("data-dmode")){ L.rc.dataMode=b.getAttribute("data-dmode"); renderStart(); }
   else if(b.hasAttribute("data-kind")){ L.rc.kind=b.getAttribute("data-kind"); renderStart(); }
   else if(b.hasAttribute("data-mod")){ var mm=b.getAttribute("data-mod"), ix=L.rc.mods.indexOf(mm); if(ix>=0){ if(L.rc.mods.length>1) L.rc.mods.splice(ix,1); } else L.rc.mods.push(mm); renderStart(); }
