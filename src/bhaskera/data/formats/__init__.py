@@ -18,6 +18,11 @@ Built-in formats (see ``builtins.py``):
   * "alpaca"    — rows have ``instruction``, optional ``input``, ``output``
   * "sharegpt"  — rows have ``conversations: [{from, value}, ...]``
   * "prompt_completion" — rows have ``prompt`` and ``completion`` (other column names: ``prompt_field`` / ``completion_field``)
+  * "dolly"     — ``instruction``, optional ``context``, ``response``
+  * "qa"        — ``question``, ``answer``, optional ``context``
+  * "scored_response" — ``prompt``, ``response``, ``score``; rows below ``min_score`` are dropped (fine-tuning on good answers)
+  * "tool_calling" — chat ``messages`` with ``tool_calls`` and ``tool`` turns, plus a ``tools`` column
+  * "reasoning" — chat ``messages`` with ``reasoning_content``, or ``prompt`` / ``reasoning`` / ``answer`` columns
 
 Adding your own (no repo changes — drop a file anywhere your code imports):
 

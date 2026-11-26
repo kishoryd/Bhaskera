@@ -57,8 +57,9 @@ def normalise(text: str) -> str:
 
 def has_answer(row: dict, fmt: str) -> bool:
     """Whether the row contains a reply to learn from (an assistant message, an output, a gpt turn)."""
-    if fmt == "chatml":
-        return any(isinstance(m, dict) and m.get("role") == "assistant" and str(m.get("content", "")).strip()
+    if fmt in ("chatml", "tool_calling") or (fmt == "reasoning" and row.get("messages") is not None):
+        return any(isinstance(m, dict) and m.get("role") == "assistant" and
+                   (str(m.get("content") or "").strip() or m.get("tool_calls") or m.get("reasoning_content"))
                    for m in row.get("messages") or [])
     if fmt == "alpaca":
         return bool(str(row.get("output", "")).strip())
@@ -67,6 +68,10 @@ def has_answer(row: dict, fmt: str) -> bool:
                    for m in row.get("conversations") or [])
     if fmt == "prompt_completion":
         return bool(str(row.get("completion", "")).strip())
+    if fmt in ("dolly", "scored_response", "reasoning"):
+        return bool(str(row.get("response", row.get("answer", ""))).strip())
+    if fmt == "qa":
+        return bool(str(row.get("answer", "")).strip())
     return True
 
 
@@ -218,7 +223,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         sp.add_argument("input")
         if out:
             sp.add_argument("output")
-        sp.add_argument("--format", default="chatml", help="chatml (default), alpaca, sharegpt or prompt_completion")
+        sp.add_argument("--format", default="chatml", help="chatml (default), alpaca, sharegpt, prompt_completion, dolly, qa, scored_response, tool_calling or reasoning")
         sp.add_argument("--tokenizer", help="model folder: exact token counts")
 
     i = sub.add_parser("inspect")

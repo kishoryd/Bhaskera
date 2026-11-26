@@ -39,7 +39,7 @@ KINDS = {"text": "Text model", "multimodal": "Multimodal model"}
 MODALITIES = ("image", "video", "audio")
 MAX_YAML = 100_000
 MAX_SETTINGS = 400
-FORMATS = ("chatml", "alpaca", "sharegpt", "prompt_completion")
+FORMATS = ("chatml", "alpaca", "sharegpt", "prompt_completion", "dolly", "qa", "scored_response", "tool_calling", "reasoning")
 
 
 class RecipeError(ValueError):
@@ -578,7 +578,7 @@ def tokenize_recipe(form: dict, workdir: Path) -> tuple[str, str]:
     model = model_folder(form.get("model"))
     fmt = form.get("format") or "chatml"
     if fmt not in FORMATS:
-        raise RecipeError("the data format is chatml, alpaca, sharegpt or prompt_completion")
+        raise RecipeError("the data format is one of chatml, alpaca, sharegpt, prompt_completion, dolly, qa, scored_response, tool_calling, reasoning")
 
     def raw(value, what, required):
         if not value:
