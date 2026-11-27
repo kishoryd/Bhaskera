@@ -184,3 +184,15 @@ def test_text_cannot_be_mixed_with_other_formats(loc, tmp_path):
     (tmp_path / "b.csv").write_text("text\nx")
     with pytest.raises(ValueError, match="mixed"):
         loc._read_files(loc._resolve_files(str(tmp_path)))
+
+
+def test_a_folder_with_data_files_ignores_its_readme(loc, tmp_path):
+    (tmp_path / "train.parquet").write_text("x")
+    (tmp_path / "README.md").write_text("# a dataset card")
+    (tmp_path / "notes.txt").write_text("hello")
+    assert [Path(f).name for f in loc._resolve_files(str(tmp_path))] == ["train.parquet"]
+    only = tmp_path / "books"
+    only.mkdir()
+    (only / "a.txt").write_text("one")
+    (only / "README.md").write_text("two")
+    assert sorted(Path(f).name for f in loc._resolve_files(str(only))) == ["README.md", "a.txt"]      # text only: every file is a document

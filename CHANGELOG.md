@@ -8,6 +8,8 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 ## [Unreleased]
 
 ### Plain text, and a recipe for every benchmarked method
+- **Copying the kit works when the folder already exists.** The instructions now read `mkdir -p <folder> && cp -r $BHASKERA_KIT/. <folder>/`. The old `cp -r $BHASKERA_KIT <folder>` put the files in `<folder>/kit` when the folder existed.
+- **A downloaded dataset folder with a README.md can be read as a whole:** when a folder holds data files, text files such as the README are ignored (a folder of only text files still reads every file). Unit test added; not yet run on the cluster.
 - **The shipped recipes keep the adapter.** Every LoRA and QLoRA recipe in `slurm/recipes/` now sets `logging.mlflow_log_adapter: true`. Before, a run made from a shipped recipe stored no adapter, so Chat, Benchmark and Register by run id failed with "no stored adapter" (recipes made on the dashboard already set it).
 - **The starter configs are in the kit.** `configs/` (text and multimodal starters, for example `configs/multimodal/ddp.yaml`) is now copied into `share/kit/` by the installer, so it is in the run folder you make from the kit. Before, only `recipes/` was, and the commands in the multimodal guide failed with "no such file".
 - **"Home page" is now "Bhaskera dashboard"** in the documentation, the README and the messages the commands print. The documentation page names MLflow, the Ray Dashboard and Grafana (the GPU charts) and says what each answers and where it is on the dashboard.

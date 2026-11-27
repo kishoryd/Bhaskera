@@ -96,6 +96,8 @@ def _resolve_files(path: str) -> List[str]:
         for f in sorted(p.rglob("*")):
             if f.is_file() and _kind(str(f)):
                 files.append(f)
+        if any(_kind(str(f)) != "text" for f in files):        # a downloaded dataset folder has a README.md: it is not data
+            files = [f for f in files if _kind(str(f)) != "text"]
         return [str(f) for f in files]
 
     # Treat as glob (e.g. "/data/shards/*.jsonl")
