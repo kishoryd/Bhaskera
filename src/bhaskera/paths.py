@@ -1,4 +1,4 @@
-"""Where Bhaskera keeps what a user creates: in the folder the user set up (the *run folder*, the one that holds ``submit.sh``).
+"""Where ExaAI keeps what a user creates: in the folder the user set up (the *run folder*, the one that holds ``submit.sh``).
 
 The run folder is ``$BHASKERA_WORKDIR`` (``submit.sh`` exports it for every job), else the current folder when it has a ``submit.sh``. Inside it:
 

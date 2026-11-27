@@ -302,7 +302,7 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument("--config", required=True,
-        help="Path to Bhaskera YAML config")
+        help="Path to ExaAI YAML config")
     p.add_argument("--dataset", type=str, default=None,
         help="Dataset name to tokenize (overrides config.data.name)")
     p.add_argument("--storage-path", type=str, default=None,

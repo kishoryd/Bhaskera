@@ -306,7 +306,7 @@ def router_z_loss_from_output(out, profile: ModelProfile) -> Optional[torch.Tens
 
 def disable_builtin_aux_loss(model) -> int:
     """HF MoE CausalLMs add router_aux_loss_coef * aux_loss into out.loss whenever
-    output_router_logits=True. Bhaskera adds moe.aux_loss_weight * aux itself, so leaving
+    output_router_logits=True. ExaAI adds moe.aux_loss_weight * aux itself, so leaving
     HF's term in would count the aux loss twice and make the logged loss not pure
     cross-entropy. HF reads the coefficient from the module (copied from the config at
     build time), so it is zeroed on every module that has it. Returns how many."""

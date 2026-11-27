@@ -13,7 +13,7 @@ A `gateway.yaml` (nothing about a particular cluster is in the code):
 | `roles.users`, `roles.admins` | The directory groups that may sign in, and that may read the audit log |
 | `session.idle_minutes`, `session.max_hours` | How long a sign-in lasts |
 | `agent.idle_minutes`, `agent.max_per_user` | When a user's page is stopped, and how many one user may have |
-| `cluster_profile` | The cluster profile file, as for the rest of Bhaskera |
+| `cluster_profile` | The cluster profile file, as for the rest of ExaAI |
 | `audit.dir` | Where the audit log is written |
 
 ## What it will do itself

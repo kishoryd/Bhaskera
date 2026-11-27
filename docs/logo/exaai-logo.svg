@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330 72" width="660" height="144" role="img" aria-label="ExaAI, powered by Bhaskera">
+  <g transform="translate(0,6) scale(1.667)">
+    <rect width="36" height="36" rx="9" fill="#1F4E79"/>
+    <rect x="8" y="8" width="4.5" height="20" rx="2.25" fill="#fff"/>
+    <rect x="8" y="8" width="19" height="4.5" rx="2.25" fill="#fff"/>
+    <rect x="8" y="15.75" width="13" height="4.5" rx="2.25" fill="#fff"/>
+    <rect x="8" y="23.5" width="19" height="4.5" rx="2.25" fill="#fff"/>
+    <circle cx="28.5" cy="18" r="2.6" fill="#8FD0FF"/>
+  </g>
+  <text x="76" y="40" font-family="Calibri, Arial, sans-serif" font-size="38" font-weight="700" fill="#222">Exa<tspan fill="#1F4E79">AI</tspan></text>
+  <text x="78" y="60" font-family="Calibri, Arial, sans-serif" font-size="15" fill="#666">powered by Bhaskera</text>
+</svg>

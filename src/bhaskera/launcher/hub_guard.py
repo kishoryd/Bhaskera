@@ -96,6 +96,6 @@ def with_back_link(page: bytes, host: str) -> bytes:
     port = f":{m.group(1)}" if m else ""
     link = ('<a id="bhaskera-back" href="http://localhost%s/" style="position:fixed;left:14px;bottom:14px;z-index:2147483647;'
             'background:#1f1c17;color:#f3efe6;font:600 13px system-ui,Segoe UI,Arial,sans-serif;padding:8px 14px;border-radius:3px;'
-            'text-decoration:none;box-shadow:3px 3px 0 rgba(0,0,0,.2)">&larr; Bhaskera</a>' % port).encode()
+            'text-decoration:none;box-shadow:3px 3px 0 rgba(0,0,0,.2)">&larr; ExaAI</a>' % port).encode()
     i = page.lower().rfind(b"</body>")
     return page + link if i < 0 else page[:i] + link + page[i:]

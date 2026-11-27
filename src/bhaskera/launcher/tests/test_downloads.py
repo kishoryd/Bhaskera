@@ -301,7 +301,7 @@ def test_runs_can_be_removed_but_never_a_running_one_or_one_that_is_not_ours(wor
     r = L.launch({"kind": "runs", "action": "remove", "runs": [ids["a"], ids["b"], ids["c"], ids["d"], ids["e"], ids["a"]]})
     assert r["ok"] and r["removed"] == 3 and deleted == [ids["a"], ids["b"], ids["d"]] and changed == [1]
     reasons = {s["run_id"]: s["reason"] for s in r["skipped"]}
-    assert reasons == {ids["c"]: "still running", ids["e"]: "not one of your Bhaskera runs"}
+    assert reasons == {ids["c"]: "still running", ids["e"]: "not one of your ExaAI runs"}
     for bad in (None, [], "abc", ["not-a-run-id"], [1], ["a" * 32] * 501):
         with pytest.raises(launch.LaunchError, match="choose the runs"):
             L.launch({"kind": "runs", "action": "remove", "runs": bad})

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="256" height="256" role="img" aria-label="ExaAI">
+  <rect width="36" height="36" rx="9" fill="#1F4E79"/>
+  <rect x="8" y="8" width="4.5" height="20" rx="2.25" fill="#fff"/>
+  <rect x="8" y="8" width="19" height="4.5" rx="2.25" fill="#fff"/>
+  <rect x="8" y="15.75" width="13" height="4.5" rx="2.25" fill="#fff"/>
+  <rect x="8" y="23.5" width="19" height="4.5" rx="2.25" fill="#fff"/>
+  <circle cx="28.5" cy="18" r="2.6" fill="#8FD0FF"/>
+</svg>

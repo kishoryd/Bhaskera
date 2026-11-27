@@ -1,4 +1,4 @@
-# Bhaskera recipe: qwen3-14b-fsdp
+# ExaAI recipe: qwen3-14b-fsdp
 # Model    : Qwen/Qwen3-14B   (download to /scratch/<project>/<username>/models/Qwen3-14B)
 # Strategy : FSDP2 (full shard)
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

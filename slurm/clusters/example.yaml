@@ -1,6 +1,6 @@
-# Bhaskera cluster profile: copy to ~/.bhaskera/cluster.yaml (or point $BHASKERA_CLUSTER_PROFILE at it) and edit.
+# ExaAI cluster profile: copy to ~/.bhaskera/cluster.yaml (or point $BHASKERA_CLUSTER_PROFILE at it) and edit.
 # Every line is optional. Without a profile, submit.sh uses $BHASKERA_PARTITION and skips the partition-limit checks.
-name: My Cluster          # shown on the Bhaskera dashboard
+name: My Cluster          # shown on the ExaAI dashboard
 gpus_per_node: 8
 gpu_mem_gb: 80         # memory of one GPU in GB, for the "will it fit" check before a job is submitted
 cpus_per_node: 64         # CPUs asked for on each node

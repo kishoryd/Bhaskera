@@ -1,4 +1,4 @@
-# Bhaskera recipe: mistral-large-123b-fsdp
+# ExaAI recipe: mistral-large-123b-fsdp
 # Model    : mistralai/Mistral-Large-Instruct-2411   (download to /scratch/<project>/<username>/models/Mistral-Large-Instruct-2411)
 # Strategy : FSDP2 (full shard)
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

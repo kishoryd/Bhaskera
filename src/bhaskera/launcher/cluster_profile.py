@@ -1,4 +1,4 @@
-"""Facts about the cluster Bhaskera runs on, so that nothing else in the framework has to assume one.
+"""Facts about the cluster ExaAI runs on, so that nothing else in the framework has to assume one.
 
 A profile is a small YAML file. It is found, in this order, at ``$BHASKERA_CLUSTER_PROFILE``, at
 ``~/.bhaskera/cluster.yaml``, or not at all:

@@ -37,7 +37,7 @@ def load(cfg, device):
     ...  # return an nn.Module
 ```
 
-## What Bhaskera does itself
+## What ExaAI does itself
 
 - **Loading.** `AutoModelForCausalLM` with low host memory use (or the image-text class for multimodal models). Under FSDP, rank 0 loads the real weights and the other ranks build an empty model with the same structure, including tied embeddings, so every rank agrees on the layout.
 - **Introspection** (`introspect.py`). Finds the decoder layer class, expert modules, routers and LoRA targets from the model's structure, not its name. A router is a parameter-bearing sibling of an `experts` list, so SwiGLU's `gate_proj` is not mistaken for one.

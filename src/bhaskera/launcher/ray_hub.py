@@ -1,4 +1,4 @@
-"""One address for the Ray Dashboards of all your running Bhaskera jobs.
+"""One address for the Ray Dashboards of all your running ExaAI jobs.
 
 Every Slurm job starts its own Ray cluster, and a Ray Dashboard shows only its own cluster. To see several
 jobs without knowing their nodes, `bhaskera-dashboard ray` runs this hub on the login node:
@@ -166,14 +166,14 @@ class Hub:
                 f"<td><a href='http://job-{l.job_id}.localhost:{self.laptop_port}/'>Ray Dashboard</a></td>"
                 f"<td><a href='http://grafana-{l.job_id}.localhost:{self.laptop_port}/'>Grafana charts</a></td></tr>")
         body = ("".join(rows) if rows else
-                "<tr><td colspan=5>No Bhaskera job is running. This page updates when one starts.</td></tr>")
+                "<tr><td colspan=5>No ExaAI job is running. This page updates when one starts.</td></tr>")
         return (
             "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=15>"
-            "<title>Bhaskera jobs</title>"
+            "<title>ExaAI jobs</title>"
             "<style>body{font:15px system-ui,sans-serif;margin:2rem;color:#222}"
             "table{border-collapse:collapse}td,th{padding:.4rem .9rem;border-bottom:1px solid #ddd;text-align:left}"
             "a{color:#0b5cad}</style>"
-            "<h2>Your running Bhaskera jobs</h2>"
+            "<h2>Your running ExaAI jobs</h2>"
             "<table><tr><th>Slurm job</th><th>Name</th><th>Nodes</th><th></th><th></th></tr>"
             f"{body}</table>"
             f"<p>Training curves of every run, finished and failed ones too: "
@@ -288,7 +288,7 @@ def _handler(hub: Hub):
                 return self._json({"error": "use POST"}, 405)
             origin = self.headers.get("Origin")
             if (origin and not hub.proxy_token and not hub_guard.origin_allowed(origin)) or self.headers.get("X-Requested-With") != "bhaskera":
-                return self._json({"error": "this request does not come from the Bhaskera page"}, 403)
+                return self._json({"error": "this request does not come from the ExaAI page"}, 403)
             length = int(self.headers.get("Content-Length") or 0)
             if length > hub_guard.MAX_CHAT_BODY:
                 return self._json({"error": "request too large"}, 413)
@@ -307,7 +307,7 @@ def _handler(hub: Hub):
                 return self._json({"error": "use POST"}, 405)
             origin = self.headers.get("Origin")
             if (origin and not hub.proxy_token and not hub_guard.origin_allowed(origin)) or self.headers.get("X-Requested-With") != "bhaskera":
-                return self._json({"error": "this request does not come from the Bhaskera page"}, 403)
+                return self._json({"error": "this request does not come from the ExaAI page"}, 403)
             length = int(self.headers.get("Content-Length") or 0)
             if length > hub_guard.MAX_FORM_BODY:
                 return self._json({"error": "request too large"}, 413)
@@ -373,7 +373,7 @@ def _handler(hub: Hub):
             there is no sign-in, so it asks the command that serves the page to stop. Running jobs are not touched."""
             origin = self.headers.get("Origin")
             if self.command != "POST" or self.headers.get("X-Requested-With") != "bhaskera" or (origin and not hub.proxy_token and not hub_guard.origin_allowed(origin)):
-                return self._json({"error": "this request does not come from the Bhaskera page"}, 403)
+                return self._json({"error": "this request does not come from the ExaAI page"}, 403)
             if hub.proxy_token:
                 body = b'{"ok": true, "mode": "portal"}'
                 self.send_response(200)
@@ -412,7 +412,7 @@ def _handler(hub: Hub):
                 if not self._proxy_auth():
                     if self._redirected:
                         return
-                    return self._send(403, "Open Bhaskera from the Sessions page of the portal; this address needs the session link.")
+                    return self._send(403, "Open ExaAI from the Sessions page of the portal; this address needs the session link.")
             else:
                 if not hub.peer_check(self.client_address, self.server.server_address):
                     return self._send(403, "This page is private to the user who started it.")

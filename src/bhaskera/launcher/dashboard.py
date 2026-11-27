@@ -289,7 +289,7 @@ def _print_tunnel(cfg: DashboardConfig, *, verbose: bool = False) -> None:
         print()
 
 
-# Ray Dashboard of a Bhaskera job
+# Ray Dashboard of an ExaAI job
 #
 # The Ray head (and with it the dashboard) runs on the first node of a job, and nobody knows in advance when
 # a job will start or on which nodes. `bhaskera-dashboard ray` therefore finds the job itself, waits for it to
@@ -434,7 +434,7 @@ _KINDS = {_JOB_COMMENT: "train", _SERVE_COMMENT: "serve"}
 
 
 def hub_jobs(jobs: list[dict], job_id: Optional[str] = None) -> list[dict]:
-    """The jobs to link: every running Bhaskera training job and chat server (those started with submit.sh carry a Slurm
+    """The jobs to link: every running ExaAI training job and chat server (those started with submit.sh carry a Slurm
     comment), or just the one asked for with --job, which may be any running job. Each gets a ``kind``."""
     running = [j for j in jobs if j["state"] == "RUNNING" and j["nodes"]]
     if job_id:
@@ -620,7 +620,7 @@ def cmd_portal(cfg: DashboardConfig, bind: str, port: int) -> None:
         if started:
             started[0].terminate()
         _die(f"cannot listen on {bind}:{port} ({e})")
-    print(f"Bhaskera is ready on {bind}:{port}. It closes with Ctrl-C or when its job ends.", flush=True)
+    print(f"ExaAI is ready on {bind}:{port}. It closes with Ctrl-C or when its job ends.", flush=True)
     try:
         _watch(hub, server, quiet=True)
     finally:
@@ -639,7 +639,7 @@ def _watch(hub: "ray_hub.Hub", server, quiet: bool = False) -> None:
                 print(f"job {job_id} is no longer running; its Ray Dashboard and Grafana are closed. "
                       "Its metrics stay in MLflow.", flush=True)
             if not quiet and not hub.links() and not announced_idle:
-                print("no Bhaskera job is running yet; waiting (MLflow already lists finished runs) ...", flush=True)
+                print("no ExaAI job is running yet; waiting (MLflow already lists finished runs) ...", flush=True)
             announced_idle = not hub.links()
             if hub.stopping.wait(10):                               # the user logged out on the page
                 print("Logged out from the page: stopping. Your jobs keep running; run the same command to open the page again.", flush=True)
@@ -655,7 +655,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="bhaskera-dashboard",
         description=(
-            "Manage the MLflow UI for Bhaskera training runs.\n\n"
+            "Manage the MLflow UI for ExaAI training runs.\n\n"
             "First run: supply --store / --port / --login-node once;\n"
             "subsequent runs need no arguments."
         ),
@@ -679,7 +679,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--job",
         default=None,
         metavar="ID",
-        help="Slurm job id for the 'ray' subcommand (default: your newest Bhaskera job, running or queued).",
+        help="Slurm job id for the 'ray' subcommand (default: your newest ExaAI job, running or queued).",
     )
     p.add_argument(
         "--ray-port",

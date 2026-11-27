@@ -21,7 +21,7 @@ And in the `checkpoint` section: `save_dir`, `save_interval` (counted in epochs 
 
 Which strategy to choose is in the main README.
 
-## What Bhaskera does itself
+## What ExaAI does itself
 
 - **FSDP2.** Sharding goes in three passes: experts (if asked), decoder layers, then the root. HSDP builds a 2-D device mesh of (replicate, shard), and rank 0 logs how many nodes a shard group spans; a group inside one node keeps weight gathers off the network. Mixed precision lives in FSDP's policy, so the loop does not add autocast.
 - **DDP.** MoE models always get `find_unused_parameters=True`, because routing touches different parameters each step, and `static_graph` is switched off with it. Activation checkpointing is applied before the wrap.

@@ -18,7 +18,7 @@ Under `training` in a recipe:
 
 Under `moe`: the weights of the load-balancing and router z-losses, and `log_expert_utilization`. Under `monitoring.metrics`: `step_timing` (default on) and `straggler_every_n_steps` (default 10).
 
-## What Bhaskera does itself
+## What ExaAI does itself
 
 - **The loop.** Builds the optimizer and scheduler, resumes from the latest checkpoint if there is one, then runs epochs until `max_steps`. Each micro-step does forward and backward; the last one of each optimizer step does the gradient sync, clipping, the optimizer and scheduler step, logging, and, when due, a checkpoint.
 - **Gradient accumulation.** Gradient sync is switched off for every micro-step but the last, for FSDP2 and for DDP (not with DDP's `static_graph`), so the all-reduce happens once per optimizer step.

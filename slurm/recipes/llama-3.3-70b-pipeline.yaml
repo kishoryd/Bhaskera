@@ -1,4 +1,4 @@
-# Bhaskera recipe: llama-3.3-70b-pipeline
+# ExaAI recipe: llama-3.3-70b-pipeline
 # Model    : meta-llama/Llama-3.3-70B-Instruct   (download to /scratch/<project>/<username>/models/Llama-3.3-70B-Instruct)
 # Strategy : pipeline (pipeline, 4 stages)
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

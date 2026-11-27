@@ -1,4 +1,4 @@
-# Bhaskera recipe: qwen3-30b-a3b-pipeline
+# ExaAI recipe: qwen3-30b-a3b-pipeline
 # Model    : Qwen/Qwen3-30B-A3B-Instruct-2507   (download to /scratch/<project>/<username>/models/Qwen3-30B-A3B-Instruct-2507)
 # Strategy : pipeline (pipeline, 4 stages)
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

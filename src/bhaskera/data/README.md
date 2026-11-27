@@ -31,7 +31,7 @@ def render(row, tokenizer, options):
 
 then set `data.format: my_custom`. A new dataset is a module that applies `@register_raw` and `@register` from `registry.py`; nothing else needs editing.
 
-## What Bhaskera does itself
+## What ExaAI does itself
 
 - **The cache.** Tokenising runs once and writes Parquet files plus a `metadata.json` (model, `seq_len`, dataset, format, row count). The folder name is a hash of those settings, so a changed setting never reuses a stale cache. At load time a different `seq_len` is an error, because rows are never re-padded; a different model is only a warning, since models that share a tokenizer can share a cache.
 - **Rendering.** The `chatml` format uses the model's own chat template when it has one and falls back to plain ChatML markup. Labels are the input ids with padding masked to `-100`; empty rows are dropped.

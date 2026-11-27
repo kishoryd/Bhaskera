@@ -1,4 +1,4 @@
-# Bhaskera recipe: tokenize-alpaca
+# ExaAI recipe: tokenize-alpaca
 # Tokenises Alpaca-style data (instruction, optional input, output) once into a Parquet cache that every training run reuses.
 # Use the SAME model and seq_len as the training recipe. Run with:  ./submit.sh tokenize recipes/tokenize-alpaca.yaml
 model:

@@ -1,11 +1,11 @@
 #!/bin/bash
-# Install Bhaskera centrally for all PARAM Rudra users (run once, by the maintainer, on a login node).
+# Install ExaAI centrally for all PARAM Rudra users (run once, by the maintainer, on a login node).
 #
 #   bash install-bhaskera.sh                      # installs to /home/apps/bhaskera/1.0.0
 #   PREFIX=/some/other/path bash install-bhaskera.sh
 #
 # Layout created under $PREFIX:
-#   src/        Bhaskera source (git clone, pinned to $REF)
+#   src/        ExaAI source (git clone, pinned to $REF)
 #   python/     the Python 3.11 interpreter the environment uses (must be readable by everyone)
 #   venv/       Python 3.11 environment: torch 2.6.0+cu124, flash-attn 2.7.3 (prebuilt), bitsandbytes
 #   observability/  Prometheus and Grafana (charts in the Ray Dashboard; skip with WITH_CHARTS=0)
@@ -20,7 +20,7 @@ REF="${REF:-v1.0.0}"                         # release tag to install
 KIT="$(cd "$(dirname "$0")" && pwd)"         # folder holding train.sbatch, submit.sh, recipes/
 FA_WHEEL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl"
 
-echo "== Bhaskera -> $PREFIX (repo $REPO @ $REF)"
+echo "== ExaAI -> $PREFIX (repo $REPO @ $REF)"
 mkdir -p "$PREFIX"
 [[ -d "$PREFIX/src/.git" ]] || git clone -q "$REPO" "$PREFIX/src"
 git -C "$PREFIX/src" fetch -q origin && git -C "$PREFIX/src" checkout -q "$REF"

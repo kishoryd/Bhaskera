@@ -1,4 +1,4 @@
-# Bhaskera inference config — TurboQuant KV cache (OPTIMIZED v2)
+# ExaAI inference config — TurboQuant KV cache (OPTIMIZED v2)
 # ─────────────────────────────────────────────────────────────────
 # Run with:
 #   bhaskera-infer --config configs/inference_turboquant.yaml \

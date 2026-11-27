@@ -357,7 +357,7 @@ def system_stats(
     Collect a flat dict of host + GPU metrics.
 
     Keys use ``/`` separators (e.g. ``gpu/0/util_pct``).  Pass the
-    result straight to a Bhaskera logger; the Ray/Prometheus backend
+    result straight to an ExaAI logger; the Ray/Prometheus backend
     handles the name mangling internally.
     """
     now = time.time()

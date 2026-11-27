@@ -1,4 +1,4 @@
-# Bhaskera recipe: llama-3.3-70b-qlora
+# ExaAI recipe: llama-3.3-70b-qlora
 # Model    : meta-llama/Llama-3.3-70B-Instruct   (download to /scratch/<project>/<username>/models/Llama-3.3-70B-Instruct)
 # Strategy : ddp + QLoRA 4-bit
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

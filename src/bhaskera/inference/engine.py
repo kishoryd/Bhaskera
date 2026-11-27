@@ -430,7 +430,7 @@ def _make_ray_actor(engine_cls, model_name, cfg, device):
 
 class InferenceEngine:
     """
-    Bhaskera inference engine, v2.
+    ExaAI inference engine, v2.
 
     API is identical to v1.  Internally selects the fastest available backend:
       1. vLLM  (if installed — best for HPC/multi-GPU/serving)

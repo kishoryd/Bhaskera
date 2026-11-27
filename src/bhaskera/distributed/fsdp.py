@@ -285,7 +285,7 @@ def _sharded_load_plan(named: list, ckpt_dir: Optional[str]) -> dict:
     for name, tensor in named:
         key = _checkpoint_key(name)
         if key not in weight_map:
-            # Omni checkpoints store the thinker (what Bhaskera trains) under "thinker."
+            # Omni checkpoints store the thinker (what ExaAI trains) under "thinker."
             key = next((p + key for p in _CHECKPOINT_PREFIXES if p + key in weight_map), key)
         if key in weight_map and shapes.get(key) == tuple(tensor.shape):
             plan[name] = (os.path.join(ckpt_dir, weight_map[key]), key)

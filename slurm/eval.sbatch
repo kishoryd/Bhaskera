@@ -17,7 +17,7 @@
 #SBATCH --output=logs/%x_%j.out
 
 set -uo pipefail
-: "${BHASKERA_DIR:?export BHASKERA_DIR=<your Bhaskera folder> (the module sets it)}"
+: "${BHASKERA_DIR:?export BHASKERA_DIR=<your ExaAI folder> (the module sets it)}"
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export MLFLOW_ALLOW_FILE_STORE=true
 source "$BHASKERA_DIR/bhaskera-activate.sh"

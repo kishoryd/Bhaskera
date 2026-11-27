@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install Prometheus and Grafana so that the Ray Dashboard of a Bhaskera job can draw its time-series charts
+# Install Prometheus and Grafana so that the Ray Dashboard of an ExaAI job can draw its time-series charts
 # (GPU, CPU and memory over time for every node). Optional: without them the dashboard still lists every node
 # and GPU with its current load, only the charts are missing.
 #

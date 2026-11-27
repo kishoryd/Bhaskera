@@ -153,7 +153,7 @@ def build_param2_config(
     **generation_overrides,
 ) -> "bhaskera.config.Config":  # type: ignore[name-defined]
     """
-    Build a Bhaskera Config pre-tuned for Param2-17B-A2.4B-Thinking.
+    Build an ExaAI Config pre-tuned for Param2-17B-A2.4B-Thinking.
 
     Args:
         model_name:  HF model id (default: official Param2 Thinking checkpoint).

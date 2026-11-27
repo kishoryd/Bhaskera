@@ -1,4 +1,4 @@
-# Bhaskera recipe: tokenize-plaintext
+# ExaAI recipe: tokenize-plaintext
 # Tokenises plain text (books, code, articles) with no columns, once, into a Parquet cache.
 # Use the SAME model and seq_len as the training recipe. Run with:  ./submit.sh tokenize recipes/tokenize-plaintext.yaml
 model:

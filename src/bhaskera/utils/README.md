@@ -18,7 +18,7 @@ Under `logging` in a recipe:
 
 Under `monitoring.metrics`: `throughput`, `peak_tflops_per_gpu` (default 312, an A100 in bf16, so set it for other GPUs), `node_stats_every_n_steps` and `node_stats_per_node_max`. Weights & Biases is optional and imported only when you ask for it.
 
-## What Bhaskera does itself
+## What ExaAI does itself
 
 - **GPU and host readings** (`system_stats.py`). One cheap call per step gives per-GPU utilisation, memory, temperature, power and clocks, PCIe and NVLink traffic, ECC errors and throttle reasons (through pynvml), plus CPU, memory, disk and network (through psutil). A missing library just drops that part. Rates such as disk and network bytes per second are computed against the previous call.
 - **Throughput** (`throughput.py`). Step time, tokens per second and MFU. MFU is `6 × parameters × tokens / step time` over the GPU's peak, using all the model's parameters (LoRA's FLOPs still flow through the frozen base). The attention term is left out, which changes it by under 5%. The first few steps are skipped in the moving average. For multimodal models the encoder parameters are not counted, so MFU covers the language model only.

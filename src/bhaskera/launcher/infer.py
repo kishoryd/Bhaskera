@@ -47,11 +47,11 @@ logger = logging.getLogger("bhaskera.infer")
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="bhaskera-infer",
-        description="Bhaskera LLM inference engine CLI",
+        description="ExaAI LLM inference engine CLI",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    p.add_argument("--config",  default=None,   help="Path to Bhaskera YAML config")
+    p.add_argument("--config",  default=None,   help="Path to ExaAI YAML config")
     p.add_argument("--model",   default=None,   help="HuggingFace model id (overrides config)")
     p.add_argument("--device",  default="auto", help="Device: auto | cuda | cpu | mps")
 

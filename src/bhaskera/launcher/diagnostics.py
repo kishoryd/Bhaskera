@@ -47,7 +47,7 @@ def _diag_worker(_config):
     if rank == 0:
         props = torch.cuda.get_device_properties(device)
         print(f"\n{'='*50}")
-        print(f"  Bhaskera diagnostics PASSED")
+        print(f"  ExaAI diagnostics PASSED")
         print(f"  World size : {world_size}")
         print(f"  GPU        : {props.name} ({props.total_memory // 1024**3} GB)")
         print(f"  NCCL BW    : {bw:.2f} GB/s")

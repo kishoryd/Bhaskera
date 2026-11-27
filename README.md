@@ -1,7 +1,11 @@
-# Bhaskera
+<p align="left"><img src="docs/logo/exaai-logo.svg" alt="ExaAI, powered by Bhaskera" width="330"></p>
 
-Bhaskera fine-tunes large language models on Slurm GPU clusters. You describe a run in one YAML file (the model, the data,
-how to spread it over the GPUs) and submit it. Bhaskera starts Ray on the nodes your job gets, trains LoRA adapters,
+# ExaAI
+
+*Powered by Bhaskera.*
+
+ExaAI fine-tunes large language models on Slurm GPU clusters. You describe a run in one YAML file (the model, the data,
+how to spread it over the GPUs) and submit it. ExaAI starts Ray on the nodes your job gets, trains LoRA adapters,
 checkpoints, and logs the results. It also handles models that read images, video and audio.
 
 It started on PARAM Rudra (2 × A100 80 GB per node) and has been run there on 8 to 128 nodes with models from 14B to 235B
@@ -11,7 +15,7 @@ small [cluster profile](#other-clusters), so it should run on yours.
 Version 1.0.0. Python 3.11, PyTorch 2.6, transformers 4.57. The full guide is at
 <https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/>; this page is the short version.
 
-![Bhaskera architecture](docs/architecture.svg)
+![ExaAI architecture](docs/architecture.svg)
 
 ## Try it
 
@@ -74,7 +78,7 @@ See `docs/multimodal/README.md`.
 
 Everything you create stays in the folder you set up, the one that holds `submit.sh` (your *run folder*): `recipes/`, `checkpoints/`, `cache/` (prepared data), `logs/`,
 `tasks/` (your own tests), benchmark results, `mlflow-runs/` (every run, its adapter, and the model registry), `.bhaskera/` (small settings) and `.cache/huggingface/`
-(benchmark data). Nothing is written to the shared install. If you name no run folder, `~/bhaskera-runs` is made from the shared kit. If you already keep `~/mlflow-runs`, `~/.bhaskera` or `~/.cache/huggingface`, Bhaskera keeps
+(benchmark data). Nothing is written to the shared install. If you name no run folder, `~/bhaskera-runs` is made from the shared kit. If you already keep `~/mlflow-runs`, `~/.bhaskera` or `~/.cache/huggingface`, ExaAI keeps
 using them until a copy or a link of the same name exists in the run folder (`ln -s ~/mlflow-runs mlflow-runs` brings them in with nothing moved). `MLFLOW_TRACKING_URI` overrides the MLflow place.
 Shared models and prepared data (`BHASKERA_MODELS`, `BHASKERA_DATA`) are read-only copies kept by the administrators.
 
@@ -110,7 +114,7 @@ cp slurm/clusters/example.yaml .bhaskera/cluster.yaml          # in your run fol
 python -m bhaskera.launcher.cluster_profile show
 ```
 
-Without one, `submit.sh` uses `$BHASKERA_PARTITION` and the hours you give. To install Bhaskera for everyone on a new cluster, follow
+Without one, `submit.sh` uses `$BHASKERA_PARTITION` and the hours you give. To install ExaAI for everyone on a new cluster, follow
 [Setting Up on Another Cluster](https://kishoryd.github.io/ParamRudra-20PF-UserManual/bhaskera/new-cluster/) in the guide.
 It has been run end to end only on PARAM Rudra.
 
@@ -136,7 +140,7 @@ read-only through the dashboard. [SECURITY.md](SECURITY.md) says what is protect
 - MoE models are slow outside Pipeline. The BharatGen MoE models run under FSDP only.
 - DDP needs the whole model on each GPU. Qwen3-235B does not fit with QLoRA.
 
-## What you control, and what Bhaskera handles
+## What you control, and what ExaAI handles
 
 **Yours to edit:** the recipe or config for a run (`slurm/recipes/`, `configs/`), the cluster profile (`slurm/clusters/`), the
 environment variables named in `src/bhaskera/launcher/README.md`, and your data. Each config key is described in the README of the
@@ -148,3 +152,7 @@ need to touch them.
 
 `scripts/` has a few tools: multimodal sample data, adapter export, and the MXFP4 converter. The history is in
 [CHANGELOG.md](CHANGELOG.md).
+
+---
+
+© 2026 C-DAC. All rights reserved.

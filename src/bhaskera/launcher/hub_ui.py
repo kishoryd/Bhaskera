@@ -1,4 +1,4 @@
-"""The Bhaskera dashboard: one self-contained HTML document (no outside fonts, scripts or images), because it is
+"""The ExaAI dashboard: one self-contained HTML document (no outside fonts, scripts or images), because it is
 served through an SSH tunnel and must work on any laptop. It reads /api/state every few seconds (see hub_state.py)."""
 
 INDEX_HTML = r"""<!doctype html>
@@ -6,8 +6,8 @@ INDEX_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bhaskera</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='10' fill='%23a8381f'/%3E%3Cpath d='M9.5 19.5a8.5 8.5 0 0 1 17 0z' fill='white'/%3E%3Crect x='8' y='22' width='20' height='2.4' rx='1.2' fill='white'/%3E%3Crect x='11.5' y='26' width='13' height='2.4' rx='1.2' fill='white' opacity='.85'/%3E%3Crect x='15' y='30' width='6' height='2.4' rx='1.2' fill='white' opacity='.7'/%3E%3C/svg%3E">
+<title>ExaAI</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='9' fill='%231F4E79'/%3E%3Crect x='8' y='8' width='4.5' height='20' rx='2.25' fill='%23fff'/%3E%3Crect x='8' y='8' width='19' height='4.5' rx='2.25' fill='%23fff'/%3E%3Crect x='8' y='15.75' width='13' height='4.5' rx='2.25' fill='%23fff'/%3E%3Crect x='8' y='23.5' width='19' height='4.5' rx='2.25' fill='%23fff'/%3E%3Ccircle cx='28.5' cy='18' r='2.6' fill='%238FD0FF'/%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#f4f1e9; --surface:#fffdf8; --surface-2:#efe9db; --border:#e2dac7; --border-strong:#c9bfa6; --text:#1f1c17; --muted:#6b6454;
@@ -40,7 +40,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 .top{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--surface) 90%,transparent);-webkit-backdrop-filter:saturate(1.3) blur(12px);backdrop-filter:saturate(1.3) blur(12px);border-bottom:1px solid var(--border)}
 .top .wrap{display:flex;align-items:center;gap:8px;height:64px}
 .brand{display:flex;align-items:center;gap:11px;margin-right:22px;border-radius:10px;flex:none}
-.brand .logo{width:34px;height:34px;flex:none;display:block;filter:drop-shadow(0 1px 2px rgba(120,40,20,.28))}
+.brand .logo{width:34px;height:34px;flex:none;display:block;filter:drop-shadow(0 1px 2px rgba(20,40,80,.25))}
 .brand b{display:block;font:650 19px/1.05 var(--sans);letter-spacing:-.015em;color:var(--text)} .brand small{display:block;color:var(--muted);font-size:11.5px;font-weight:500;letter-spacing:.02em;margin-top:3px;white-space:nowrap}
 .spacer{flex:1}
 #updated{display:inline-block;width:16ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
@@ -302,9 +302,9 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0;box-sh
 </head>
 <body>
 <header class="top"><div class="wrap">
-  <a class="brand" href="#" id="brand" aria-label="Bhaskera, back to the top">
-    <svg class="logo" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="10" fill="var(--accent)"/><path d="M9.5 19.5a8.5 8.5 0 0 1 17 0z" fill="#fff"/><rect x="8" y="22" width="20" height="2.4" rx="1.2" fill="#fff"/><rect x="11.5" y="26" width="13" height="2.4" rx="1.2" fill="#fff" opacity=".85"/><rect x="15" y="30" width="6" height="2.4" rx="1.2" fill="#fff" opacity=".7"/></svg>
-    <span><b>Bhaskera</b><small id="tag"></small></span>
+  <a class="brand" href="#" id="brand" aria-label="ExaAI, back to the top">
+    <svg class="logo" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="9" fill="#1F4E79"/><rect x="8" y="8" width="4.5" height="20" rx="2.25" fill="#fff"/><rect x="8" y="8" width="19" height="4.5" rx="2.25" fill="#fff"/><rect x="8" y="15.75" width="13" height="4.5" rx="2.25" fill="#fff"/><rect x="8" y="23.5" width="19" height="4.5" rx="2.25" fill="#fff"/><circle cx="28.5" cy="18" r="2.6" fill="#8FD0FF"/></svg>
+    <span><b>ExaAI</b><small id="tag"></small></span>
   </a>
   <nav class="gnav" id="gnav" aria-label="Main">
     <div class="gi" data-menu="train" data-page="train"><button type="button" class="gb" aria-haspopup="true" aria-expanded="false">Train<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg></button><div class="gp" id="mn-train" role="menu"></div></div>
@@ -855,7 +855,7 @@ function renderModels(){
 /* ---- pages: Home, Train, Serve, Evaluate, Monitor (the address after # chooses one) ---- */
 var PAGES={home:"Home",train:"Train",serve:"Serve",evaluate:"Evaluate",monitor:"Monitor"}, pendingScroll=null;
 function routeName(){ var m=/^#\/(\w+)/.exec(location.hash||""); return m&&PAGES[m[1]]?m[1]:"home"; }
-function setTitle(){ var r=routeName(); document.title=(state&&state.cluster?"Bhaskera · "+state.cluster:"Bhaskera")+(r==="home"?"":" · "+PAGES[r]); }
+function setTitle(){ var r=routeName(); document.title=(state&&state.cluster?"ExaAI · "+state.cluster:"ExaAI")+(r==="home"?"":" · "+PAGES[r]); }
 function route(){
   var r=routeName();
   Array.prototype.forEach.call(document.querySelectorAll(".view"),function(v){ v.hidden=v.getAttribute("data-view")!==r; });
@@ -1017,7 +1017,7 @@ document.addEventListener("click",function(e){
 
 /* ---- log out ---- */
 function askLogout(){
-  $("#bye-text").textContent=PROXY?"This signs you out of the portal. Jobs you started keep running, and you can open Bhaskera again from the portal.":
+  $("#bye-text").textContent=PROXY?"This signs you out of the portal. Jobs you started keep running, and you can open ExaAI again from the portal.":
     "This stops the page on the login node and closes its links to your jobs. Jobs you started keep running. To open the page again, run the same command you used to start it.";
   $("#bye-ok").disabled=false; $("#bye").showModal();
 }
@@ -1029,7 +1029,7 @@ $("#bye-ok").addEventListener("click",function(){
     if(!r.j||!r.j.ok){ toast("Could not log out: "+((r.j&&r.j.error)||"the hub did not answer")); return; }
     if(r.j.mode==="portal"){ var pl=(state&&state.portal)||{}; location.href=pl.logout||"/logout"; return; }
     document.body.innerHTML='<div class="byepage"><svg class="logo" viewBox="0 0 36 36" style="width:56px;height:56px" aria-hidden="true"><rect width="36" height="36" rx="10" fill="var(--accent)"/><path d="M9.5 19.5a8.5 8.5 0 0 1 17 0z" fill="#fff"/><rect x="8" y="22" width="20" height="2.4" rx="1.2" fill="#fff"/><rect x="11.5" y="26" width="13" height="2.4" rx="1.2" fill="#fff" opacity=".85"/><rect x="15" y="30" width="6" height="2.4" rx="1.2" fill="#fff" opacity=".7"/></svg>'+
-      '<h1>Bhaskera has stopped</h1><p>You are logged out. Your jobs keep running on the cluster.<br>To open the page again, run the same command you used to start it, then reload this tab.</p></div>';
+      '<h1>ExaAI has stopped</h1><p>You are logged out. Your jobs keep running on the cluster.<br>To open the page again, run the same command you used to start it, then reload this tab.</p></div>';
   }).catch(function(){ $("#bye").close(); toast("The page could not reach the hub."); });
 });
 
@@ -1077,7 +1077,7 @@ function render(){
   var s=state; if(!s) return;
   GPN = s.gpus_per_node || null;
   $("#who").hidden=false; $("#who").innerHTML='<span class="av">'+esc((s.user||"?").charAt(0).toUpperCase())+'</span>'+esc(s.user)+'<svg viewBox="0 0 12 12"><path d="M2.5 4.5l3.5 3.5 3.5-3.5"/></svg>';
-  $("#tag").textContent = s.cluster || ""; $("#tag").hidden = !s.cluster;
+  $("#tag").textContent = "powered by Bhaskera" + (s.cluster ? " \u00b7 " + s.cluster : ""); $("#tag").hidden = false;
   setTitle();
   var T=s.totals||{}, bad=(s.bad_nodes||[]).length;
   var part=(s.partitions||[]).filter(function(p){return p.max_submitted!=null}).sort(function(a,b){return b.submitted-a.submitted})[0];
@@ -1092,7 +1092,7 @@ function render(){
   $("#jobcount").textContent=jobs.length;
   $("#jobs").innerHTML=jobs.length ? jobs.map(jobCard).join("") : emptyJobs();
   renderRuns(); renderCompare(); renderModels(); renderSide(); renderMenus(); renderChat();
-  $("#foot").innerHTML='Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a>';
+  $("#foot").innerHTML='ExaAI, powered by Bhaskera '+esc(s.version||"")+' · <a href="'+esc(safe(s.docs_url)||"#")+'" target="_blank" rel="noopener">documentation</a> · <a href="'+GITHUB+'" target="_blank" rel="noopener">source</a> · \u00a9 2026 C-DAC';
 }
 function clock(){
   var dot=$("#dot"), el=$("#updated");
@@ -1414,7 +1414,7 @@ function allSettings(o,r){
 }
 function customForm(o,r){
   var st=o.starters||[], rs=(o.recipes||[]).filter(function(x){return !x.tokenize});
-  var opts='<option value="">Start from …</option>'+(st.length?'<optgroup label="Starters shipped with Bhaskera">'+st.filter(function(x){return !x.tokenize}).map(function(x){return '<option value="starter:'+esc(x.file)+'"'+(r.base==="starter:"+x.file?" selected":"")+'>'+esc(x.label)+'</option>'}).join("")+'</optgroup>':"")+
+  var opts='<option value="">Start from …</option>'+(st.length?'<optgroup label="Starters shipped with ExaAI">'+st.filter(function(x){return !x.tokenize}).map(function(x){return '<option value="starter:'+esc(x.file)+'"'+(r.base==="starter:"+x.file?" selected":"")+'>'+esc(x.label)+'</option>'}).join("")+'</optgroup>':"")+
     (rs.length?'<optgroup label="Your recipes">'+rs.map(function(x){return '<option value="recipe:'+esc(x.file)+'"'+(r.base==="recipe:"+x.file?" selected":"")+'>'+esc(recipeName(x.file))+'</option>'}).join("")+'</optgroup>':"");
   return '<div class="srow"><label class="lbl" for="f-rbase">The recipe</label><div class="chips"><select id="f-rbase">'+opts+'</select><button class="btn small" id="f-rload" type="button">Load it here</button></div>'+
     '<textarea id="f-ryaml" rows="16" spellcheck="false" style="width:100%;margin-top:8px;font-family:var(--mono,monospace);font-size:12px" placeholder="model:\n  name: /path/to/model\ndata:\n  tokenized_path: /path/to/cache\ntraining:\n  max_steps: 300 …">'+esc(r.yaml)+'</textarea>'+

@@ -1,4 +1,4 @@
-"""What the Bhaskera dashboard shows: your jobs with live training numbers, their nodes, recent MLflow runs,
+"""What the ExaAI dashboard shows: your jobs with live training numbers, their nodes, recent MLflow runs,
 partition limits and faulty nodes.
 
 Everything is read from places that already exist (Slurm, the job log, the Ray Dashboard of each running job, the
@@ -187,8 +187,8 @@ def _experiment_names(store: Path) -> dict:
 
 
 def is_bhaskera_run(run: Path, experiments: dict) -> bool:
-    """Whether Bhaskera made the run: it carries the tag ``framework: bhaskera`` (written by every run since the tag exists), or it is filed
-    in an experiment whose name starts with ``bhaskera`` (the default experiment of Bhaskera's older runs). Runs of other tools are not ours."""
+    """Whether ExaAI made the run: it carries the tag ``framework: bhaskera`` (written by every run since the tag exists), or it is filed
+    in an experiment whose name starts with ``bhaskera`` (the default experiment of ExaAI's older runs). Runs of other tools are not ours."""
     return _tag(run, "framework") == "bhaskera" or experiments.get(run.parent.name, "").lower().startswith("bhaskera")
 
 

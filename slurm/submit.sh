@@ -1,12 +1,12 @@
 #!/bin/bash
-# Submit a Bhaskera job on PARAM Rudra with the right partition and time limit.
+# Submit an ExaAI job on PARAM Rudra with the right partition and time limit.
 #
 #   ./submit.sh <recipe.yaml> <nodes> [hours]      training (runs bhaskera-preflight first)
 #   ./submit.sh tokenize <tokenize.yaml>           tokenise data (gpu-debug, 1 node)
 #   ./submit.sh resume --run <run id> [--step N] [--nodes N] [--hours H]
 #                                                  continue a run that stopped, from its last (or an earlier) checkpoint
 #
-# Needs:  export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera
+# Needs:  export BHASKERA_DIR=/scratch/<project>/<username>/ExaAI
 #         SLURM_ACCOUNT is optional: jobs are charged to your login name, which is your account here. To use another: export SLURM_ACCOUNT=<account>
 # Optional: export BHASKERA_EXCLUDE=cbgpuXXXX,...  keep jobs off faulty nodes (passed as sbatch --exclude)
 set -euo pipefail
@@ -20,7 +20,7 @@ fi
 if [[ -z "${HF_HOME:-}" && -z "${HF_DATASETS_CACHE:-}" ]]; then
     if [[ -e "$PWD/.cache/huggingface" || ! -e "$HOME/.cache/huggingface" ]]; then export HF_HOME="$PWD/.cache/huggingface"; fi
 fi
-: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera}"
+: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/ExaAI}"
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-$(id -un)}"; export SLURM_ACCOUNT
 [[ -f "$BHASKERA_DIR/bhaskera-activate.sh" ]] || { echo "$BHASKERA_DIR/bhaskera-activate.sh is missing: run setup.sh there first (it writes this file for the installation)"; exit 1; }
 mkdir -p logs
@@ -87,7 +87,7 @@ if [[ "${1:-}" == "eval" || "${1:-}" == "serve" ]]; then
         echo "follow it:  tail -f logs/bhaskera-eval_${jid}.out"
     else
         echo "submitted job $jid: chat server, ${part:+$part, }${hours} h"
-        echo "Loading the model takes a few minutes. Then open the Bhaskera dashboard (bhaskera-dashboard ray): the chat window appears."
+        echo "Loading the model takes a few minutes. Then open the ExaAI dashboard (bhaskera-dashboard ray): the chat window appears."
         echo "follow it:  tail -f logs/bhaskera-serve_${jid}.out"
     fi
     exit

@@ -84,7 +84,7 @@ def is_multimodal_data(cfg) -> bool:
 
 
 def load_processor(model_name: str, opts: dict, trust_remote_code: bool = False):
-    """The model's processor with Bhaskera's resolution / frame / audio limits applied.
+    """The model's processor with ExaAI's resolution / frame / audio limits applied.
     Used by both tokenisation and training so the two always agree."""
     from transformers import AutoProcessor
 

@@ -150,7 +150,7 @@ def find_caches(folders: list[Path]) -> list[dict]:
 
 def shared_folders(env: dict, kind: str) -> list[Path]:
     """Folders of models or data shared on this cluster: $BHASKERA_MODELS / $BHASKERA_DATA (colon separated), else a ``models`` or ``data``
-    folder next to the Bhaskera install (the parent of $BHASKERA_HOME). Only folders that exist are returned."""
+    folder next to the ExaAI install (the parent of $BHASKERA_HOME). Only folders that exist are returned."""
     var = {"models": "BHASKERA_MODELS", "data": "BHASKERA_DATA"}[kind]
     found = [Path(p) for p in (env.get(var) or "").split(":") if p]
     if not found and env.get("BHASKERA_HOME"):
@@ -526,7 +526,7 @@ def apply_settings(recipe: dict, settings) -> None:
 
 def render(recipe: dict, note: str = "") -> str:
     import yaml
-    head = ["# Written by the Bhaskera dashboard (Create a recipe). Edit it freely: the job reads it again every time it starts.",
+    head = ["# Written by the ExaAI dashboard (Create a recipe). Edit it freely: the job reads it again every time it starts.",
             "# Run it with:  ./submit.sh recipes/<this file> <nodes> <hours>"]
     if note:
         head.append(f"# {note}")
@@ -607,6 +607,6 @@ def tokenize_recipe(form: dict, workdir: Path) -> tuple[str, str]:
             data["media_root"] = root
         data["loss_on"] = "assistant"
     import yaml
-    text = ("# Written by the Bhaskera dashboard (Prepare data): tokenises your files once. The training recipe then uses the cache it makes.\n"
+    text = ("# Written by the ExaAI dashboard (Prepare data): tokenises your files once. The training recipe then uses the cache it makes.\n"
             + yaml.safe_dump({"model": {"name": model, "trust_remote_code": needs_remote_code(model), **({"kind": "multimodal"} if multi else {})}, "data": data}, sort_keys=False))
     return f"tokenize-{name}.yaml", text

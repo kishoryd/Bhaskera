@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bhaskera multi-node LoRA / QLoRA fine-tuning on PARAM Rudra (2 x A100 80 GB per node).
+# ExaAI multi-node LoRA / QLoRA fine-tuning on PARAM Rudra (2 x A100 80 GB per node).
 # This is the launcher used for every benchmark run in the PARAM Rudra user manual.
 #
 # Normally started by ./submit.sh, which picks the partition and time limit for you:
@@ -7,7 +7,7 @@
 # Direct use:
 #     sbatch -A <account> --nodes=8 --partition=gpu-small --time=12:00:00 train.sbatch <config.yaml>
 #
-# Needs BHASKERA_DIR = your Bhaskera clone (the folder with bhaskera-activate.sh),
+# Needs BHASKERA_DIR = your ExaAI clone (the folder with bhaskera-activate.sh),
 # exported in the shell you submit from (submit.sh checks this).
 #SBATCH --job-name=bhaskera
 #SBATCH --ntasks-per-node=1
@@ -21,12 +21,12 @@
 
 set -uo pipefail
 CONFIG="${1:?usage: sbatch train.sbatch <config.yaml>}"
-: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera before submitting}"
+: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/ExaAI before submitting}"
 
 # Compute nodes have no internet: everything is read from /scratch.
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export MLFLOW_ALLOW_FILE_STORE=true
-source "$BHASKERA_DIR/bhaskera-activate.sh"          # loads CUDA 12.4 + Bhaskera's Python env
+source "$BHASKERA_DIR/bhaskera-activate.sh"          # loads CUDA 12.4 + ExaAI's Python env
 
 # What the nodes offer comes from the cluster profile (slurm/clusters/*.yaml; $BHASKERA_CLUSTER_PROFILE), else from Slurm.
 read -r _part _hours PROFILE_GPUS _cpus PROFILE_NET _mem <<< "$(python -m bhaskera.launcher.cluster_profile plan "$SLURM_NNODES" 2>/dev/null || echo '- - - - - -')"

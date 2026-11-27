@@ -1,4 +1,4 @@
-# Bhaskera recipe: tokenize-hf-name
+# ExaAI recipe: tokenize-hf-name
 # Names a Hugging Face model and dataset: ./submit.sh downloads them first (on a node with internet), then tokenises.
 # Use the SAME model and seq_len as the training recipe. Run with:  ./submit.sh tokenize recipes/tokenize-hf-name.yaml
 model:

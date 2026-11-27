@@ -293,7 +293,7 @@ class Launcher:
         raise LaunchError("unknown action for Hugging Face access")
 
     def _remove_runs(self, form: dict) -> dict:
-        """Take runs off the page: MLflow marks them deleted (they can be restored with `mlflow` tools). Only Bhaskera's own runs that are not
+        """Take runs off the page: MLflow marks them deleted (they can be restored with `mlflow` tools). Only ExaAI's own runs that are not
         running; never another tool's run, and never one whose job is still alive."""
         ids = form.get("runs")
         if not isinstance(ids, list) or not ids or len(ids) > 500 or not all(isinstance(i, str) and RUN_ID.match(i) for i in ids):
@@ -305,7 +305,7 @@ class Launcher:
         for i in dict.fromkeys(ids):
             r = known.get(i)
             if r is None:
-                skipped.append({"run_id": i, "reason": "not one of your Bhaskera runs"})
+                skipped.append({"run_id": i, "reason": "not one of your ExaAI runs"})
             elif r.get("status") == "RUNNING" and not r.get("stale"):
                 skipped.append({"run_id": i, "reason": "still running"})
             else:
@@ -436,7 +436,7 @@ class Launcher:
         return {"ok": done.returncode == 0, "job": None, "dry": False, "output": ((done.stdout or "") + (done.stderr or "")).strip()[-2000:], "test": name}
 
     def _starters(self) -> list[dict]:
-        """The ready-made configs shipped with Bhaskera (configs/text, configs/multimodal), to start a custom recipe from."""
+        """The ready-made configs shipped with ExaAI (configs/text, configs/multimodal), to start a custom recipe from."""
         out = []
         for base in self._starter_dirs():
             for f in sorted(base.glob("*/*.yaml")):
@@ -533,13 +533,13 @@ class Launcher:
             self._lock.release()
 
     def _cancel(self, form: dict, dry: bool) -> dict:
-        """Cancel one of the user's own Bhaskera jobs (training, chat server, benchmark): `scancel <job>`. Never another job."""
+        """Cancel one of the user's own ExaAI jobs (training, chat server, benchmark): `scancel <job>`. Never another job."""
         job = form.get("job")
         if not isinstance(job, str) or not re.fullmatch(r"\d{1,12}", job):
             raise LaunchError("pick a job from the list")
         mine = {str(j["id"]): j for j in (self._jobs() if self._jobs else []) if str(j.get("comment", "")).startswith("bhaskera")}
         if job not in mine:
-            raise LaunchError("that is not one of your running Bhaskera jobs, or it has already ended")
+            raise LaunchError("that is not one of your running ExaAI jobs, or it has already ended")
         if dry:
             return {"ok": True, "job": job, "dry": True, "output": f"Job {job} ({mine[job].get('name', '')}) would be cancelled"}
         try:

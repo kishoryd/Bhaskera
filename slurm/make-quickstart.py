@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a shared Bhaskera quick-start folder (administrator step, run once per model / dataset update).
+"""Prepare a shared ExaAI quick-start folder (administrator step, run once per model / dataset update).
 
     export BHASKERA_DIR=/home/apps/bhaskera/1.0.0/src      # or: module load bhaskera/1.0.0
     python make-quickstart.py /home/apps/bhaskera/quickstart  train.jsonl  val.jsonl

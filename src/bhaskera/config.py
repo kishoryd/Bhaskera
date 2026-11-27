@@ -1,5 +1,5 @@
 """
-Bhaskera config — single source of truth.
+ExaAI config — single source of truth.
 
 
 """

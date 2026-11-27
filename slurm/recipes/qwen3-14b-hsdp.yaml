@@ -1,4 +1,4 @@
-# Bhaskera recipe: qwen3-14b-hsdp
+# ExaAI recipe: qwen3-14b-hsdp
 # Model    : Qwen/Qwen3-14B   (download to /scratch/<project>/<username>/models/Qwen3-14B)
 # Strategy : HSDP (shard group of 4 GPUs)
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

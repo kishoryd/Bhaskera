@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bhaskera: tokenise JSONL training data once into a Parquet cache (CPU work: one CPU node, no GPU).
+# ExaAI: tokenise JSONL training data once into a Parquet cache (CPU work: one CPU node, no GPU).
 # Normally started by:   ./submit.sh tokenize recipes/tokenize-chatml.yaml
 # At the end the log prints the two lines (data.tokenized_path / data.val_tokenized_path)
 # to paste into your training recipe.
@@ -14,7 +14,7 @@
 
 set -uo pipefail
 CONFIG="${1:?usage: sbatch tokenize.sbatch <tokenize-config.yaml>}"
-: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/Bhaskera before submitting}"
+: "${BHASKERA_DIR:?export BHASKERA_DIR=/scratch/<project>/<username>/ExaAI before submitting}"
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 source "$BHASKERA_DIR/bhaskera-activate.sh"
 export RAY_TMPDIR="/tmp/ray_${SLURM_JOB_ID}"

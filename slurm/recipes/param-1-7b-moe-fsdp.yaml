@@ -1,4 +1,4 @@
-# Bhaskera recipe: param-1-7b-moe-fsdp
+# ExaAI recipe: param-1-7b-moe-fsdp
 # Model    : bharatgenai/Param-1-7B   (download to /scratch/<project>/<username>/models/Param-1-7B)
 # Strategy : FSDP, MoE 6.7 B (64 experts, top-8)
 # Speed on PARAM Rudra (seq_len 4096, 5 nodes = 10 x A100 80 GB):

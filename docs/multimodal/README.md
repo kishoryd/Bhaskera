@@ -1,6 +1,6 @@
 # Multimodal fine-tuning (image, video, audio)
 
-Bhaskera fine-tunes models that read images, video and audio as well as text, with the
+ExaAI fine-tunes models that read images, video and audio as well as text, with the
 same strategies and cluster setup as text models (FSDP2 or DDP, LoRA, Ray on Slurm).
 Output is text; speech generation (Omni "talker") is not trained.
 

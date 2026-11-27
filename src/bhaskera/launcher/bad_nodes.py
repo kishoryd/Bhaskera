@@ -75,7 +75,7 @@ def exclude_list(path: Optional[Path] = None, extra: str = "") -> str:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="bhaskera-nodes", description="Nodes that Bhaskera jobs found faulty.")
+    p = argparse.ArgumentParser(prog="bhaskera-nodes", description="Nodes that ExaAI jobs found faulty.")
     p.add_argument("action", nargs="?", default="list", choices=["list", "exclude", "forget"])
     p.add_argument("host", nargs="?")
     p.add_argument("--extra", default="", help="exclude: nodes to add to the output")

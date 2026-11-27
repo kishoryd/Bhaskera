@@ -21,7 +21,7 @@ import torch.distributed as dist
 
 logger = logging.getLogger(__name__)
 
-# Bhaskera version written into metadata.json -- single source of truth is pyproject.toml
+# ExaAI version written into metadata.json -- single source of truth is pyproject.toml
 try:
     from importlib.metadata import PackageNotFoundError, version as _pkg_version
     _BHASKERA_VERSION = _pkg_version("bhaskera")
@@ -151,7 +151,7 @@ def _verify_cache(
             return False
 
     # format_name is only checked if the caller supplied one. This means caches
-    # written by older Bhaskera versions (no format_name in metadata) still
+    # written by older ExaAI versions (no format_name in metadata) still
     # validate when the new code is asked for "no format" (format_name=None).
     if format_name is not None and meta.get("format_name") != format_name:
         logger.info(

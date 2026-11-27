@@ -1,4 +1,4 @@
-# Bhaskera recipe: param-1-2.9b-ddp
+# ExaAI recipe: param-1-2.9b-ddp
 # Model    : bharatgenai/Param-1-2.9B-Instruct   (download to /scratch/<project>/<username>/models/Param-1-2.9B-Instruct)
 # Strategy : DDP, dense 2.9 B, eager attention, no packing
 # Speed on PARAM Rudra (seq_len 4096, 5 nodes = 10 x A100 80 GB):

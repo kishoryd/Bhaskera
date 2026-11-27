@@ -22,7 +22,7 @@ Environment variables:
 
 | Variable | Meaning |
 |---|---|
-| `BHASKERA_DIR` | Where Bhaskera is installed. `submit.sh` needs it. Jobs are charged to your login name; set `SLURM_ACCOUNT` only to use another account |
+| `BHASKERA_DIR` | Where ExaAI is installed. `submit.sh` needs it. Jobs are charged to your login name; set `SLURM_ACCOUNT` only to use another account |
 | `BHASKERA_CLUSTER_PROFILE` | A cluster profile file (default `.bhaskera/cluster.yaml` in your run folder) |
 | `BHASKERA_PARTITION`, `BHASKERA_MAX_HOURS`, `BHASKERA_GPUS_PER_NODE`, `BHASKERA_CPUS_PER_NODE`, `BHASKERA_MEM_PER_NODE`, `BHASKERA_NET_INTERFACE` | The same facts as the profile, for a cluster without one |
 | `BHASKERA_EXCLUDE` | Nodes to keep jobs off (comma separated) |
@@ -32,7 +32,7 @@ Environment variables:
 | `BHASKERA_STRICT_CONFIG=1` | A config key that does nothing becomes an error, not a warning |
 | `SKIP_PREFLIGHT=1`, `SKIP_QOS_CHECK=1` | Submit from the terminal even when a check fails. The dashboard never does this |
 
-## What Bhaskera does itself
+## What ExaAI does itself
 
 You do not call these directly.
 

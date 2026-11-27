@@ -109,7 +109,7 @@ def add(client, run_id: str, name: str, alias: Optional[str] = None, note: str =
     if not any(a.path.endswith("adapter_config.json") for a in client.list_artifacts(run_id, "adapter")):
         raise RegisterError(f"run {run_id} has no stored adapter; train with logging.mlflow_log_adapter: true")
     try:
-        client.create_registered_model(name, description="LoRA adapters trained with Bhaskera")
+        client.create_registered_model(name, description="LoRA adapters trained with ExaAI (powered by Bhaskera)")
     except Exception:
         pass                                              # it exists already: this adds a version
     version = client.create_model_version(name, source=f"{run.info.artifact_uri}/adapter", run_id=run_id, tags=run_tags(client, run_id),

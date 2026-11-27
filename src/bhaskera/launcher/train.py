@@ -161,7 +161,7 @@ def _init_ray(monitoring) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Bhaskera training launcher")
+    p = argparse.ArgumentParser(description="ExaAI training launcher")
     p.add_argument("--config",         required=True,          help="Path to YAML config")
     p.add_argument("--num-workers",    type=int, default=None, help="Number of GPU workers (default: all visible GPUs)")
     p.add_argument("--max-failures",   type=int, default=2,    help="Ray fault tolerance — worker restart limit")

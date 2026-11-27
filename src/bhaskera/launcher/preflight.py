@@ -225,7 +225,7 @@ def _estimate_memory(cfg, model_cfg: dict, args, rep: _Report) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Preflight checks for a Bhaskera training config")
+    p = argparse.ArgumentParser(description="Preflight checks for an ExaAI training config")
     p.add_argument("--config", required=True)
     p.add_argument("--num-gpus", type=int, default=0, help="planned GPU count (default: show a table)")
     p.add_argument("--gpu-mem-gb", type=float, default=None, help="per-GPU memory in GB (default: gpu_mem_gb of the cluster profile, else 80)")

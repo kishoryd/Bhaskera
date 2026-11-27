@@ -1,7 +1,7 @@
 """
 bhaskera.inference
 ==================
-Complete inference capability for the Bhaskera LLM framework.
+Complete inference capability for the ExaAI LLM framework.
 
 Modules
 -------

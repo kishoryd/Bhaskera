@@ -229,7 +229,7 @@ def train(
     Args:
         model:       Distributed-wrapped model (FSDP2 or DDP).
         dataset:     Ray Dataset pre-tokenized by bhaskera.data.
-        cfg:         Bhaskera Config object.
+        cfg:         ExaAI Config object.
         profile:     ModelProfile from introspection.
         rank:        Global rank of this worker.
         local_rank:  Local GPU index on this host.

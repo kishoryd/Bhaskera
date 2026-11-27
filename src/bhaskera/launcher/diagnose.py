@@ -90,7 +90,7 @@ def report(findings: list[Finding]) -> str:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="bhaskera-diagnose", description="Explain why a Bhaskera job failed.")
+    p = argparse.ArgumentParser(prog="bhaskera-diagnose", description="Explain why an ExaAI job failed.")
     p.add_argument("log", help="the job log file")
     p.add_argument("--map", help="JSON file {infiniband address: node}, written by the node check")
     p.add_argument("--no-remember", action="store_true", help="do not put faulty nodes on the list")

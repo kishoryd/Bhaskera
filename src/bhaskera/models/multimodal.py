@@ -8,7 +8,7 @@ checks that must fail before any GPU is allocated.
 
 An encoder turns one modality into embeddings that the language model reads next
 to the text. Each one is a tower of identical transformer blocks plus a few small
-layers (patch embedding, merger). Bhaskera treats them all the same way:
+layers (patch embedding, merger). ExaAI treats them all the same way:
 
   * every encoder block is its own FSDP shard unit (distributed/fsdp.py),
   * encoders are frozen by default and are never LoRA targets by default,
@@ -20,7 +20,7 @@ not new code in the trainer or the sharding.
 A text-only model is built from `AutoModelForCausalLM`, an image-text model (a
 `vision_config` in its Hugging Face config) from `AutoModelForImageTextToText`, an Omni
 model from its thinker class (see `model_class_and_config`).
-Everything else in Bhaskera reads the ModelProfile, which carries `encoders`.
+Everything else in ExaAI reads the ModelProfile, which carries `encoders`.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class Encoder:
 
 def _root_config(config):
     """Qwen2.5/3-Omni keep everything under thinker_config (the talker makes speech, which
-    Bhaskera does not train); other models are their own root."""
+    ExaAI does not train); other models are their own root."""
     return getattr(config, "thinker_config", None) or config
 
 
@@ -94,7 +94,7 @@ def resolve_kind(kind: str, model_config) -> str:
     return kind
 
 
-# Omni models: Bhaskera trains the thinker (reads text, images, video, audio; writes text).
+# Omni models: ExaAI trains the thinker (reads text, images, video, audio; writes text).
 # The talker / token2wav (speech output) are not loaded.
 _THINKER_CLASSES = {
     "qwen2_5_omni":   "Qwen2_5OmniThinkerForConditionalGeneration",

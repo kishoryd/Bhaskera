@@ -8,6 +8,7 @@ runs, **MINOR** for new features that keep existing configs working, **PATCH** f
 ## [Unreleased]
 
 ### Plain text, and a recipe for every benchmarked method
+- **Renamed ExaAI, powered by Bhaskera, with a new logo and a copyright notice.** The product name in the dashboard, the documentation, the README, the Word manual, the deck and the messages the commands print is now ExaAI, with "powered by Bhaskera" beside it. Commands, the module (`bhaskera/1.0.0`), environment variables (`BHASKERA_*`), the `bhaskera` Python package and the repository name are unchanged, so existing installs and scripts keep working. A new logo (`docs/logo/`) is in the dashboard header and favicon. "(c) 2026 C-DAC. All rights reserved." is in the README, the dashboard footer, the docs, the manual and the deck. No licence file is added.
 - **Ready tokenise recipes in the kit:** `tokenize-alpaca`, `tokenize-prompt-completion`, `tokenize-plaintext` and `tokenize-hf-name` join `tokenize-chatml` in `slurm/recipes/`. Copy one, change the paths and run `./submit.sh tokenize recipes/<name>.yaml`.
 - **Copying the kit works when the folder already exists.** The instructions now read `mkdir -p <folder> && cp -r $BHASKERA_KIT/. <folder>/`. The old `cp -r $BHASKERA_KIT <folder>` put the files in `<folder>/kit` when the folder existed.
 - **A downloaded dataset folder with a README.md can be read as a whole:** when a folder holds data files, text files such as the README are ignored (a folder of only text files still reads every file). Unit test added; not yet run on the cluster.

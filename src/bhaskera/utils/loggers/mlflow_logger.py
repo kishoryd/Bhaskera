@@ -396,7 +396,7 @@ class MLflowLogger(BaseLogger):
             return None
         try:
             try:
-                client.create_registered_model(register_as, description="LoRA adapters trained with Bhaskera")
+                client.create_registered_model(register_as, description="LoRA adapters trained with ExaAI (powered by Bhaskera)")
             except Exception:
                 pass                                   # it exists already: this run adds a version
             source = f"{client.get_run(self._run_id).info.artifact_uri}/adapter"

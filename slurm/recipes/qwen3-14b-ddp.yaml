@@ -1,4 +1,4 @@
-# Bhaskera recipe: qwen3-14b-ddp
+# ExaAI recipe: qwen3-14b-ddp
 # Model    : Qwen/Qwen3-14B   (download to /scratch/<project>/<username>/models/Qwen3-14B)
 # Strategy : ddp
 # Benchmark on PARAM Rudra (seq_len 4096, 2 x A100 80 GB per node):

@@ -4,7 +4,7 @@ bhaskera.launcher.monitoring
 Translate ``cfg.monitoring`` into Ray ``init`` kwargs and emit a startup
 banner pointing the user at the Ray Dashboard and the MLflow UI.
 
-Prometheus and Grafana have been removed from Bhaskera.  Metrics are
+Prometheus and Grafana have been removed from ExaAI.  Metrics are
 pushed directly to MLflow by ``MLflowLogger`` — no pull-scraping needed.
 
 The returned ``MonitoringContext`` is consumed by ``train.py`` and
@@ -64,7 +64,7 @@ class MonitoringContext:
         lines = [
             "",
             "═══════════════════════════════════════════════════════════════",
-            "  Bhaskera Observability",
+            "  ExaAI Observability",
             "───────────────────────────────────────────────────────────────",
         ]
 

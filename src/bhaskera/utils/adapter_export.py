@@ -1,6 +1,6 @@
 """Export the trained LoRA adapter in the standard PEFT format.
 
-The checkpoints Bhaskera writes while training are sharded and only another Bhaskera run can read them. The
+The checkpoints ExaAI writes while training are sharded and only another ExaAI run can read them. The
 adapter written here is a plain ``adapter_model.safetensors`` plus ``adapter_config.json``: anyone can load it
 on top of the base model with ``PeftModel.from_pretrained(base_model, folder)``, merge it, serve it, or
 register it in the MLflow model registry (see ``MLflowLogger.log_adapter``).
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _CARD = """# LoRA adapter
 
-Trained with Bhaskera. Load it on top of the base model:
+Trained with ExaAI (powered by Bhaskera). Load it on top of the base model:
 
 ```python
 from transformers import AutoModelForCausalLM

@@ -1,4 +1,4 @@
-# Bhaskera cluster profile: PARAM Rudra (C-DAC), 2 x A100 80 GB per node, InfiniBand.
+# ExaAI cluster profile: PARAM Rudra (C-DAC), 2 x A100 80 GB per node, InfiniBand.
 name: PARAM Rudra
 gpus_per_node: 2
 gpu_mem_gb: 80
