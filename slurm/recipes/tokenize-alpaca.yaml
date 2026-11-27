@@ -1,0 +1,17 @@
+# Bhaskera recipe: tokenize-alpaca
+# Tokenises Alpaca-style data (instruction, optional input, output) once into a Parquet cache that every training run reuses.
+# Use the SAME model and seq_len as the training recipe. Run with:  ./submit.sh tokenize recipes/tokenize-alpaca.yaml
+model:
+  name: /scratch/<project>/<username>/models/Qwen3-14B
+  trust_remote_code: false
+data:
+  name: local
+  format: alpaca
+  train_path: /scratch/<project>/<username>/data/train.jsonl     # a file, a folder, or a pattern: .jsonl .json .csv .tsv .parquet .arrow
+  val_path: /scratch/<project>/<username>/data/val.jsonl         # optional: leave the line out for no validation data
+  seq_len: 4096
+  cache_dir: /scratch/<project>/<username>/cache
+  overwrite_cache: false
+  num_workers: 46               # CPU workers on one 48-core node
+  tokenize_batch_size: 64
+  tokenize_compression: snappy

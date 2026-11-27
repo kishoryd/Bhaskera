@@ -1,0 +1,21 @@
+# Bhaskera recipe: tokenize-prompt-completion
+# Tokenises question-and-answer style data (a prompt column and a completion column) once into a Parquet cache.
+# Use the SAME model and seq_len as the training recipe. Run with:  ./submit.sh tokenize recipes/tokenize-prompt-completion.yaml
+model:
+  name: /scratch/<project>/<username>/models/Qwen3-14B
+  trust_remote_code: false
+data:
+  name: local
+  format: prompt_completion
+  format_options:
+    prompt_field: prompt                # the column names in your data, for example question / answer
+    completion_field: completion
+    use_chat_template: false            # true: render as a chat with the model's own chat template
+  train_path: /scratch/<project>/<username>/data/train.jsonl
+  val_path: /scratch/<project>/<username>/data/val.jsonl         # optional: leave the line out for no validation data
+  seq_len: 4096
+  cache_dir: /scratch/<project>/<username>/cache
+  overwrite_cache: false
+  num_workers: 46               # CPU workers on one 48-core node
+  tokenize_batch_size: 64
+  tokenize_compression: snappy

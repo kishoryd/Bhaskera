@@ -26,3 +26,4 @@ def test_recipe_loads_cleanly(path):
     cfg, unknown = load_config_checked(str(path))
     assert unknown == [], unknown
     assert cfg.logging.run_name == path.stem
+

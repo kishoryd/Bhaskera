@@ -1,0 +1,16 @@
+# Bhaskera recipe: tokenize-hf-name
+# Names a Hugging Face model and dataset: ./submit.sh downloads them first (on a node with internet), then tokenises.
+# Use the SAME model and seq_len as the training recipe. Run with:  ./submit.sh tokenize recipes/tokenize-hf-name.yaml
+model:
+  name: Qwen/Qwen3-0.6B                       # a Hugging Face model: downloaded to models/ in your run folder
+  trust_remote_code: false
+data:
+  name: local
+  format: alpaca                              # the layout of the dataset's columns
+  train_path: hf://tatsu-lab/alpaca           # hf://owner/name@revision pins a version
+  seq_len: 512
+  cache_dir: /scratch/<project>/<username>/cache
+  overwrite_cache: false
+  num_workers: 8
+  tokenize_batch_size: 64
+  tokenize_compression: snappy

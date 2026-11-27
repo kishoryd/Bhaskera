@@ -6,7 +6,7 @@ model:
   trust_remote_code: false
 data:
   name: local
-  format: chatml                # chatml | alpaca | sharegpt
+  format: chatml                # chatml | alpaca | sharegpt | prompt_completion | dolly | qa | scored_response | tool_calling | reasoning
   format_options:
     messages_field: messages
   train_path: /scratch/<project>/<username>/data/train.jsonl
